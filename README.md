@@ -7,7 +7,7 @@ Steps to get it up and running on Windows (10 and 11 tested)
 4. Genelec GLM needs to be configured for MIDI. Click on Settings/Midi and activate 'Enable MIDI'. I've also increased Volume Up and down to be 1dB instead of default 0.5dB
 <img width="916" alt="image" src="https://github.com/user-attachments/assets/5255c96f-3469-4b64-a6a5-feaea0f4ff09" />
 
-5. Python libraries need to be installed. 'hidapi' is usually easy. 'mido' has prereq 'python-midirtp' which does require recompilation so need to install Windows SDK/C++ compiler from Microsoft. Google on how to do it
+5. Python libraries need to be installed. 'hidapi' is usually easy. 'mido' has prereq 'python-rtmidi' which does require recompilation so need to install Windows SDK/C++ compiler from Microsoft. Google on how to do it
 6. few other standard libraries are needed too but they are easy to be installed. Python will complaign on what is missing until i improve instructions
 7. Bluetooth connection: Fosi VOL20 needs to be paired with Windows machine. In my testing the VID/PID of 'VOL20' device on windows was always as below, but please check on your machine: (VID and PID are hardcoded in the script):
   VID = 0x07d7
