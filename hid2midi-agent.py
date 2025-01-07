@@ -1,57 +1,30 @@
-import threading
-import queue
 import time
 import signal
 import sys
+import os
+import threading
+import queue
+from queue import Queue
 import hid
 from mido import Message, open_output
-
-import logging
-from logging.handlers import RotatingFileHandler
-
 import psutil
-import os
+import argparse
+
 import logging
+from logging.handlers import RotatingFileHandler, QueueHandler, QueueListener
 
-def setup_logging(log_file_name="hid_to_midi.log", max_bytes=10*1024*1024, backup_count=5):
-    """
-    Configures the logging for the script with both file and console handlers.
-    
-    Args:
-        log_file_name (str): Name of the log file.
-        max_bytes (int): Maximum size of each log file before rotation.
-        backup_count (int): Number of backup log files to keep.
-    """
-    # Get the script's directory
-    script_directory = os.path.dirname(os.path.abspath(__file__))
-    # Create the log file path
-    log_file_path = os.path.join(script_directory, log_file_name)
-    
-    # Set up file handler with rotation
-    file_handler = RotatingFileHandler(log_file_path, maxBytes=max_bytes, backupCount=backup_count)
-    file_handler.setLevel(logging.DEBUG)
-    file_handler.setFormatter(logging.Formatter('%(asctime)s [%(levelname)s] %(message)s'))
-
-    # Set up console handler
-    console_handler = logging.StreamHandler()
-    console_handler.setLevel(logging.INFO)
-    console_handler.setFormatter(logging.Formatter('%(asctime)s [%(levelname)s] %(message)s'))
-
-    # Configure root logger
-    logging.basicConfig(level=logging.INFO, handlers=[file_handler, console_handler])
-    global logger
-    logger = logging.getLogger(__name__)
-
+import ctypes
+import win32api
+import win32process
+import win32con
 
 # Parameters
-VID = 0x07d7
-PID = 0x0000
-MIDI_CHANNEL_NAME = "GLMMIDI 1"
+
 MAX_EVENT_AGE = 2.0  # seconds
 SEND_DELAY = 0  # seconds (0 seconds is just OS yield to other threads if needed ... 
 #               # i.e. MIDI receiving app .. it also work with 0.0005 sec (0.5ms) but i found it not to be needed)
 RETRY_DELAY = 2.0  # seconds
- 
+
 MIDI_CC_MAPPING = {
      2: 21,  # Volume Up to GLM Volume Down
      1: 22,  # Volume Down to GLM Volume Down
@@ -61,26 +34,237 @@ MIDI_CC_MAPPING = {
      4: 28,  # Mute On / Mute Off (2 second press on a button on VOL20) to Power On/Off
 }
 
-volume_increases_list = [1, 2, 2, 2, 2, 3, 3, 3, 4, 4, 5]
-volume_steps = len(volume_increases_list)
+def validate_volume_increases(value):
+    try:
+        parsed = list(map(int, value.strip("[]").split(",")))
+        if len(parsed) < 2 or len(parsed) > 15:
+            raise argparse.ArgumentTypeError("Volume increase list must have between 2 and 15 items.")
+        if not all(1 <= x <= 10 for x in parsed):
+            raise argparse.ArgumentTypeError("All values in the list must be integers between 1 and 10.")
+        return parsed
+    except Exception as e:
+        raise argparse.ArgumentTypeError(f"Invalid format for volume_increase_list: {e}")
+
+def validate_click_times(values):
+    try:
+        # Split and parse the two values
+        parsed = list(map(float, values.split(",")))
+        if len(parsed) != 2:
+            raise argparse.ArgumentTypeError("You must provide exactly two values: MIN_CLICK_TIME,MAX_AVG_CLICK_TIME.")
+
+        min_click_time, max_avg_click_time = parsed
+
+        # Validate the values
+        if not (0.01 < min_click_time < 1):
+            raise argparse.ArgumentTypeError("MIN_CLICK_TIME must be > 0.01 and < 1.")
+        if max_avg_click_time > min_click_time:
+            raise argparse.ArgumentTypeError("MAX_AVG_CLICK_TIME must be <= MIN_CLICK_TIME.")
+        
+        return min_click_time, max_avg_click_time
+    except ValueError:
+        raise argparse.ArgumentTypeError("Click times must be two float values separated by a comma.")
+
+import argparse
+import threading
+import queue
+from queue import Queue
+import time
+import signal
+import sys
+import hid
+from mido import Message, open_output
+import psutil
+
+import logging
+from logging.handlers import RotatingFileHandler, QueueHandler, QueueListener
+import os
+
+import ctypes
+import win32api
+import win32process
+import win32con
+
+# Parameters
+VID = 0x07d7
+PID = 0x0000
+MIDI_CHANNEL_NAME = "GLMMIDI 1"
+MAX_EVENT_AGE = 2.0  # seconds
+SEND_DELAY = 0
+RETRY_DELAY = 2.0
+
+def validate_volume_increases(value):
+    try:
+        parsed = list(map(int, value.strip("[]").split(",")))
+        if len(parsed) < 2 or len(parsed) > 15:
+            raise argparse.ArgumentTypeError("Volume increase list must have between 2 and 15 items.")
+        if not all(1 <= x <= 10 for x in parsed):
+            raise argparse.ArgumentTypeError("All values in the list must be integers between 1 and 10.")
+        return parsed
+    except Exception as e:
+        raise argparse.ArgumentTypeError(f"Invalid format for volume_increase_list: {e}")
+
+def validate_click_times(values):
+    try:
+        # Split and parse the two values
+        parsed = list(map(float, values.split(",")))
+        if len(parsed) != 2:
+            raise argparse.ArgumentTypeError("You must provide exactly two values: MIN_CLICK_TIME,MAX_AVG_CLICK_TIME.")
+
+        min_click_time, max_avg_click_time = parsed
+
+        # Validate the values
+        if not (0.01 < min_click_time < 1):
+            raise argparse.ArgumentTypeError("MIN_CLICK_TIME must be > 0.01 and < 1.")
+        if max_avg_click_time > min_click_time:
+            raise argparse.ArgumentTypeError("MAX_AVG_CLICK_TIME must be <= MIN_CLICK_TIME.")
+        
+        return min_click_time, max_avg_click_time
+    except ValueError:
+        raise argparse.ArgumentTypeError("Click times must be two float values separated by a comma.")
+
+def validate_device(value):
+    try:
+        vid, pid = map(lambda x: int(x, 16), value.split(","))
+        if vid < 0x0000 or vid > 0xFFFF or pid < 0x0000 or pid > 0xFFFF:
+            raise argparse.ArgumentTypeError("VID and PID must be valid 16-bit hexadecimal values.")
+        return vid, pid
+    except Exception as e:
+        raise argparse.ArgumentTypeError(f"Invalid VID/PID format: {e}")
+    
+def parse_arguments():
+    parser = argparse.ArgumentParser(description="HID to MIDI Agent with CLI options.")
+
+    parser.add_argument("--log_level", choices=["DEBUG", "INFO", "NONE"], default="DEBUG",
+                        help="Set logging level. Default is DEBUG.")
+
+    # Log file name
+    parser.add_argument("--log_file_name", type=str, default="hid_to_midi.log",
+                        help="Name of the log file. Default is 'hid_to_midi.log'.")
+    
+    # Single argument for click times
+    parser.add_argument("--click_times", type=validate_click_times, default=(0.2, 0.18),
+                        help="Comma-separated values for MIN_CLICK_TIME and MAX_AVG_CLICK_TIME. "
+                             "MIN_CLICK_TIME must be > 0.01 and < 1, and MAX_AVG_CLICK_TIME must be <= MIN_CLICK_TIME. "
+                             "Default is '0.2,0.18'.")
+    
+    parser.add_argument("--volume_increases_list", type=validate_volume_increases, default=[1, 2, 2, 2, 3, 3, 3, 4],
+                        help="List of volume increases. Must be between 2 and 15 integers, each >=1 and <=10. Default is [1, 2, 2, 2, 3, 3, 3, 4].")
+    
+    
+    # VID/PID combination
+    parser.add_argument("--device", type=validate_device, default=(0x07d7, 0x0000),
+                        help="VID and PID of the device to be listened to, in the format 'VID,PID'. Default is '0x07d7,0x0000'.")
+
+    # MIDI channel name
+    parser.add_argument("--midi_channel_name", type=str, default="GLMMIDI 1",
+                        help="Name of the MIDI channel. If the name contains spaces, enclose it in quotes (e.g., 'MIDI Channel 1' or \"MIDI Channel 1\"). Default is 'GLMMIDI 1'.")
+
+    # Parse arguments
+    args = parser.parse_args()
+
+    # Assign parsed click times to individual variables for clarity
+    args.min_click_time, args.max_avg_click_time = args.click_times
+    args.vid, args.pid = args.device
+    return args
+
 
 def set_high_priority():
     try:
         p = psutil.Process(os.getpid())
-        p.nice(psutil.HIGH_PRIORITY_CLASS)  # Set to high priority
-        print("Process priority set to high.")
+        p.nice(psutil.ABOVE_NORMAL_PRIORITY_CLASS)  # Set to high priority
+        logger.debug("Main Process priority set to high.")
     except Exception as e:
         print(f"Failed to set high priority: {e}")
 
+def set_current_thread_priority(priority_level):
+    """Set the priority of the current thread."""
+    try:
+        # Get the current thread handle
+        thread_handle = ctypes.windll.kernel32.GetCurrentThread()
+        # Get the thread's name and ID
+        thread_name = threading.current_thread().name
+        thread_id = threading.get_ident()
+        # Set the thread priority
+        success = win32process.SetThreadPriority(thread_handle, priority_level)
+        if not success:
+            last_error = ctypes.windll.kernel32.GetLastError()
+            if last_error != 0:
+                raise ctypes.WinError(last_error)
+        logger.debug(f"Set priority of thread '{thread_name}' (ID: {thread_id}) to {priority_level}.")
+    except Exception as e:
+        logger.warning(f"Failed to set priority for thread '{thread_name}' (ID: {thread_id}): {e}")
+
+
+# Setup logging
+def setup_logging(log_level, log_file_name, max_bytes=4*1024*1024, backup_count=5):
+    script_directory = os.path.dirname(os.path.abspath(__file__))
+    log_file_path = os.path.join(script_directory, log_file_name)
+
+    log_queue = Queue()
+
+    # File Handler
+    file_handler = RotatingFileHandler(log_file_path, maxBytes=max_bytes, backupCount=backup_count)
+    file_handler.setLevel(logging.DEBUG if log_level != "NONE" else logging.CRITICAL)
+    file_handler.setFormatter(logging.Formatter('%(asctime)s [%(levelname)s] %(message)s'))
+
+    # Console Handler
+    console_handler = logging.StreamHandler()
+    console_handler.setLevel(logging.INFO if log_level in ["INFO", "DEBUG"] else logging.CRITICAL)
+    console_handler.setFormatter(logging.Formatter('%(asctime)s [%(levelname)s] %(message)s'))
+
+    # QueueHandler
+    queue_handler = QueueHandler(log_queue)
+
+    # Root Logger
+    root_logger = logging.getLogger()
+    root_logger.handlers = []  # Clear all handlers
+    root_logger.setLevel(logging.DEBUG if log_level == "DEBUG" else logging.INFO)
+    root_logger.addHandler(queue_handler)
+
+    # Custom Module Logger
+    global logger
+    logger = logging.getLogger(__name__)
+    logger.setLevel(logging.DEBUG if log_level == "DEBUG" else logging.INFO)
+    logger.addHandler(console_handler)  # Optional: Direct console output
+    logger.addHandler(file_handler)     # Optional: Direct file output
+    logger.propagate = False  # Avoid double logging
+
+    # Listener Thread
+    stop_event = threading.Event()
+
+    def log_listener_thread():
+        listener = QueueListener(log_queue, file_handler, console_handler)
+        listener.start()
+        # Lower thread priority
+        set_current_thread_priority(win32process.THREAD_PRIORITY_IDLE)
+
+        stop_event.wait()
+        listener.stop()
+
+    logging_thread = threading.Thread(target=log_listener_thread, name="LoggingThread", daemon=False)
+    logging_thread.start()
+
+    def stop_logging():
+        stop_event.set()
+
+    return stop_logging
+
+def signal_handler(sig, frame, daemon):
+    """Handles SIGINT and shuts down the daemon."""
+    logger.info("SIGINT received, shutting down...")
+    daemon.stop()
+    sys.exit(0)
+
 class AccelerationHandler:
-    def __init__(self, min_click=0.25, max_per_click_avg=0.2):
+    def __init__(self, min_click, max_per_click_avg, volume_list):
+        self.min_click = min_click
+        self.max_per_click_avg = max_per_click_avg
+        self.volume_increases_list = volume_list
         self.last_button = 0
         self.last_time = 0
         self.first_time = 0
         self.distance = 0
         self.count = 1
-        self.max_per_click_avg = max_per_click_avg
-        self.min_click = min_click
 
     def calculate_speed(self, current_time, button):
         delta_time = current_time - self.last_time
@@ -90,43 +274,46 @@ class AccelerationHandler:
             self.count = 1
             self.first_time = current_time
         else:
-            if self.count < volume_steps:
-                self.distance = volume_increases_list[self.count]
+            if self.count < len(self.volume_increases_list):
+                self.distance = self.volume_increases_list[self.count]
             else:
-                self.distance = volume_increases_list[-1]
+                self.distance = self.volume_increases_list[-1]
             self.count += 1
         self.last_button = button
         self.last_time = current_time
         return int(self.distance)
 
 class HIDToMIDIDaemon:
-    def __init__(self):
+    def __init__(self, min_click_time, max_avg_click_time, volume_increases_list, VID, PID, midi_channel_name):
         self.queue = queue.Queue()
         self.running = True
-        self.producer_thread = threading.Thread(target=self.producer, daemon=True)
-        self.consumer_thread = threading.Thread(target=self.consumer, daemon=True)
-        self.volume_knob = AccelerationHandler()
-
+        self.producer_thread = threading.Thread(target=self.producer, daemon=True, name="ProducerThread")
+        self.consumer_thread = threading.Thread(target=self.consumer, daemon=True, name="ConsumerThread")
+        self.volume_knob = AccelerationHandler(min_click_time, max_avg_click_time, volume_increases_list)
+        self.midi_channel_name = midi_channel_name
+        self.vid = VID
+        self.pid = PID
+        
     def producer(self):
         """Reads events from the HID device and puts them in the queue."""
+        set_current_thread_priority(win32process.THREAD_PRIORITY_HIGHEST)
         device = None
         while self.running:
             if device is None:
                 try:
                     device = hid.device()
-                    device.open(VID, PID)
-                    logger.info(f"Connected to HID device VID: {hex(VID)} PID: {hex(PID)}.")
+                    device.open(self.vid, self.pid)
+                    logger.info(f"Connected to HID device VID: {hex(self.vid)} PID: {hex(self.pid)}.")
                 except Exception as e:
                     logger.warning(f"Failed to open HID device: {e}. Retrying...")
                     time.sleep(RETRY_DELAY)
                     continue
 
             try:
-                report = device.read(3, timeout_ms=3000)
+                report = device.read(3, timeout_ms=1000)
                 if report:
                     keyreported = report[0]
                     if keyreported == 0:
-                        # logger.debug("Ignoring key_down event (keyreported=0).")
                         continue
                     now = time.time()
                     distance = self.volume_knob.calculate_speed(now, keyreported)
@@ -134,26 +321,16 @@ class HIDToMIDIDaemon:
                     logger.debug(f"Received report: time={now} key={keyreported}, distance={distance}")
             except Exception as e:
                 logger.warning(f"HID device error: {e}. Reconnecting...")
-                logger.debug(f"Error details: {type(e).__name__}, {str(e)}")
-
-                # Check for errno and log details if present
-                if hasattr(e, 'errno') and e.errno is not None:
-                    try:
-                        logger.debug(f"Errno: {e.errno} - {os.strerror(e.errno)}")
-                    except ValueError:
-                        logger.debug(f"Errno provided, but could not fetch strerror: {e.errno}")
-                else:
-                    logger.debug("No errno attribute available for this exception.")
-
                 if device:
                     device.close()
                 device = None
                 time.sleep(RETRY_DELAY)
-            
 
     def consumer(self):
         """Processes events from the queue and sends MIDI messages."""
-        midi_handler = self.MIDIHandler()
+        set_current_thread_priority(win32process.THREAD_PRIORITY_ABOVE_NORMAL)
+
+        midi_handler = self.MIDIHandler(self.midi_channel_name)
         midi_handler.connect()
 
         while True:
@@ -174,19 +351,20 @@ class HIDToMIDIDaemon:
             for _ in range(distance):
                 midi_handler.send(button, 127)
                 time.sleep(SEND_DELAY)
-
+                
     class MIDIHandler:
-        def __init__(self):
+        def __init__(self, midi_channel_name):
             self.output = None
+            self.midi_channel_name = midi_channel_name
 
         def connect(self):
             while True:
                 try:
-                    self.output = open_output(MIDI_CHANNEL_NAME)
-                    logger.info(f"Connected to MIDI channel '{MIDI_CHANNEL_NAME}'.")
+                    self.output = open_output(self.midi_channel_name)
+                    logger.info(f"Connected to MIDI channel '{self.midi_channel_name}'.")
                     return
                 except Exception as e:
-                    logger.warning(f"Failed to open MIDI channel '{MIDI_CHANNEL_NAME}': {e}. Retrying...")
+                    logger.warning(f"Failed to open MIDI channel '{self.midi_channel_name}': {e}. Retrying...")
                     time.sleep(RETRY_DELAY)
 
         def send(self, button, value=127):
@@ -204,6 +382,11 @@ class HIDToMIDIDaemon:
                 logger.error(f"Error sending MIDI message: {e}")
                 self.output = None  # Force reconnect
 
+    def start(self):
+        """Starts the producer and consumer threads."""
+        self.producer_thread.start()
+        self.consumer_thread.start()
+
     def stop(self):
         """Stops the daemon gracefully."""
         logger.info("Stopping daemon...")
@@ -213,30 +396,37 @@ class HIDToMIDIDaemon:
         self.consumer_thread.join()
         logger.info("Daemon stopped.")
 
-    def start(self):
-        """Starts the producer and consumer threads."""
-        self.producer_thread.start()
-        self.consumer_thread.start()
-
-def signal_handler(sig, frame, daemon):
-    """Handles SIGINT and shuts down the daemon."""
-    logger.info("SIGINT received, shutting down...")
-    daemon.stop()
-    sys.exit(0)
-
 if __name__ == "__main__":
-    setup_logging()
-    set_high_priority()
-    logger.info("Logging setup complete. Priority set to high and now waiting 10 seconds for Bluetooth to certainly be connected!")
-    time.sleep(10.0)
+    args = parse_arguments()
+    stop_logging = setup_logging(args.log_level, args.log_file_name)
     
-    logger.info("Logging setup complete. About to start the deamon.")
-    daemon = HIDToMIDIDaemon()
+    logger.info(f">--- Starting {os.path.basename(__file__)} agent. Logging setup complete. Priority to be now set to high and will wait 2.0 seconds for Bluetooth to be connected")
+    
+    # Log the configurations for confirmation
+    logger.info(f"--- Here are the values (either input or set in command line)")
+    logger.info(f"Minimum click time: {args.min_click_time}")
+    logger.info(f"Maximum aveg click time: {args.max_avg_click_time}")
+    logger.info(f"Volume increases list: {args.volume_increases_list}")
+    logger.info(f"Debug level: {args.log_level}")
+    logger.info(f"Debug file: {args.log_file_name}")
+    logger.info(f"Midi channel name: {args.midi_channel_name}")
+    logger.info(f"VID/PID : VID: {hex(args.vid)} PID: {hex(args.pid)}")
+    logger.info(f"--- End of  the values (either input or set in command line)")
+
+    set_high_priority()
+    time.sleep(2.0)
+    
+    # logger.info("....About to start the deamon.")
+    daemon = HIDToMIDIDaemon(args.min_click_time, args.max_avg_click_time, args.volume_increases_list, args.vid, args.pid, args.midi_channel_name)
     signal.signal(signal.SIGINT, lambda sig, frame: signal_handler(sig, frame, daemon))
     daemon.start()
-
+    
     try:
         while True:
-            time.sleep(1)  # Keep the main thread alive
+            time.sleep(3)  # Keep the main thread alive
     except KeyboardInterrupt:
         signal_handler(None, None, daemon)
+    finally:
+        stop_logging()
+        
+        
