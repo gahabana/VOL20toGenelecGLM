@@ -25,6 +25,15 @@ SEND_DELAY = 0  # seconds (0 seconds is just OS yield to other threads if needed
 #               # i.e. MIDI receiving app .. it also work with 0.0005 sec (0.5ms) but i found it not to be needed)
 RETRY_DELAY = 2.0  # seconds
 
+KEYCODE_2_DESCRIPTION = {
+     2: "VolUp",  # Volume Up to GLM Volume Down
+     1: "VolDown",  # Volume Down to GLM Volume Down
+    32: "Play/Pause",  # Play/Pause keys to GLM Mute (click on VOL20)
+    16: "NextTrack",  # Next Track key to GLM Dim (double click on VOL20)
+     8: "PrevTrack",  # Previous Track to GLM Power-On/Off (tripple click on VOL20)
+     4: "MuteOnOff",  # Mute On / Mute Off (2 second press on a button on VOL20) to Power On/Off
+}
+
 MIDI_CC_MAPPING = {
      2: 21,  # Volume Up to GLM Volume Down
      1: 22,  # Volume Down to GLM Volume Down
@@ -34,63 +43,13 @@ MIDI_CC_MAPPING = {
      4: 28,  # Mute On / Mute Off (2 second press on a button on VOL20) to Power On/Off
 }
 
-def validate_volume_increases(value):
-    try:
-        parsed = list(map(int, value.strip("[]").split(",")))
-        if len(parsed) < 2 or len(parsed) > 15:
-            raise argparse.ArgumentTypeError("Volume increase list must have between 2 and 15 items.")
-        if not all(1 <= x <= 10 for x in parsed):
-            raise argparse.ArgumentTypeError("All values in the list must be integers between 1 and 10.")
-        return parsed
-    except Exception as e:
-        raise argparse.ArgumentTypeError(f"Invalid format for volume_increase_list: {e}")
-
-def validate_click_times(values):
-    try:
-        # Split and parse the two values
-        parsed = list(map(float, values.split(",")))
-        if len(parsed) != 2:
-            raise argparse.ArgumentTypeError("You must provide exactly two values: MIN_CLICK_TIME,MAX_AVG_CLICK_TIME.")
-
-        min_click_time, max_avg_click_time = parsed
-
-        # Validate the values
-        if not (0.01 < min_click_time < 1):
-            raise argparse.ArgumentTypeError("MIN_CLICK_TIME must be > 0.01 and < 1.")
-        if max_avg_click_time > min_click_time:
-            raise argparse.ArgumentTypeError("MAX_AVG_CLICK_TIME must be <= MIN_CLICK_TIME.")
-        
-        return min_click_time, max_avg_click_time
-    except ValueError:
-        raise argparse.ArgumentTypeError("Click times must be two float values separated by a comma.")
-
-import argparse
-import threading
-import queue
-from queue import Queue
-import time
-import signal
-import sys
-import hid
-from mido import Message, open_output
-import psutil
-
-import logging
-from logging.handlers import RotatingFileHandler, QueueHandler, QueueListener
-import os
-
-import ctypes
-import win32api
-import win32process
-import win32con
-
-# Parameters
-VID = 0x07d7
-PID = 0x0000
-MIDI_CHANNEL_NAME = "GLMMIDI 1"
-MAX_EVENT_AGE = 2.0  # seconds
-SEND_DELAY = 0
-RETRY_DELAY = 2.0
+MIDI_2_GLM_MAPPING = {
+    21: "VolUp",      # GLM Volume Up
+    22: "VolDown",    # GLM Volume Down
+    23: "Mute",      # GLM Mute
+    24: "Dim",       # GLM Dim
+    28: "PwrOnOff",  # GLM Power-On/Off
+}
 
 def validate_volume_increases(value):
     try:
@@ -142,12 +101,12 @@ def parse_arguments():
                         help="Name of the log file. Default is 'hid_to_midi.log'.")
     
     # Single argument for click times
-    parser.add_argument("--click_times", type=validate_click_times, default=(0.2, 0.18),
+    parser.add_argument("--click_times", type=validate_click_times, default=(0.26, 0.19),
                         help="Comma-separated values for MIN_CLICK_TIME and MAX_AVG_CLICK_TIME. "
                              "MIN_CLICK_TIME must be > 0.01 and < 1, and MAX_AVG_CLICK_TIME must be <= MIN_CLICK_TIME. "
                              "Default is '0.2,0.18'.")
     
-    parser.add_argument("--volume_increases_list", type=validate_volume_increases, default=[1, 2, 2, 2, 3, 3, 3, 4],
+    parser.add_argument("--volume_increases_list", type=validate_volume_increases, default=[1, 2, 2, 2, 2, 3, 3, 4],
                         help="List of volume increases. Must be between 2 and 15 integers, each >=1 and <=10. Default is [1, 2, 2, 2, 3, 3, 3, 4].")
     
     
@@ -168,13 +127,14 @@ def parse_arguments():
     return args
 
 
-def set_high_priority():
+def set_higher_priority():
     try:
         p = psutil.Process(os.getpid())
-        p.nice(psutil.ABOVE_NORMAL_PRIORITY_CLASS)  # Set to high priority
-        logger.debug("Main Process priority set to high.")
+        p.nice(psutil.ABOVE_NORMAL_PRIORITY_CLASS)  # Set to Above Normal
+        # p.ionice(psutil.IOPRIO_HIGH) ... i get an error
+        logger.debug("Main Process priority set to AboveNormal.")
     except Exception as e:
-        print(f"Failed to set high priority: {e}")
+        print(f"Failed to set higher priority: {e}")
 
 def set_current_thread_priority(priority_level):
     """Set the priority of the current thread."""
@@ -231,10 +191,13 @@ def setup_logging(log_level, log_file_name, max_bytes=4*1024*1024, backup_count=
 
     # Listener Thread
     stop_event = threading.Event()
-
+    logger.info(f">----- Starting {os.path.basename(__file__)} agent. Logger setup complete. Initializing application...")
+    
     def log_listener_thread():
         listener = QueueListener(log_queue, file_handler, console_handler)
         listener.start()
+        # logger.info(f">----- Starting {os.path.basename(__file__)} agent. Logger setup complete. Initializing application...")
+
         # Lower thread priority
         set_current_thread_priority(win32process.THREAD_PRIORITY_IDLE)
 
@@ -265,14 +228,16 @@ class AccelerationHandler:
         self.first_time = 0
         self.distance = 0
         self.count = 1
+        self.delta_time = 0
 
     def calculate_speed(self, current_time, button):
-        delta_time = current_time - self.last_time
+        self.delta_time = current_time - self.last_time
         avg_step_time = (current_time - self.first_time) / self.count
-        if (self.last_button != button) or (avg_step_time > self.max_per_click_avg) or (delta_time > self.min_click):
+        if (self.last_button != button) or (avg_step_time > self.max_per_click_avg) or (self.delta_time > self.min_click):
             self.distance = 1
             self.count = 1
             self.first_time = current_time
+            # self.delta_time = 0
         else:
             if self.count < len(self.volume_increases_list):
                 self.distance = self.volume_increases_list[self.count]
@@ -318,7 +283,8 @@ class HIDToMIDIDaemon:
                     now = time.time()
                     distance = self.volume_knob.calculate_speed(now, keyreported)
                     self.queue.put({'timestamp': now, 'key': keyreported, 'distance': distance})
-                    logger.debug(f"Received report: time={now} key={keyreported}, distance={distance}")
+                    # logger.debug(f"Received report: time={now} key={KEYCODE_2_DESCRIPTION[keyreported]}, distance={distance}")
+                    logger.debug(f"Received report: delta={self.volume_knob.delta_time*1000:.0f}ms, distance={distance if distance != 1 else '--1--'}, key={KEYCODE_2_DESCRIPTION[keyreported]}")
             except Exception as e:
                 logger.warning(f"HID device error: {e}. Reconnecting...")
                 if device:
@@ -347,7 +313,9 @@ class HIDToMIDIDaemon:
 
             button = event['key']
             distance = event['distance']
-            logger.debug(f"Sending to midi handler: delay{event_age}, button {button} for {distance} times")
+            # logger.debug(f"Sending to midi handler: delay {event_age}, button {button} for {distance} times")
+            # logger.debug(f"Sending to midi handler: delay {event_age}, button {button} for {distance} times")
+            logger.debug(f"Sending MIDI msg to channel {MIDI_CC_MAPPING[button]} {MIDI_2_GLM_MAPPING[MIDI_CC_MAPPING[button]]} x{distance:>1}")
             for _ in range(distance):
                 midi_handler.send(button, 127)
                 time.sleep(SEND_DELAY)
@@ -375,7 +343,8 @@ class HIDToMIDIDaemon:
                 if button in MIDI_CC_MAPPING:
                     cc_number = MIDI_CC_MAPPING[button]
                     self.output.send(Message('control_change', control=cc_number, value=value))
-                    logger.debug(f"Sent MIDI msg to channel {cc_number} with value = {value}")
+                    # logger.debug(f"Sent MIDI msg to channel {cc_number}  with value = {value}")
+                    # logger.debug(f"Sent MIDI msg to channel {cc_number} -> {MIDI_2_GLM_MAPPING[cc_number]}")
                 else:
                     logger.debug(f"Unknown key {button} received !!!")
             except Exception as e:
@@ -400,20 +369,20 @@ if __name__ == "__main__":
     args = parse_arguments()
     stop_logging = setup_logging(args.log_level, args.log_file_name)
     
-    logger.info(f">--- Starting {os.path.basename(__file__)} agent. Logging setup complete. Priority to be now set to high and will wait 2.0 seconds for Bluetooth to be connected")
+    # logger.info(f">--- Starting {os.path.basename(__file__)} agent. Logging setup complete. Priority to be now set to high and will wait 2.0 seconds for Bluetooth to be connected")
     
     # Log the configurations for confirmation
-    logger.info(f"--- Here are the values (either input or set in command line)")
-    logger.info(f"Minimum click time: {args.min_click_time}")
-    logger.info(f"Maximum aveg click time: {args.max_avg_click_time}")
-    logger.info(f"Volume increases list: {args.volume_increases_list}")
-    logger.info(f"Debug level: {args.log_level}")
-    logger.info(f"Debug file: {args.log_file_name}")
-    logger.info(f"Midi channel name: {args.midi_channel_name}")
-    logger.info(f"VID/PID : VID: {hex(args.vid)} PID: {hex(args.pid)}")
-    logger.info(f"--- End of  the values (either input or set in command line)")
+    logger.info(f"---> Here are the input values (either default input or set in command line)")
+    logger.info(f"---> Minimum click time: {args.min_click_time}")
+    logger.info(f"---> Maximum aveg click time: {args.max_avg_click_time}")
+    logger.info(f"---> Volume increases list: {args.volume_increases_list}")
+    logger.info(f"---> Debug level: {args.log_level}")
+    logger.info(f"---> Debug file: {args.log_file_name}")
+    logger.info(f"---> Midi channel name: {args.midi_channel_name}")
+    logger.info(f"---> VID/PID : VID: {hex(args.vid)} PID: {hex(args.pid)}")
+    logger.info(f"<--- End of  the values (either input or set in command line)")
 
-    set_high_priority()
+    set_higher_priority()
     time.sleep(2.0)
     
     # logger.info("....About to start the deamon.")
