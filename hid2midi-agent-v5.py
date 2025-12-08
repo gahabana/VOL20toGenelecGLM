@@ -430,6 +430,7 @@ class HIDToMIDIDaemon:
         self.vid = VID
         self.pid = PID
         self.midi_output = None  # Shared MIDI output for sending to GLM
+        self.midi_input = None   # MIDI input for reading GLM state
 
     def hid_reader(self):
         """Reads events from the HID device and puts them in the queue."""
@@ -466,36 +467,33 @@ class HIDToMIDIDaemon:
     def midi_reader(self):
         """Reads MIDI messages from GLMOUT and updates GLM state."""
         set_current_thread_priority(win32process.THREAD_PRIORITY_BELOW_NORMAL)
-        midi_input = None
 
         while self.running:
-            if midi_input is None:
-                try:
-                    midi_input = open_input(self.midi_out_channel)
-                    logger.info(f"Connected to MIDI output channel '{self.midi_out_channel}' for state reading.")
-                except Exception as e:
-                    logger.warning(f"Failed to open MIDI output channel '{self.midi_out_channel}': {e}. Retrying...")
-                    time.sleep(RETRY_DELAY)
-                    continue
-
             try:
-                # Use iter_pending() with a small sleep to allow checking self.running
-                for msg in midi_input.iter_pending():
+                self.midi_input = open_input(self.midi_out_channel)
+                logger.info(f"Connected to MIDI output channel '{self.midi_out_channel}' for state reading.")
+
+                # Blocking iteration - waits for messages, no polling
+                for msg in self.midi_input:
+                    if not self.running:
+                        break
                     if msg.type == 'control_change':
                         changed = glm_controller.update_from_midi(msg.control, msg.value)
                         if changed:
                             state = glm_controller.get_state()
                             logger.debug(f"GLM state: vol={state['volume']}, mute={state['mute']}, dim={state['dim']}, pwr={state['power']}")
-                time.sleep(0.05)  # 50ms poll interval
+
             except Exception as e:
-                logger.warning(f"MIDI reader error: {e}. Reconnecting...")
-                if midi_input:
+                if self.running:  # Only log if not shutting down
+                    logger.warning(f"MIDI reader error: {e}. Reconnecting...")
+                    time.sleep(RETRY_DELAY)
+            finally:
+                if self.midi_input:
                     try:
-                        midi_input.close()
+                        self.midi_input.close()
                     except Exception:
                         pass
-                midi_input = None
-                time.sleep(RETRY_DELAY)
+                    self.midi_input = None
 
     def consumer(self):
         """Processes events from the queue and sends MIDI messages."""
@@ -567,6 +565,12 @@ class HIDToMIDIDaemon:
         logger.info("Stopping daemon...")
         self.running = False
         self.queue.put(None)  # Sentinel to unblock the consumer
+        # Close MIDI input to unblock the blocking read
+        if self.midi_input:
+            try:
+                self.midi_input.close()
+            except Exception:
+                pass
         self.hid_reader_thread.join(timeout=2.0)
         self.midi_reader_thread.join(timeout=2.0)
         self.consumer_thread.join(timeout=2.0)
