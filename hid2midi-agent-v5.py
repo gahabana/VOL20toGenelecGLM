@@ -136,6 +136,7 @@ class GlmController:
         self.dim: bool = False     # from CC 24
         self.power: bool = True    # tracked locally (no MIDI feedback from GLM)
         self._lock = threading.Lock()
+        self._volume_changed = threading.Event()
 
     def update_from_midi(self, cc: int, value: int) -> bool:
         """Update state from MIDI message. Returns True if state changed."""
@@ -143,6 +144,7 @@ class GlmController:
             if cc == GLM_VOLUME_ABS:
                 if self.volume != value:
                     self.volume = value
+                    self._volume_changed.set()  # Signal volume change
                     return True
             elif cc == GLM_MUTE_CC:
                 new_mute = value > 0
@@ -155,6 +157,11 @@ class GlmController:
                     self.dim = new_dim
                     return True
             return False
+
+    def wait_for_volume_change(self, timeout: float = 0.15) -> bool:
+        """Wait for GLM to confirm volume change. Returns True if confirmed."""
+        self._volume_changed.clear()
+        return self._volume_changed.wait(timeout)
 
     def get_state(self) -> dict:
         """Get current state as a dictionary (for future REST API)."""
@@ -283,8 +290,8 @@ def parse_arguments():
     parser.add_argument("--midi_in_channel", type=str, default="GLMMIDI 1",
                         help="MIDI input channel name (to send commands TO GLM). Default is 'GLMMIDI 1'.")
 
-    parser.add_argument("--midi_out_channel", type=str, default="GLMOUT 2",
-                        help="MIDI output channel name (to receive state FROM GLM). Default is 'GLMOUT 2'.")
+    parser.add_argument("--midi_out_channel", type=str, default="GLMOUT 1",
+                        help="MIDI output channel name (to receive state FROM GLM). Default is 'GLMOUT 1'.")
 
     # Parse arguments
     args = parser.parse_args()
@@ -537,7 +544,12 @@ class HIDToMIDIDaemon:
 
                 for _ in range(distance):
                     self._send_action(action)
-                    time.sleep(SEND_DELAY)
+                    # For volume commands, wait for GLM confirmation before sending next
+                    if action in (Action.VOL_UP, Action.VOL_DOWN):
+                        if not glm_controller.wait_for_volume_change(timeout=0.15):
+                            logger.debug("Volume change not confirmed by GLM (timeout)")
+                    else:
+                        time.sleep(SEND_DELAY)
             else:
                 # Non-GLM action (future: route to other apps)
                 logger.debug(f"Action {action.value} has no GLM mapping (yet)")
