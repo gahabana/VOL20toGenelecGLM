@@ -5,8 +5,11 @@ import os
 import threading
 import queue
 from queue import Queue
+from enum import Enum
+from dataclasses import dataclass
+from typing import Dict, Optional
 import hid
-from mido import Message, open_output
+from mido import Message, open_output, open_input
 import psutil
 import argparse
 
@@ -21,13 +24,71 @@ import win32con
 # Parameters
 
 MAX_EVENT_AGE = 2.0  # seconds
-SEND_DELAY = 0  # seconds (0 seconds is just OS yield to other threads if needed ... 
+SEND_DELAY = 0  # seconds (0 seconds is just OS yield to other threads if needed ...
 #               # i.e. MIDI receiving app .. it also work with 0.0005 sec (0.5ms) but i found it not to be needed)
 RETRY_DELAY = 2.0  # seconds
 
+
 # ==============================================================================
-# IMMUTABLE: VOL20 Hardware Keycodes (what the device sends)
+# 1) LOGICAL ACTIONS - What the system can do
 # ==============================================================================
+
+class Action(Enum):
+    VOL_UP = "VolUp"
+    VOL_DOWN = "VolDown"
+    MUTE = "Mute"
+    DIM = "Dim"
+    POWER = "Power"
+    # Non-GLM actions (for future routing to other apps)
+    PLAY_PAUSE = "Play/Pause"
+    NEXT_TRACK = "NextTrack"
+    PREV_TRACK = "PrevTrack"
+
+
+# ==============================================================================
+# 2) GLM MIDI MAPPING - How GLM exposes controls via MIDI
+# ==============================================================================
+
+class ControlMode(Enum):
+    MOMENTARY = "momentary"  # Send 127 to trigger, auto-resets
+    TOGGLE = "toggle"        # Send 127/0 to set state explicitly
+
+
+@dataclass(frozen=True)
+class GlmControl:
+    cc: int                 # MIDI CC number
+    label: str              # Human-readable label
+    mode: ControlMode       # How this control behaves
+
+
+# GLM MIDI CC numbers (from GLM MIDI Settings)
+GLM_VOLUME_ABS = 20   # Absolute volume (0-127) - GLM outputs this, can also set it
+GLM_VOL_UP_CC = 21    # Volume increment (momentary)
+GLM_VOL_DOWN_CC = 22  # Volume decrement (momentary)
+GLM_MUTE_CC = 23      # Mute (toggle)
+GLM_DIM_CC = 24       # Dim (toggle)
+GLM_POWER_CC = 28     # System Power (momentary trigger, no MIDI feedback)
+
+# Catalogue of GLM controls
+ACTION_TO_GLM: Dict[Action, GlmControl] = {
+    Action.VOL_UP:   GlmControl(cc=GLM_VOL_UP_CC,   label="Vol+",  mode=ControlMode.MOMENTARY),
+    Action.VOL_DOWN: GlmControl(cc=GLM_VOL_DOWN_CC, label="Vol-",  mode=ControlMode.MOMENTARY),
+    Action.MUTE:     GlmControl(cc=GLM_MUTE_CC,     label="Mute",  mode=ControlMode.TOGGLE),
+    Action.DIM:      GlmControl(cc=GLM_DIM_CC,      label="Dim",   mode=ControlMode.TOGGLE),
+    Action.POWER:    GlmControl(cc=GLM_POWER_CC,    label="Power", mode=ControlMode.MOMENTARY),
+    # Non-GLM actions don't have GLM controls (yet)
+}
+
+# Reverse lookup: CC number → Action (for reading GLM state from MIDI output)
+CC_TO_ACTION: Dict[int, Action] = {
+    ctrl.cc: action for action, ctrl in ACTION_TO_GLM.items()
+}
+
+
+# ==============================================================================
+# 3) PHYSICAL DEVICE - VOL20 Hardware Keycodes (immutable)
+# ==============================================================================
+
 KEY_VOL_UP = 2
 KEY_VOL_DOWN = 1
 KEY_CLICK = 32          # Single click on VOL20
@@ -35,7 +96,7 @@ KEY_DOUBLE_CLICK = 16   # Double click on VOL20
 KEY_TRIPLE_CLICK = 8    # Triple click on VOL20
 KEY_LONG_PRESS = 4      # 2-second press on VOL20
 
-KEY_NAMES = {
+KEY_NAMES: Dict[int, str] = {
     KEY_VOL_UP: "VolUp",
     KEY_VOL_DOWN: "VolDown",
     KEY_CLICK: "Click",
@@ -44,34 +105,116 @@ KEY_NAMES = {
     KEY_LONG_PRESS: "LongPress",
 }
 
-# ==============================================================================
-# IMMUTABLE: GLM Actions (MIDI CC numbers defined by GLM software)
-# ==============================================================================
-GLM_VOL_UP = 21
-GLM_VOL_DOWN = 22
-GLM_MUTE = 23
-GLM_DIM = 24
-GLM_POWER = 28
-
-GLM_ACTION_NAMES = {
-    GLM_VOL_UP: "VolUp",
-    GLM_VOL_DOWN: "VolDown",
-    GLM_MUTE: "Mute",
-    GLM_DIM: "Dim",
-    GLM_POWER: "Power",
-}
 
 # ==============================================================================
-# CONFIGURABLE: Map VOL20 buttons to GLM actions
+# 4) KEY BINDINGS - Map physical keys to logical actions (configurable)
 # ==============================================================================
-KEY_TO_GLM = {
-    KEY_VOL_UP: GLM_VOL_UP,
-    KEY_VOL_DOWN: GLM_VOL_DOWN,
-    KEY_CLICK: GLM_DIM,           # Click → Dim
-    KEY_DOUBLE_CLICK: GLM_POWER,  # Double click → Power
-    KEY_TRIPLE_CLICK: GLM_POWER,  # Triple click → Power
-    KEY_LONG_PRESS: GLM_MUTE,     # Long press → Mute
+
+DEFAULT_BINDINGS: Dict[int, Action] = {
+    KEY_VOL_UP: Action.VOL_UP,
+    KEY_VOL_DOWN: Action.VOL_DOWN,
+    KEY_CLICK: Action.DIM,           # Click → Dim
+    KEY_DOUBLE_CLICK: Action.POWER,  # Double click → Power
+    KEY_TRIPLE_CLICK: Action.POWER,  # Triple click → Power
+    KEY_LONG_PRESS: Action.MUTE,     # Long press → Mute
 }
+
+# Active bindings (can be modified at runtime)
+BINDINGS: Dict[int, Action] = DEFAULT_BINDINGS.copy()
+
+
+# ==============================================================================
+# 5) GLM STATE CONTROLLER - Tracks and controls GLM state
+# ==============================================================================
+
+class GlmController:
+    """Tracks GLM state and provides smart control methods."""
+
+    def __init__(self):
+        self.volume: int = 0       # 0-127, from CC 20
+        self.mute: bool = False    # from CC 23
+        self.dim: bool = False     # from CC 24
+        self.power: bool = True    # tracked locally (no MIDI feedback from GLM)
+        self._lock = threading.Lock()
+
+    def update_from_midi(self, cc: int, value: int) -> bool:
+        """Update state from MIDI message. Returns True if state changed."""
+        with self._lock:
+            if cc == GLM_VOLUME_ABS:
+                if self.volume != value:
+                    self.volume = value
+                    return True
+            elif cc == GLM_MUTE_CC:
+                new_mute = value > 0
+                if self.mute != new_mute:
+                    self.mute = new_mute
+                    return True
+            elif cc == GLM_DIM_CC:
+                new_dim = value > 0
+                if self.dim != new_dim:
+                    self.dim = new_dim
+                    return True
+            return False
+
+    def get_state(self) -> dict:
+        """Get current state as a dictionary (for future REST API)."""
+        with self._lock:
+            return {
+                "volume": self.volume,
+                "mute": self.mute,
+                "dim": self.dim,
+                "power": self.power,
+            }
+
+    def send_action(self, action: Action, midi_output, explicit_state: Optional[bool] = None) -> bool:
+        """
+        Send an action to GLM via MIDI.
+
+        For toggle actions (Mute, Dim):
+          - If explicit_state is None, toggle based on current state
+          - If explicit_state is True/False, set that state explicitly
+
+        For momentary actions (Vol+, Vol-, Power):
+          - Always send 127
+
+        Returns True if message was sent.
+        """
+        glm_ctrl = ACTION_TO_GLM.get(action)
+        if not glm_ctrl:
+            return False  # Action doesn't map to GLM
+
+        with self._lock:
+            if glm_ctrl.mode == ControlMode.TOGGLE:
+                if action == Action.MUTE:
+                    current = self.mute
+                elif action == Action.DIM:
+                    current = self.dim
+                else:
+                    current = False
+
+                if explicit_state is None:
+                    # Toggle: send opposite of current
+                    value = 0 if current else 127
+                else:
+                    # Explicit: set the requested state
+                    value = 127 if explicit_state else 0
+            else:
+                # Momentary: always send 127
+                value = 127
+
+            # Special handling for power (track locally since no MIDI feedback)
+            if action == Action.POWER:
+                self.power = not self.power
+
+        try:
+            midi_output.send(Message('control_change', control=glm_ctrl.cc, value=value))
+            return True
+        except Exception:
+            return False
+
+
+# Global GLM controller instance
+glm_controller = GlmController()
 
 def validate_volume_increases(value):
     try:
@@ -136,9 +279,12 @@ def parse_arguments():
     parser.add_argument("--device", type=validate_device, default=(0x07d7, 0x0000),
                         help="VID and PID of the device to be listened to, in the format 'VID,PID'. Default is '0x07d7,0x0000'.")
 
-    # MIDI channel name
-    parser.add_argument("--midi_channel_name", type=str, default="GLMMIDI 1",
-                        help="Name of the MIDI channel. If the name contains spaces, enclose it in quotes (e.g., 'MIDI Channel 1' or \"MIDI Channel 1\"). Default is 'GLMMIDI 1'.")
+    # MIDI channel names
+    parser.add_argument("--midi_in_channel", type=str, default="GLMMIDI 1",
+                        help="MIDI input channel name (to send commands TO GLM). Default is 'GLMMIDI 1'.")
+
+    parser.add_argument("--midi_out_channel", type=str, default="GLMOUT 2",
+                        help="MIDI output channel name (to receive state FROM GLM). Default is 'GLMOUT 2'.")
 
     # Parse arguments
     args = parser.parse_args()
@@ -271,17 +417,21 @@ class AccelerationHandler:
         return int(self.distance)
 
 class HIDToMIDIDaemon:
-    def __init__(self, min_click_time, max_avg_click_time, volume_increases_list, VID, PID, midi_channel_name):
+    def __init__(self, min_click_time, max_avg_click_time, volume_increases_list,
+                 VID, PID, midi_in_channel, midi_out_channel):
         self.queue = queue.Queue()
         self.running = True
-        self.producer_thread = threading.Thread(target=self.producer, daemon=True, name="ProducerThread")
+        self.hid_reader_thread = threading.Thread(target=self.hid_reader, daemon=True, name="HIDReaderThread")
+        self.midi_reader_thread = threading.Thread(target=self.midi_reader, daemon=True, name="MIDIReaderThread")
         self.consumer_thread = threading.Thread(target=self.consumer, daemon=True, name="ConsumerThread")
         self.volume_knob = AccelerationHandler(min_click_time, max_avg_click_time, volume_increases_list)
-        self.midi_channel_name = midi_channel_name
+        self.midi_in_channel = midi_in_channel
+        self.midi_out_channel = midi_out_channel
         self.vid = VID
         self.pid = PID
-        
-    def producer(self):
+        self.midi_output = None  # Shared MIDI output for sending to GLM
+
+    def hid_reader(self):
         """Reads events from the HID device and puts them in the queue."""
         set_current_thread_priority(win32process.THREAD_PRIORITY_HIGHEST)
         device = None
@@ -305,7 +455,7 @@ class HIDToMIDIDaemon:
                     now = time.time()
                     distance = self.volume_knob.calculate_speed(now, keyreported)
                     self.queue.put({'timestamp': now, 'key': keyreported, 'distance': distance})
-                    logger.debug(f"Received report: delta={self.volume_knob.delta_time*1000:.0f}ms, distance={distance}, key={KEY_NAMES[keyreported]} {'(*)' if self.volume_knob.count == 1 else ''}")
+                    logger.debug(f"HID: delta={self.volume_knob.delta_time*1000:.0f}ms, dist={distance}, key={KEY_NAMES.get(keyreported, keyreported)} {'(*)' if self.volume_knob.count == 1 else ''}")
             except Exception as e:
                 logger.warning(f"HID device error: {e}. Reconnecting...")
                 if device:
@@ -313,18 +463,59 @@ class HIDToMIDIDaemon:
                 device = None
                 time.sleep(RETRY_DELAY)
 
+    def midi_reader(self):
+        """Reads MIDI messages from GLMOUT and updates GLM state."""
+        set_current_thread_priority(win32process.THREAD_PRIORITY_BELOW_NORMAL)
+        midi_input = None
+
+        while self.running:
+            if midi_input is None:
+                try:
+                    midi_input = open_input(self.midi_out_channel)
+                    logger.info(f"Connected to MIDI output channel '{self.midi_out_channel}' for state reading.")
+                except Exception as e:
+                    logger.warning(f"Failed to open MIDI output channel '{self.midi_out_channel}': {e}. Retrying...")
+                    time.sleep(RETRY_DELAY)
+                    continue
+
+            try:
+                # Use iter_pending() with a small sleep to allow checking self.running
+                for msg in midi_input.iter_pending():
+                    if msg.type == 'control_change':
+                        changed = glm_controller.update_from_midi(msg.control, msg.value)
+                        if changed:
+                            state = glm_controller.get_state()
+                            logger.debug(f"GLM state: vol={state['volume']}, mute={state['mute']}, dim={state['dim']}, pwr={state['power']}")
+                time.sleep(0.05)  # 50ms poll interval
+            except Exception as e:
+                logger.warning(f"MIDI reader error: {e}. Reconnecting...")
+                if midi_input:
+                    try:
+                        midi_input.close()
+                    except Exception:
+                        pass
+                midi_input = None
+                time.sleep(RETRY_DELAY)
+
     def consumer(self):
         """Processes events from the queue and sends MIDI messages."""
         set_current_thread_priority(win32process.THREAD_PRIORITY_ABOVE_NORMAL)
 
-        midi_handler = self.MIDIHandler(self.midi_channel_name)
-        midi_handler.connect()
+        # Connect to MIDI output
+        while self.midi_output is None and self.running:
+            try:
+                self.midi_output = open_output(self.midi_in_channel)
+                logger.info(f"Connected to MIDI input channel '{self.midi_in_channel}' for sending commands.")
+            except Exception as e:
+                logger.warning(f"Failed to open MIDI input channel '{self.midi_in_channel}': {e}. Retrying...")
+                time.sleep(RETRY_DELAY)
 
         while True:
             event = self.queue.get()
             if event is None:  # Sentinel for consumer shutdown
                 logger.info("Consumer thread exiting...")
                 break
+
             now = time.time()
             time_then = event['timestamp']
             event_age = now - time_then
@@ -334,44 +525,41 @@ class HIDToMIDIDaemon:
 
             button = event['key']
             distance = event['distance']
-            glm_action = KEY_TO_GLM[button]
-            logger.debug(f"Sending MIDI CC {glm_action} ({GLM_ACTION_NAMES[glm_action]}) x{distance}")
-            for _ in range(distance):
-                midi_handler.send(button, 127)
-                time.sleep(SEND_DELAY)
-                
-    class MIDIHandler:
-        def __init__(self, midi_channel_name):
-            self.output = None
-            self.midi_channel_name = midi_channel_name
 
-        def connect(self):
-            while True:
-                try:
-                    self.output = open_output(self.midi_channel_name)
-                    logger.info(f"Connected to MIDI channel '{self.midi_channel_name}'.")
-                    return
-                except Exception as e:
-                    logger.warning(f"Failed to open MIDI channel '{self.midi_channel_name}': {e}. Retrying...")
-                    time.sleep(RETRY_DELAY)
+            # Get the action for this key
+            action = BINDINGS.get(button)
+            if not action:
+                logger.debug(f"No binding for key {button}")
+                continue
 
-        def send(self, button, value=127):
-            try:
-                if self.output is None:
-                    logger.warning("MIDI port not connected. Reconnecting...")
-                    self.connect()
-                if button in KEY_TO_GLM:
-                    cc_number = KEY_TO_GLM[button]
-                    self.output.send(Message('control_change', control=cc_number, value=value))
-                else:
-                    logger.debug(f"Unknown key {button} received!")
-            except Exception as e:
-                logger.error(f"Error sending MIDI message: {e}")
-                self.output = None  # Force reconnect
+            # Get GLM control info for logging
+            glm_ctrl = ACTION_TO_GLM.get(action)
+            if glm_ctrl:
+                logger.debug(f"Sending {action.value} (CC {glm_ctrl.cc}) x{distance}")
+
+                for _ in range(distance):
+                    self._send_action(action)
+                    time.sleep(SEND_DELAY)
+            else:
+                # Non-GLM action (future: route to other apps)
+                logger.debug(f"Action {action.value} has no GLM mapping (yet)")
+
+    def _send_action(self, action: Action):
+        """Send an action to GLM using the controller."""
+        try:
+            if self.midi_output is None:
+                logger.warning("MIDI output not connected. Reconnecting...")
+                self.midi_output = open_output(self.midi_in_channel)
+
+            glm_controller.send_action(action, self.midi_output)
+        except Exception as e:
+            logger.error(f"Error sending MIDI message: {e}")
+            self.midi_output = None  # Force reconnect
 
     def start(self):
-        """Starts the producer and consumer threads."""
-        self.producer_thread.start()
+        """Starts all threads."""
+        self.hid_reader_thread.start()
+        self.midi_reader_thread.start()
         self.consumer_thread.start()
 
     def stop(self):
@@ -379,35 +567,40 @@ class HIDToMIDIDaemon:
         logger.info("Stopping daemon...")
         self.running = False
         self.queue.put(None)  # Sentinel to unblock the consumer
-        self.producer_thread.join()
-        self.consumer_thread.join()
+        self.hid_reader_thread.join(timeout=2.0)
+        self.midi_reader_thread.join(timeout=2.0)
+        self.consumer_thread.join(timeout=2.0)
         logger.info("Daemon stopped.")
 
 if __name__ == "__main__":
     args = parse_arguments()
     stop_logging = setup_logging(args.log_level, args.log_file_name)
-    
-    # logger.info(f">--- Starting {os.path.basename(__file__)} agent. Logging setup complete. Priority to be now set to high and will wait 2.0 seconds for Bluetooth to be connected")
-    
+
     # Log the configurations for confirmation
-    logger.info(f"---> Here are the input values (either default input or set in command line)")
-    logger.info(f"---> Minimum click time: {args.min_click_time}")
-    logger.info(f"---> Maximum aveg click time: {args.max_avg_click_time}")
-    logger.info(f"---> Volume increases list: {args.volume_increases_list}")
-    logger.info(f"---> Debug level: {args.log_level}")
-    logger.info(f"---> Debug file: {args.log_file_name}")
-    logger.info(f"---> Midi channel name: {args.midi_channel_name}")
-    logger.info(f"---> VID/PID : VID: {hex(args.vid)} PID: {hex(args.pid)}")
-    logger.info(f"<--- End of  the values (either input or set in command line)")
+    logger.info(f"---> Configuration:")
+    logger.info(f"     Click times: min={args.min_click_time}, max_avg={args.max_avg_click_time}")
+    logger.info(f"     Volume acceleration: {args.volume_increases_list}")
+    logger.info(f"     Log level: {args.log_level}, file: {args.log_file_name}")
+    logger.info(f"     MIDI IN (to GLM): {args.midi_in_channel}")
+    logger.info(f"     MIDI OUT (from GLM): {args.midi_out_channel}")
+    logger.info(f"     HID Device: VID={hex(args.vid)}, PID={hex(args.pid)}")
+    logger.info(f"<--- End configuration")
 
     set_higher_priority()
     time.sleep(2.0)
-    
-    # logger.info("....About to start the deamon.")
-    daemon = HIDToMIDIDaemon(args.min_click_time, args.max_avg_click_time, args.volume_increases_list, args.vid, args.pid, args.midi_channel_name)
+
+    daemon = HIDToMIDIDaemon(
+        args.min_click_time,
+        args.max_avg_click_time,
+        args.volume_increases_list,
+        args.vid,
+        args.pid,
+        args.midi_in_channel,
+        args.midi_out_channel
+    )
     signal.signal(signal.SIGINT, lambda sig, frame: signal_handler(sig, frame, daemon))
     daemon.start()
-    
+
     try:
         while True:
             time.sleep(3)  # Keep the main thread alive
