@@ -113,9 +113,9 @@ KEY_NAMES: Dict[int, str] = {
 DEFAULT_BINDINGS: Dict[int, Action] = {
     KEY_VOL_UP: Action.VOL_UP,
     KEY_VOL_DOWN: Action.VOL_DOWN,
-    KEY_CLICK: Action.DIM,           # Click → Dim
-    KEY_DOUBLE_CLICK: Action.POWER,  # Double click → Power
-    KEY_TRIPLE_CLICK: Action.POWER,  # Triple click → Power
+    KEY_CLICK: Action.POWER,         # Click → Power
+    KEY_DOUBLE_CLICK: Action.DIM,    # Double click → Dim
+    KEY_TRIPLE_CLICK: Action.DIM,    # Triple click → Dim
     KEY_LONG_PRESS: Action.MUTE,     # Long press → Mute
 }
 
@@ -160,8 +160,12 @@ class GlmController:
 
     def wait_for_volume_change(self, timeout: float = 0.15) -> bool:
         """Wait for GLM to confirm volume change. Returns True if confirmed."""
-        self._volume_changed.clear()
+        # Note: Event should be cleared BEFORE sending the command (by caller)
         return self._volume_changed.wait(timeout)
+
+    def clear_volume_change_event(self):
+        """Clear the volume change event before sending a command."""
+        self._volume_changed.clear()
 
     def get_state(self) -> dict:
         """Get current state as a dictionary (for future REST API)."""
@@ -543,12 +547,14 @@ class HIDToMIDIDaemon:
                 logger.debug(f"Sending {action.value} (CC {glm_ctrl.cc}) x{distance}")
 
                 for _ in range(distance):
-                    self._send_action(action)
                     # For volume commands, wait for GLM confirmation before sending next
                     if action in (Action.VOL_UP, Action.VOL_DOWN):
-                        if not glm_controller.wait_for_volume_change(timeout=0.15):
+                        glm_controller.clear_volume_change_event()  # Clear BEFORE sending
+                        self._send_action(action)
+                        if not glm_controller.wait_for_volume_change(timeout=0.20):
                             logger.debug("Volume change not confirmed by GLM (timeout)")
                     else:
+                        self._send_action(action)
                         time.sleep(SEND_DELAY)
             else:
                 # Non-GLM action (future: route to other apps)
