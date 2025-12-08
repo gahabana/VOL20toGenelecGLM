@@ -24,8 +24,8 @@ import win32con
 # Parameters
 
 MAX_EVENT_AGE = 2.0  # seconds
-SEND_DELAY = 0  # seconds (0 seconds is just OS yield to other threads if needed ...
-#               # i.e. MIDI receiving app .. it also work with 0.0005 sec (0.5ms) but i found it not to be needed)
+VOLUME_SEND_DELAY = 0.08  # 80ms between volume commands (allows ~12/sec)
+SEND_DELAY = 0  # seconds for non-volume commands
 RETRY_DELAY = 2.0  # seconds
 
 
@@ -547,14 +547,11 @@ class HIDToMIDIDaemon:
                 logger.debug(f"Sending {action.value} (CC {glm_ctrl.cc}) x{distance}")
 
                 for _ in range(distance):
-                    # For volume commands, wait for GLM confirmation before sending next
+                    self._send_action(action)
+                    # Volume commands need delay to let GLM process
                     if action in (Action.VOL_UP, Action.VOL_DOWN):
-                        glm_controller.clear_volume_change_event()  # Clear BEFORE sending
-                        self._send_action(action)
-                        if not glm_controller.wait_for_volume_change(timeout=0.20):
-                            logger.debug("Volume change not confirmed by GLM (timeout)")
+                        time.sleep(VOLUME_SEND_DELAY)
                     else:
-                        self._send_action(action)
                         time.sleep(SEND_DELAY)
             else:
                 # Non-GLM action (future: route to other apps)
