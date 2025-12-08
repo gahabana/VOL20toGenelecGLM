@@ -25,30 +25,52 @@ SEND_DELAY = 0  # seconds (0 seconds is just OS yield to other threads if needed
 #               # i.e. MIDI receiving app .. it also work with 0.0005 sec (0.5ms) but i found it not to be needed)
 RETRY_DELAY = 2.0  # seconds
 
-KEYCODE_2_DESCRIPTION = {
-     2: "VolUp",  # Volume Up to GLM Volume Down
-     1: "VolDown",  # Volume Down to GLM Volume Down
-    32: "Play/Pause",  # Play/Pause keys to GLM Mute (click on VOL20)
-    16: "NextTrack",  # Next Track key to GLM Dim (double click on VOL20)
-     8: "PrevTrack",  # Previous Track to GLM Power-On/Off (tripple click on VOL20)
-     4: "MuteOnOff",  # Mute On / Mute Off (2 second press on a button on VOL20) to Power On/Off
+# ==============================================================================
+# IMMUTABLE: VOL20 Hardware Keycodes (what the device sends)
+# ==============================================================================
+KEY_VOL_UP = 2
+KEY_VOL_DOWN = 1
+KEY_CLICK = 32          # Single click on VOL20
+KEY_DOUBLE_CLICK = 16   # Double click on VOL20
+KEY_TRIPLE_CLICK = 8    # Triple click on VOL20
+KEY_LONG_PRESS = 4      # 2-second press on VOL20
+
+KEY_NAMES = {
+    KEY_VOL_UP: "VolUp",
+    KEY_VOL_DOWN: "VolDown",
+    KEY_CLICK: "Click",
+    KEY_DOUBLE_CLICK: "DblClick",
+    KEY_TRIPLE_CLICK: "TplClick",
+    KEY_LONG_PRESS: "LongPress",
 }
 
-MIDI_CC_MAPPING = {
-     2: 21,  # Volume Up to GLM Volume Down
-     1: 22,  # Volume Down to GLM Volume Down
-    32: 24,  # Play/Pause keys to GLM Dim (click on VOL20)
-    16: 28,  # Next Track key to GLM Power-On/Off (double click on VOL20)
-     8: 28,  # Previous Track to GLM Power-On/Off (tripple click on VOL20)
-     4: 23,  # Mute On / Mute Off (2 second press on a button on VOL20) to Power On/Off
+# ==============================================================================
+# IMMUTABLE: GLM Actions (MIDI CC numbers defined by GLM software)
+# ==============================================================================
+GLM_VOL_UP = 21
+GLM_VOL_DOWN = 22
+GLM_MUTE = 23
+GLM_DIM = 24
+GLM_POWER = 28
+
+GLM_ACTION_NAMES = {
+    GLM_VOL_UP: "VolUp",
+    GLM_VOL_DOWN: "VolDown",
+    GLM_MUTE: "Mute",
+    GLM_DIM: "Dim",
+    GLM_POWER: "Power",
 }
 
-MIDI_2_GLM_MAPPING = {
-    21: "VolUp",      # GLM Volume Up
-    22: "VolDown",    # GLM Volume Down
-    23: "Mute",      # GLM Mute
-    24: "Dim",       # GLM Dim
-    28: "PwrOnOff",  # GLM Power-On/Off
+# ==============================================================================
+# CONFIGURABLE: Map VOL20 buttons to GLM actions
+# ==============================================================================
+KEY_TO_GLM = {
+    KEY_VOL_UP: GLM_VOL_UP,
+    KEY_VOL_DOWN: GLM_VOL_DOWN,
+    KEY_CLICK: GLM_DIM,           # Click → Dim
+    KEY_DOUBLE_CLICK: GLM_POWER,  # Double click → Power
+    KEY_TRIPLE_CLICK: GLM_POWER,  # Triple click → Power
+    KEY_LONG_PRESS: GLM_MUTE,     # Long press → Mute
 }
 
 def validate_volume_increases(value):
@@ -283,8 +305,7 @@ class HIDToMIDIDaemon:
                     now = time.time()
                     distance = self.volume_knob.calculate_speed(now, keyreported)
                     self.queue.put({'timestamp': now, 'key': keyreported, 'distance': distance})
-                    # logger.debug(f"Received report: time={now} key={KEYCODE_2_DESCRIPTION[keyreported]}, distance={distance}")
-                    logger.debug(f"Received report: delta={self.volume_knob.delta_time*1000:.0f}ms, distance={distance}, key={KEYCODE_2_DESCRIPTION[keyreported]} {'(*)' if self.volume_knob.count == 1 else ''} ")
+                    logger.debug(f"Received report: delta={self.volume_knob.delta_time*1000:.0f}ms, distance={distance}, key={KEY_NAMES[keyreported]} {'(*)' if self.volume_knob.count == 1 else ''}")
             except Exception as e:
                 logger.warning(f"HID device error: {e}. Reconnecting...")
                 if device:
@@ -313,9 +334,8 @@ class HIDToMIDIDaemon:
 
             button = event['key']
             distance = event['distance']
-            # logger.debug(f"Sending to midi handler: delay {event_age}, button {button} for {distance} times")
-            # logger.debug(f"Sending to midi handler: delay {event_age}, button {button} for {distance} times")
-            logger.debug(f"Sending MIDI msg to channel {MIDI_CC_MAPPING[button]} {MIDI_2_GLM_MAPPING[MIDI_CC_MAPPING[button]]} x{distance:>1}")
+            glm_action = KEY_TO_GLM[button]
+            logger.debug(f"Sending MIDI CC {glm_action} ({GLM_ACTION_NAMES[glm_action]}) x{distance}")
             for _ in range(distance):
                 midi_handler.send(button, 127)
                 time.sleep(SEND_DELAY)
@@ -340,13 +360,11 @@ class HIDToMIDIDaemon:
                 if self.output is None:
                     logger.warning("MIDI port not connected. Reconnecting...")
                     self.connect()
-                if button in MIDI_CC_MAPPING:
-                    cc_number = MIDI_CC_MAPPING[button]
+                if button in KEY_TO_GLM:
+                    cc_number = KEY_TO_GLM[button]
                     self.output.send(Message('control_change', control=cc_number, value=value))
-                    # logger.debug(f"Sent MIDI msg to channel {cc_number}  with value = {value}")
-                    # logger.debug(f"Sent MIDI msg to channel {cc_number} -> {MIDI_2_GLM_MAPPING[cc_number]}")
                 else:
-                    logger.debug(f"Unknown key {button} received !!!")
+                    logger.debug(f"Unknown key {button} received!")
             except Exception as e:
                 logger.error(f"Error sending MIDI message: {e}")
                 self.output = None  # Force reconnect
