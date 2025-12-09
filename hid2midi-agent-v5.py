@@ -323,8 +323,8 @@ def parse_arguments():
                              "MIN_CLICK_TIME must be > 0.01 and < 1, and MAX_AVG_CLICK_TIME must be <= MIN_CLICK_TIME. "
                              "Default is '0.2,0.18'.")
     
-    parser.add_argument("--volume_increases_list", type=validate_volume_increases, default=[1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 4],
-                        help="List of volume increases. Must be between 2 and 15 integers, each >=1 and <=10. Default is [1, 2, 2, 2, 3, 3, 3, 4].")
+    parser.add_argument("--volume_increases_list", type=validate_volume_increases, default=[1, 1, 2, 2, 3],
+                        help="List of volume increases. Must be between 2 and 15 integers, each >=1 and <=10. Default is [1, 1, 2, 2, 3].")
     
     
     # VID/PID combination
