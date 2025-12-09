@@ -1,0 +1,672 @@
+2025-12-09 14:36:55,203 [INFO] ---> Configuration:
+2025-12-09 14:36:55,204 [DEBUG] Set priority of thread 'LoggingThread' (ID: 1672) to -15.
+2025-12-09 14:36:55,204 [INFO]      Click times: min=0.2, max_avg=0.15
+2025-12-09 14:36:55,204 [INFO]      Volume acceleration: [1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 4]
+2025-12-09 14:36:55,204 [INFO]      Log level: DEBUG, file: hid_to_midi.log
+2025-12-09 14:36:55,204 [INFO]      MIDI IN (to GLM): GLMMIDI 1
+2025-12-09 14:36:55,204 [INFO]      MIDI OUT (from GLM): GLMOUT 1
+2025-12-09 14:36:55,205 [INFO]      HID Device: VID=0x7d7, PID=0x0
+2025-12-09 14:36:55,205 [INFO]      Startup volume: 60
+2025-12-09 14:36:55,205 [INFO] <--- End configuration
+2025-12-09 14:36:55,205 [DEBUG] Main Process priority set to AboveNormal.
+2025-12-09 14:36:57,206 [DEBUG] Set priority of thread 'MIDIReaderThread' (ID: 5760) to -1.
+2025-12-09 14:36:57,224 [INFO] Connected to MIDI channel 'GLMMIDI 1' for initialization.
+2025-12-09 14:36:57,224 [INFO] Connected to MIDI output channel 'GLMOUT 1' for state reading.
+2025-12-09 14:36:57,725 [INFO] Setting startup volume to 60
+2025-12-09 14:36:57,795 [DEBUG] GLM state: vol=60, mute=False, dim=False, pwr=True
+2025-12-09 14:36:58,027 [INFO] GLM volume initialized: 60
+2025-12-09 14:36:58,028 [DEBUG] Set priority of thread 'HIDReaderThread' (ID: 3964) to 2.
+2025-12-09 14:36:58,028 [DEBUG] Set priority of thread 'ConsumerThread' (ID: 7912) to 1.
+2025-12-09 14:36:58,030 [INFO] Connected to HID device VID: 0x7d7 PID: 0x0.
+2025-12-09 14:37:22,701 [DEBUG] GLM state: vol=62, mute=False, dim=False, pwr=True
+2025-12-09 14:37:23,115 [DEBUG] GLM state: vol=64, mute=False, dim=False, pwr=True
+2025-12-09 14:37:23,178 [DEBUG] GLM state: vol=66, mute=False, dim=False, pwr=True
+2025-12-09 14:37:23,766 [DEBUG] GLM state: vol=67, mute=False, dim=False, pwr=True
+2025-12-09 14:38:43,980 [DEBUG] GLM state: vol=69, mute=False, dim=False, pwr=True
+2025-12-09 14:38:44,659 [DEBUG] GLM state: vol=76, mute=False, dim=False, pwr=True
+2025-12-09 14:38:44,722 [DEBUG] GLM state: vol=78, mute=False, dim=False, pwr=True
+2025-12-09 14:39:09,071 [DEBUG] GLM state: vol=78, mute=True, dim=False, pwr=True
+2025-12-09 14:39:13,753 [DEBUG] GLM state: vol=78, mute=False, dim=False, pwr=True
+2025-12-09 14:41:17,626 [DEBUG] GLM state: vol=81, mute=False, dim=False, pwr=True
+2025-12-09 14:50:39,514 [DEBUG] HID: delta=1765288239514ms, dist=1, key=VolUp (*)
+2025-12-09 14:50:39,514 [DEBUG] Volume: 81 -> 82 (delta=+1, CC 20)
+2025-12-09 14:50:39,580 [DEBUG] GLM state: vol=82, mute=False, dim=False, pwr=True
+2025-12-09 14:50:39,648 [DEBUG] HID: delta=134ms, dist=1, key=VolUp
+2025-12-09 14:50:39,649 [DEBUG] Volume: 82 -> 83 (delta=+1, CC 20)
+2025-12-09 14:50:39,712 [DEBUG] GLM state: vol=83, mute=False, dim=False, pwr=True
+2025-12-09 14:50:39,738 [DEBUG] HID: delta=90ms, dist=1, key=VolUp
+2025-12-09 14:50:39,738 [DEBUG] Volume: 83 -> 84 (delta=+1, CC 20)
+2025-12-09 14:50:39,828 [DEBUG] HID: delta=90ms, dist=1, key=VolUp
+2025-12-09 14:50:39,829 [DEBUG] Volume: 84 -> 85 (delta=+1, CC 20)
+2025-12-09 14:50:39,893 [DEBUG] GLM state: vol=85, mute=False, dim=False, pwr=True
+2025-12-09 14:50:39,918 [DEBUG] HID: delta=90ms, dist=2, key=VolUp
+2025-12-09 14:50:39,918 [DEBUG] Volume: 85 -> 87 (delta=+2, CC 20)
+2025-12-09 14:50:40,009 [DEBUG] HID: delta=91ms, dist=2, key=VolUp
+2025-12-09 14:50:40,009 [DEBUG] Volume: 87 -> 89 (delta=+2, CC 20)
+2025-12-09 14:50:40,073 [DEBUG] GLM state: vol=89, mute=False, dim=False, pwr=True
+2025-12-09 14:50:40,143 [DEBUG] HID: delta=135ms, dist=2, key=VolUp
+2025-12-09 14:50:40,144 [DEBUG] Volume: 89 -> 91 (delta=+2, CC 20)
+2025-12-09 14:50:40,206 [DEBUG] GLM state: vol=91, mute=False, dim=False, pwr=True
+2025-12-09 14:50:40,233 [DEBUG] HID: delta=90ms, dist=2, key=VolUp
+2025-12-09 14:50:40,233 [DEBUG] Volume: 91 -> 93 (delta=+2, CC 20)
+2025-12-09 14:50:40,278 [DEBUG] HID: delta=45ms, dist=3, key=VolUp
+2025-12-09 14:50:40,279 [DEBUG] Volume: 93 -> 96 (delta=+3, CC 20)
+2025-12-09 14:50:40,324 [DEBUG] HID: delta=45ms, dist=3, key=VolUp
+2025-12-09 14:50:40,324 [DEBUG] Volume: 96 -> 99 (delta=+3, CC 20)
+2025-12-09 14:50:40,413 [DEBUG] HID: delta=90ms, dist=3, key=VolUp
+2025-12-09 14:50:40,414 [DEBUG] Volume: 99 -> 102 (delta=+3, CC 20)
+2025-12-09 14:50:40,526 [DEBUG] GLM state: vol=102, mute=False, dim=False, pwr=True
+2025-12-09 14:50:40,864 [DEBUG] HID: delta=450ms, dist=1, key=VolDown (*)
+2025-12-09 14:50:40,864 [DEBUG] Volume: 102 -> 101 (delta=-1, CC 20)
+2025-12-09 14:50:40,928 [DEBUG] GLM state: vol=101, mute=False, dim=False, pwr=True
+2025-12-09 14:50:40,998 [DEBUG] HID: delta=135ms, dist=1, key=VolDown
+2025-12-09 14:50:40,998 [DEBUG] Volume: 101 -> 100 (delta=-1, CC 20)
+2025-12-09 14:50:41,061 [DEBUG] GLM state: vol=100, mute=False, dim=False, pwr=True
+2025-12-09 14:50:41,088 [DEBUG] HID: delta=90ms, dist=1, key=VolDown
+2025-12-09 14:50:41,088 [DEBUG] Volume: 100 -> 99 (delta=-1, CC 20)
+2025-12-09 14:50:41,178 [DEBUG] HID: delta=90ms, dist=1, key=VolDown
+2025-12-09 14:50:41,178 [DEBUG] Volume: 99 -> 98 (delta=-1, CC 20)
+2025-12-09 14:50:41,241 [DEBUG] GLM state: vol=98, mute=False, dim=False, pwr=True
+2025-12-09 14:50:41,268 [DEBUG] HID: delta=90ms, dist=2, key=VolDown
+2025-12-09 14:50:41,268 [DEBUG] Volume: 98 -> 96 (delta=-2, CC 20)
+2025-12-09 14:50:41,358 [DEBUG] HID: delta=90ms, dist=2, key=VolDown
+2025-12-09 14:50:41,359 [DEBUG] Volume: 96 -> 94 (delta=-2, CC 20)
+2025-12-09 14:50:41,448 [DEBUG] HID: delta=90ms, dist=2, key=VolDown
+2025-12-09 14:50:41,449 [DEBUG] Volume: 94 -> 92 (delta=-2, CC 20)
+2025-12-09 14:50:41,538 [DEBUG] GLM state: vol=92, mute=False, dim=False, pwr=True
+2025-12-09 14:50:41,583 [DEBUG] HID: delta=135ms, dist=2, key=VolDown
+2025-12-09 14:50:41,584 [DEBUG] Volume: 92 -> 90 (delta=-2, CC 20)
+2025-12-09 14:50:41,646 [DEBUG] GLM state: vol=90, mute=False, dim=False, pwr=True
+2025-12-09 14:50:42,303 [DEBUG] HID: delta=720ms, dist=1, key=VolDown (*)
+2025-12-09 14:50:42,304 [DEBUG] Volume: 90 -> 89 (delta=-1, CC 20)
+2025-12-09 14:50:42,393 [DEBUG] HID: delta=90ms, dist=1, key=VolDown
+2025-12-09 14:50:42,394 [DEBUG] Volume: 89 -> 88 (delta=-1, CC 20)
+2025-12-09 14:50:42,483 [DEBUG] HID: delta=90ms, dist=1, key=VolDown
+2025-12-09 14:50:42,483 [DEBUG] Volume: 88 -> 87 (delta=-1, CC 20)
+2025-12-09 14:50:42,540 [DEBUG] GLM state: vol=88, mute=False, dim=False, pwr=True
+2025-12-09 14:50:42,573 [DEBUG] HID: delta=90ms, dist=1, key=VolDown
+2025-12-09 14:50:42,573 [DEBUG] Volume: 87 -> 86 (delta=-1, CC 20)
+2025-12-09 14:50:42,637 [DEBUG] GLM state: vol=86, mute=False, dim=False, pwr=True
+2025-12-09 14:50:42,708 [DEBUG] HID: delta=135ms, dist=2, key=VolDown
+2025-12-09 14:50:42,708 [DEBUG] Volume: 86 -> 84 (delta=-2, CC 20)
+2025-12-09 14:50:42,772 [DEBUG] GLM state: vol=84, mute=False, dim=False, pwr=True
+2025-12-09 14:50:43,969 [DEBUG] HID: delta=1260ms, dist=1, key=VolUp (*)
+2025-12-09 14:50:43,969 [DEBUG] Volume: 84 -> 85 (delta=+1, CC 20)
+2025-12-09 14:50:44,033 [DEBUG] GLM state: vol=85, mute=False, dim=False, pwr=True
+2025-12-09 14:50:44,058 [DEBUG] HID: delta=90ms, dist=1, key=VolUp
+2025-12-09 14:50:44,058 [DEBUG] Volume: 85 -> 86 (delta=+1, CC 20)
+2025-12-09 14:50:44,148 [DEBUG] HID: delta=90ms, dist=1, key=VolUp
+2025-12-09 14:50:44,148 [DEBUG] Volume: 86 -> 87 (delta=+1, CC 20)
+2025-12-09 14:50:44,213 [DEBUG] GLM state: vol=87, mute=False, dim=False, pwr=True
+2025-12-09 14:50:44,238 [DEBUG] HID: delta=90ms, dist=1, key=VolUp
+2025-12-09 14:50:44,239 [DEBUG] Volume: 87 -> 88 (delta=+1, CC 20)
+2025-12-09 14:50:44,328 [DEBUG] HID: delta=90ms, dist=2, key=VolUp
+2025-12-09 14:50:44,328 [DEBUG] Volume: 88 -> 90 (delta=+2, CC 20)
+2025-12-09 14:50:44,418 [DEBUG] HID: delta=90ms, dist=2, key=VolUp
+2025-12-09 14:50:44,418 [DEBUG] Volume: 90 -> 92 (delta=+2, CC 20)
+2025-12-09 14:50:44,508 [DEBUG] HID: delta=90ms, dist=2, key=VolUp
+2025-12-09 14:50:44,508 [DEBUG] Volume: 92 -> 94 (delta=+2, CC 20)
+2025-12-09 14:50:44,541 [DEBUG] GLM state: vol=92, mute=False, dim=False, pwr=True
+2025-12-09 14:50:45,003 [DEBUG] HID: delta=495ms, dist=1, key=VolDown (*)
+2025-12-09 14:50:45,003 [DEBUG] Volume: 94 -> 93 (delta=-1, CC 20)
+2025-12-09 14:50:45,069 [DEBUG] GLM state: vol=93, mute=False, dim=False, pwr=True
+2025-12-09 14:50:45,093 [DEBUG] HID: delta=90ms, dist=1, key=VolDown
+2025-12-09 14:50:45,093 [DEBUG] Volume: 93 -> 92 (delta=-1, CC 20)
+2025-12-09 14:50:45,183 [DEBUG] HID: delta=90ms, dist=1, key=VolDown
+2025-12-09 14:50:45,183 [DEBUG] Volume: 92 -> 91 (delta=-1, CC 20)
+2025-12-09 14:50:45,247 [DEBUG] GLM state: vol=91, mute=False, dim=False, pwr=True
+2025-12-09 14:50:45,273 [DEBUG] HID: delta=90ms, dist=1, key=VolDown
+2025-12-09 14:50:45,273 [DEBUG] Volume: 91 -> 90 (delta=-1, CC 20)
+2025-12-09 14:50:45,408 [DEBUG] HID: delta=135ms, dist=2, key=VolDown
+2025-12-09 14:50:45,408 [DEBUG] Volume: 90 -> 88 (delta=-2, CC 20)
+2025-12-09 14:50:45,498 [DEBUG] HID: delta=90ms, dist=2, key=VolDown
+2025-12-09 14:50:45,498 [DEBUG] Volume: 88 -> 86 (delta=-2, CC 20)
+2025-12-09 14:50:45,545 [DEBUG] GLM state: vol=88, mute=False, dim=False, pwr=True
+2025-12-09 14:50:45,588 [DEBUG] HID: delta=90ms, dist=2, key=VolDown
+2025-12-09 14:50:45,588 [DEBUG] Volume: 86 -> 84 (delta=-2, CC 20)
+2025-12-09 14:50:45,652 [DEBUG] GLM state: vol=84, mute=False, dim=False, pwr=True
+2025-12-09 14:50:45,678 [DEBUG] HID: delta=90ms, dist=2, key=VolDown
+2025-12-09 14:50:45,679 [DEBUG] Volume: 84 -> 82 (delta=-2, CC 20)
+2025-12-09 14:50:45,768 [DEBUG] HID: delta=90ms, dist=3, key=VolDown
+2025-12-09 14:50:45,768 [DEBUG] Volume: 82 -> 79 (delta=-3, CC 20)
+2025-12-09 14:50:45,813 [DEBUG] HID: delta=45ms, dist=3, key=VolDown
+2025-12-09 14:50:45,814 [DEBUG] Volume: 79 -> 76 (delta=-3, CC 20)
+2025-12-09 14:50:45,832 [DEBUG] GLM state: vol=79, mute=False, dim=False, pwr=True
+2025-12-09 14:50:45,858 [DEBUG] HID: delta=45ms, dist=3, key=VolDown
+2025-12-09 14:50:45,858 [DEBUG] Volume: 76 -> 73 (delta=-3, CC 20)
+2025-12-09 14:50:45,948 [DEBUG] HID: delta=90ms, dist=4, key=VolDown
+2025-12-09 14:50:45,948 [DEBUG] Volume: 73 -> 69 (delta=-4, CC 20)
+2025-12-09 14:50:45,993 [DEBUG] HID: delta=45ms, dist=4, key=VolDown
+2025-12-09 14:50:45,994 [DEBUG] Volume: 69 -> 65 (delta=-4, CC 20)
+2025-12-09 14:50:46,012 [DEBUG] GLM state: vol=69, mute=False, dim=False, pwr=True
+2025-12-09 14:50:46,038 [DEBUG] HID: delta=45ms, dist=4, key=VolDown
+2025-12-09 14:50:46,038 [DEBUG] Volume: 65 -> 61 (delta=-4, CC 20)
+2025-12-09 14:50:46,128 [DEBUG] HID: delta=90ms, dist=4, key=VolDown
+2025-12-09 14:50:46,128 [DEBUG] Volume: 61 -> 57 (delta=-4, CC 20)
+2025-12-09 14:50:46,173 [DEBUG] HID: delta=45ms, dist=4, key=VolDown
+2025-12-09 14:50:46,173 [DEBUG] Volume: 57 -> 53 (delta=-4, CC 20)
+2025-12-09 14:50:46,191 [DEBUG] GLM state: vol=57, mute=False, dim=False, pwr=True
+2025-12-09 14:51:11,104 [DEBUG] HID: delta=24931ms, dist=1, key=VolUp (*)
+2025-12-09 14:51:11,104 [DEBUG] Volume: 53 -> 54 (delta=+1, CC 20)
+2025-12-09 14:51:11,167 [DEBUG] GLM state: vol=54, mute=False, dim=False, pwr=True
+2025-12-09 14:51:11,508 [DEBUG] HID: delta=405ms, dist=1, key=VolUp (*)
+2025-12-09 14:51:11,508 [DEBUG] Volume: 54 -> 55 (delta=+1, CC 20)
+2025-12-09 14:51:11,576 [DEBUG] GLM state: vol=55, mute=False, dim=False, pwr=True
+2025-12-09 14:51:11,644 [DEBUG] HID: delta=135ms, dist=1, key=VolUp
+2025-12-09 14:51:11,644 [DEBUG] Volume: 55 -> 56 (delta=+1, CC 20)
+2025-12-09 14:51:11,707 [DEBUG] GLM state: vol=56, mute=False, dim=False, pwr=True
+2025-12-09 14:51:11,913 [DEBUG] HID: delta=270ms, dist=1, key=VolUp (*)
+2025-12-09 14:51:11,914 [DEBUG] Volume: 56 -> 57 (delta=+1, CC 20)
+2025-12-09 14:51:11,977 [DEBUG] GLM state: vol=57, mute=False, dim=False, pwr=True
+2025-12-09 14:51:12,003 [DEBUG] HID: delta=90ms, dist=1, key=VolUp
+2025-12-09 14:51:12,004 [DEBUG] Volume: 57 -> 58 (delta=+1, CC 20)
+2025-12-09 14:51:12,093 [DEBUG] HID: delta=90ms, dist=1, key=VolUp
+2025-12-09 14:51:12,094 [DEBUG] Volume: 58 -> 59 (delta=+1, CC 20)
+2025-12-09 14:51:12,157 [DEBUG] GLM state: vol=59, mute=False, dim=False, pwr=True
+2025-12-09 14:51:12,183 [DEBUG] HID: delta=90ms, dist=1, key=VolUp
+2025-12-09 14:51:12,183 [DEBUG] Volume: 59 -> 60 (delta=+1, CC 20)
+2025-12-09 14:51:12,319 [DEBUG] HID: delta=136ms, dist=2, key=VolUp
+2025-12-09 14:51:12,319 [DEBUG] Volume: 60 -> 62 (delta=+2, CC 20)
+2025-12-09 14:51:12,577 [DEBUG] GLM state: vol=62, mute=False, dim=False, pwr=True
+2025-12-09 14:51:13,713 [DEBUG] HID: delta=1395ms, dist=1, key=VolUp (*)
+2025-12-09 14:51:13,714 [DEBUG] Volume: 62 -> 63 (delta=+1, CC 20)
+2025-12-09 14:51:13,777 [DEBUG] GLM state: vol=63, mute=False, dim=False, pwr=True
+2025-12-09 14:51:13,849 [DEBUG] HID: delta=135ms, dist=1, key=VolUp
+2025-12-09 14:51:13,849 [DEBUG] Volume: 63 -> 64 (delta=+1, CC 20)
+2025-12-09 14:51:13,912 [DEBUG] GLM state: vol=64, mute=False, dim=False, pwr=True
+2025-12-09 14:51:13,938 [DEBUG] HID: delta=90ms, dist=1, key=VolUp
+2025-12-09 14:51:13,938 [DEBUG] Volume: 64 -> 65 (delta=+1, CC 20)
+2025-12-09 14:51:14,073 [DEBUG] HID: delta=135ms, dist=1, key=VolUp
+2025-12-09 14:51:14,074 [DEBUG] Volume: 65 -> 66 (delta=+1, CC 20)
+2025-12-09 14:51:14,137 [DEBUG] GLM state: vol=66, mute=False, dim=False, pwr=True
+2025-12-09 14:51:14,164 [DEBUG] HID: delta=90ms, dist=2, key=VolUp
+2025-12-09 14:51:14,164 [DEBUG] Volume: 66 -> 68 (delta=+2, CC 20)
+2025-12-09 14:51:15,649 [DEBUG] HID: delta=1485ms, dist=1, key=VolUp (*)
+2025-12-09 14:51:15,649 [DEBUG] Volume: 68 -> 69 (delta=+1, CC 20)
+2025-12-09 14:51:15,717 [DEBUG] GLM state: vol=69, mute=False, dim=False, pwr=True
+2025-12-09 14:51:15,738 [DEBUG] HID: delta=90ms, dist=1, key=VolUp
+2025-12-09 14:51:15,738 [DEBUG] Volume: 69 -> 70 (delta=+1, CC 20)
+2025-12-09 14:51:15,829 [DEBUG] HID: delta=90ms, dist=1, key=VolUp
+2025-12-09 14:51:15,829 [DEBUG] Volume: 70 -> 71 (delta=+1, CC 20)
+2025-12-09 14:51:15,893 [DEBUG] GLM state: vol=71, mute=False, dim=False, pwr=True
+2025-12-09 14:51:15,918 [DEBUG] HID: delta=90ms, dist=1, key=VolUp
+2025-12-09 14:51:15,919 [DEBUG] Volume: 71 -> 72 (delta=+1, CC 20)
+2025-12-09 14:51:16,008 [DEBUG] HID: delta=90ms, dist=2, key=VolUp
+2025-12-09 14:51:16,009 [DEBUG] Volume: 72 -> 74 (delta=+2, CC 20)
+2025-12-09 14:51:16,072 [DEBUG] GLM state: vol=74, mute=False, dim=False, pwr=True
+2025-12-09 14:51:16,143 [DEBUG] HID: delta=135ms, dist=2, key=VolUp
+2025-12-09 14:51:16,143 [DEBUG] Volume: 74 -> 76 (delta=+2, CC 20)
+2025-12-09 14:51:16,207 [DEBUG] GLM state: vol=76, mute=False, dim=False, pwr=True
+2025-12-09 14:51:16,278 [DEBUG] HID: delta=135ms, dist=2, key=VolUp
+2025-12-09 14:51:16,279 [DEBUG] Volume: 76 -> 78 (delta=+2, CC 20)
+2025-12-09 14:51:16,342 [DEBUG] GLM state: vol=78, mute=False, dim=False, pwr=True
+2025-12-09 14:51:16,368 [DEBUG] HID: delta=90ms, dist=2, key=VolUp
+2025-12-09 14:51:16,368 [DEBUG] Volume: 78 -> 80 (delta=+2, CC 20)
+2025-12-09 14:51:17,719 [DEBUG] HID: delta=1350ms, dist=1, key=VolUp (*)
+2025-12-09 14:51:17,719 [DEBUG] Volume: 80 -> 81 (delta=+1, CC 20)
+2025-12-09 14:51:17,782 [DEBUG] GLM state: vol=81, mute=False, dim=False, pwr=True
+2025-12-09 14:51:17,808 [DEBUG] HID: delta=90ms, dist=1, key=VolUp
+2025-12-09 14:51:17,809 [DEBUG] Volume: 81 -> 82 (delta=+1, CC 20)
+2025-12-09 14:51:17,899 [DEBUG] HID: delta=90ms, dist=1, key=VolUp
+2025-12-09 14:51:17,899 [DEBUG] Volume: 82 -> 83 (delta=+1, CC 20)
+2025-12-09 14:51:17,963 [DEBUG] GLM state: vol=83, mute=False, dim=False, pwr=True
+2025-12-09 14:51:17,989 [DEBUG] HID: delta=90ms, dist=1, key=VolUp
+2025-12-09 14:51:17,989 [DEBUG] Volume: 83 -> 84 (delta=+1, CC 20)
+2025-12-09 14:51:19,203 [DEBUG] HID: delta=1215ms, dist=1, key=VolUp (*)
+2025-12-09 14:51:19,203 [DEBUG] Volume: 84 -> 85 (delta=+1, CC 20)
+2025-12-09 14:51:19,267 [DEBUG] GLM state: vol=85, mute=False, dim=False, pwr=True
+2025-12-09 14:51:19,384 [DEBUG] HID: delta=181ms, dist=1, key=VolUp (*)
+2025-12-09 14:51:19,384 [DEBUG] Volume: 85 -> 86 (delta=+1, CC 20)
+2025-12-09 14:51:19,473 [DEBUG] HID: delta=90ms, dist=1, key=VolUp
+2025-12-09 14:51:19,474 [DEBUG] Volume: 86 -> 87 (delta=+1, CC 20)
+2025-12-09 14:51:19,640 [DEBUG] GLM state: vol=87, mute=False, dim=False, pwr=True
+2025-12-09 14:51:21,453 [DEBUG] HID: delta=1980ms, dist=1, key=VolDown (*)
+2025-12-09 14:51:21,454 [DEBUG] Volume: 87 -> 86 (delta=-1, CC 20)
+2025-12-09 14:51:21,588 [DEBUG] HID: delta=135ms, dist=1, key=VolDown
+2025-12-09 14:51:21,588 [DEBUG] Volume: 86 -> 85 (delta=-1, CC 20)
+2025-12-09 14:51:21,641 [DEBUG] GLM state: vol=86, mute=False, dim=False, pwr=True
+2025-12-09 14:51:22,038 [DEBUG] HID: delta=450ms, dist=1, key=VolDown (*)
+2025-12-09 14:51:22,039 [DEBUG] Volume: 85 -> 84 (delta=-1, CC 20)
+2025-12-09 14:51:22,102 [DEBUG] GLM state: vol=84, mute=False, dim=False, pwr=True
+2025-12-09 14:51:22,129 [DEBUG] HID: delta=90ms, dist=1, key=VolDown
+2025-12-09 14:51:22,129 [DEBUG] Volume: 84 -> 83 (delta=-1, CC 20)
+2025-12-09 14:51:22,848 [DEBUG] HID: delta=720ms, dist=1, key=VolUp (*)
+2025-12-09 14:51:22,849 [DEBUG] Volume: 83 -> 84 (delta=+1, CC 20)
+2025-12-09 14:51:22,983 [DEBUG] HID: delta=135ms, dist=1, key=VolUp
+2025-12-09 14:51:22,983 [DEBUG] Volume: 84 -> 85 (delta=+1, CC 20)
+2025-12-09 14:51:23,047 [DEBUG] GLM state: vol=85, mute=False, dim=False, pwr=True
+2025-12-09 14:51:23,299 [DEBUG] HID: delta=315ms, dist=1, key=VolUp (*)
+2025-12-09 14:51:23,299 [DEBUG] Volume: 85 -> 86 (delta=+1, CC 20)
+2025-12-09 14:51:23,362 [DEBUG] GLM state: vol=86, mute=False, dim=False, pwr=True
+2025-12-09 14:51:23,479 [DEBUG] HID: delta=180ms, dist=1, key=VolUp (*)
+2025-12-09 14:51:23,479 [DEBUG] Volume: 86 -> 87 (delta=+1, CC 20)
+2025-12-09 14:51:23,660 [DEBUG] GLM state: vol=87, mute=False, dim=False, pwr=True
+2025-12-09 14:51:23,794 [DEBUG] HID: delta=315ms, dist=1, key=VolUp (*)
+2025-12-09 14:51:23,794 [DEBUG] Volume: 87 -> 88 (delta=+1, CC 20)
+2025-12-09 14:51:23,858 [DEBUG] GLM state: vol=88, mute=False, dim=False, pwr=True
+2025-12-09 14:51:24,108 [DEBUG] HID: delta=315ms, dist=1, key=VolUp (*)
+2025-12-09 14:51:24,109 [DEBUG] Volume: 88 -> 89 (delta=+1, CC 20)
+2025-12-09 14:51:24,171 [DEBUG] GLM state: vol=89, mute=False, dim=False, pwr=True
+2025-12-09 15:05:35,025 [DEBUG] HID: delta=850917ms, dist=1, key=VolDown (*)
+2025-12-09 15:05:35,025 [DEBUG] Volume: 89 -> 88 (delta=-1, CC 20)
+2025-12-09 15:05:35,089 [DEBUG] GLM state: vol=88, mute=False, dim=False, pwr=True
+2025-12-09 15:05:35,114 [DEBUG] HID: delta=89ms, dist=1, key=VolDown
+2025-12-09 15:05:35,114 [DEBUG] Volume: 88 -> 87 (delta=-1, CC 20)
+2025-12-09 15:05:35,249 [DEBUG] HID: delta=135ms, dist=1, key=VolDown
+2025-12-09 15:05:35,250 [DEBUG] Volume: 87 -> 86 (delta=-1, CC 20)
+2025-12-09 15:05:35,313 [DEBUG] GLM state: vol=86, mute=False, dim=False, pwr=True
+2025-12-09 15:05:35,339 [DEBUG] HID: delta=90ms, dist=1, key=VolDown
+2025-12-09 15:05:35,339 [DEBUG] Volume: 86 -> 85 (delta=-1, CC 20)
+2025-12-09 15:05:35,429 [DEBUG] HID: delta=90ms, dist=2, key=VolDown
+2025-12-09 15:05:35,429 [DEBUG] Volume: 85 -> 83 (delta=-2, CC 20)
+2025-12-09 15:05:35,494 [DEBUG] GLM state: vol=83, mute=False, dim=False, pwr=True
+2025-12-09 15:05:35,519 [DEBUG] HID: delta=90ms, dist=2, key=VolDown
+2025-12-09 15:05:35,519 [DEBUG] Volume: 83 -> 81 (delta=-2, CC 20)
+2025-12-09 15:05:35,609 [DEBUG] HID: delta=90ms, dist=2, key=VolDown
+2025-12-09 15:05:35,610 [DEBUG] Volume: 81 -> 79 (delta=-2, CC 20)
+2025-12-09 15:05:35,699 [DEBUG] HID: delta=90ms, dist=2, key=VolDown
+2025-12-09 15:05:35,699 [DEBUG] Volume: 79 -> 77 (delta=-2, CC 20)
+2025-12-09 15:05:35,789 [DEBUG] HID: delta=90ms, dist=3, key=VolDown
+2025-12-09 15:05:35,789 [DEBUG] Volume: 77 -> 74 (delta=-3, CC 20)
+2025-12-09 15:05:35,791 [DEBUG] GLM state: vol=77, mute=False, dim=False, pwr=True
+2025-12-09 15:05:36,419 [DEBUG] HID: delta=630ms, dist=1, key=VolUp (*)
+2025-12-09 15:05:36,420 [DEBUG] Volume: 74 -> 75 (delta=+1, CC 20)
+2025-12-09 15:05:36,483 [DEBUG] GLM state: vol=75, mute=False, dim=False, pwr=True
+2025-12-09 15:05:36,554 [DEBUG] HID: delta=135ms, dist=1, key=VolUp
+2025-12-09 15:05:36,554 [DEBUG] Volume: 75 -> 76 (delta=+1, CC 20)
+2025-12-09 15:05:36,689 [DEBUG] HID: delta=135ms, dist=1, key=VolUp
+2025-12-09 15:05:36,689 [DEBUG] Volume: 76 -> 77 (delta=+1, CC 20)
+2025-12-09 15:05:36,779 [DEBUG] HID: delta=90ms, dist=1, key=VolUp
+2025-12-09 15:05:36,779 [DEBUG] Volume: 77 -> 78 (delta=+1, CC 20)
+2025-12-09 15:05:36,780 [DEBUG] GLM state: vol=77, mute=False, dim=False, pwr=True
+2025-12-09 15:05:36,869 [DEBUG] HID: delta=90ms, dist=2, key=VolUp
+2025-12-09 15:05:36,870 [DEBUG] Volume: 78 -> 80 (delta=+2, CC 20)
+2025-12-09 15:05:36,933 [DEBUG] GLM state: vol=80, mute=False, dim=False, pwr=True
+2025-12-09 15:05:36,959 [DEBUG] HID: delta=90ms, dist=2, key=VolUp
+2025-12-09 15:05:36,959 [DEBUG] Volume: 80 -> 82 (delta=+2, CC 20)
+2025-12-09 15:05:37,049 [DEBUG] HID: delta=90ms, dist=2, key=VolUp
+2025-12-09 15:05:37,050 [DEBUG] Volume: 82 -> 84 (delta=+2, CC 20)
+2025-12-09 15:05:37,113 [DEBUG] GLM state: vol=84, mute=False, dim=False, pwr=True
+2025-12-09 15:05:37,139 [DEBUG] HID: delta=90ms, dist=2, key=VolUp
+2025-12-09 15:05:37,139 [DEBUG] Volume: 84 -> 86 (delta=+2, CC 20)
+2025-12-09 15:05:37,320 [DEBUG] HID: delta=181ms, dist=3, key=VolUp
+2025-12-09 15:05:37,320 [DEBUG] Volume: 86 -> 89 (delta=+3, CC 20)
+2025-12-09 15:05:37,386 [DEBUG] GLM state: vol=89, mute=False, dim=False, pwr=True
+2025-12-09 15:05:37,454 [DEBUG] HID: delta=134ms, dist=3, key=VolUp
+2025-12-09 15:05:37,454 [DEBUG] Volume: 89 -> 92 (delta=+3, CC 20)
+2025-12-09 15:05:37,518 [DEBUG] GLM state: vol=92, mute=False, dim=False, pwr=True
+2025-12-09 15:05:38,400 [DEBUG] HID: delta=946ms, dist=1, key=VolDown (*)
+2025-12-09 15:05:38,400 [DEBUG] Volume: 92 -> 91 (delta=-1, CC 20)
+2025-12-09 15:05:38,464 [DEBUG] GLM state: vol=91, mute=False, dim=False, pwr=True
+2025-12-09 15:05:38,535 [DEBUG] HID: delta=135ms, dist=1, key=VolDown
+2025-12-09 15:05:38,535 [DEBUG] Volume: 91 -> 90 (delta=-1, CC 20)
+2025-12-09 15:05:38,598 [DEBUG] GLM state: vol=90, mute=False, dim=False, pwr=True
+2025-12-09 15:05:38,624 [DEBUG] HID: delta=90ms, dist=1, key=VolDown
+2025-12-09 15:05:38,625 [DEBUG] Volume: 90 -> 89 (delta=-1, CC 20)
+2025-12-09 15:05:38,715 [DEBUG] HID: delta=90ms, dist=1, key=VolDown
+2025-12-09 15:05:38,715 [DEBUG] Volume: 89 -> 88 (delta=-1, CC 20)
+2025-12-09 15:05:38,894 [DEBUG] HID: delta=180ms, dist=2, key=VolDown
+2025-12-09 15:05:38,894 [DEBUG] Volume: 88 -> 86 (delta=-2, CC 20)
+2025-12-09 15:05:38,910 [DEBUG] GLM state: vol=88, mute=False, dim=False, pwr=True
+2025-12-09 15:05:39,029 [DEBUG] HID: delta=135ms, dist=2, key=VolDown
+2025-12-09 15:05:39,029 [DEBUG] Volume: 86 -> 84 (delta=-2, CC 20)
+2025-12-09 15:05:39,093 [DEBUG] GLM state: vol=84, mute=False, dim=False, pwr=True
+2025-12-09 15:05:40,559 [DEBUG] HID: delta=1530ms, dist=1, key=VolDown (*)
+2025-12-09 15:05:40,560 [DEBUG] Volume: 84 -> 83 (delta=-1, CC 20)
+2025-12-09 15:05:40,649 [DEBUG] HID: delta=90ms, dist=1, key=VolDown
+2025-12-09 15:05:40,650 [DEBUG] Volume: 83 -> 82 (delta=-1, CC 20)
+2025-12-09 15:05:40,740 [DEBUG] HID: delta=90ms, dist=1, key=VolDown
+2025-12-09 15:05:40,740 [DEBUG] Volume: 82 -> 81 (delta=-1, CC 20)
+2025-12-09 15:05:40,817 [DEBUG] GLM state: vol=81, mute=False, dim=False, pwr=True
+2025-12-09 15:05:40,829 [DEBUG] HID: delta=90ms, dist=1, key=VolDown
+2025-12-09 15:05:40,829 [DEBUG] Volume: 81 -> 80 (delta=-1, CC 20)
+2025-12-09 15:05:40,919 [DEBUG] HID: delta=90ms, dist=2, key=VolDown
+2025-12-09 15:05:40,919 [DEBUG] Volume: 80 -> 78 (delta=-2, CC 20)
+2025-12-09 15:05:40,983 [DEBUG] GLM state: vol=78, mute=False, dim=False, pwr=True
+2025-12-09 15:05:41,009 [DEBUG] HID: delta=90ms, dist=2, key=VolDown
+2025-12-09 15:05:41,009 [DEBUG] Volume: 78 -> 76 (delta=-2, CC 20)
+2025-12-09 15:05:41,415 [DEBUG] HID: delta=405ms, dist=1, key=VolUp (*)
+2025-12-09 15:05:41,415 [DEBUG] Volume: 76 -> 77 (delta=+1, CC 20)
+2025-12-09 15:05:41,478 [DEBUG] GLM state: vol=77, mute=False, dim=False, pwr=True
+2025-12-09 15:05:41,504 [DEBUG] HID: delta=90ms, dist=1, key=VolUp
+2025-12-09 15:05:41,505 [DEBUG] Volume: 77 -> 78 (delta=+1, CC 20)
+2025-12-09 15:05:41,594 [DEBUG] HID: delta=90ms, dist=1, key=VolUp
+2025-12-09 15:05:41,595 [DEBUG] Volume: 78 -> 79 (delta=+1, CC 20)
+2025-12-09 15:05:41,685 [DEBUG] HID: delta=90ms, dist=1, key=VolUp
+2025-12-09 15:05:41,685 [DEBUG] Volume: 79 -> 80 (delta=+1, CC 20)
+2025-12-09 15:05:41,775 [DEBUG] HID: delta=90ms, dist=2, key=VolUp
+2025-12-09 15:05:41,775 [DEBUG] Volume: 80 -> 82 (delta=+2, CC 20)
+2025-12-09 15:05:41,817 [DEBUG] GLM state: vol=80, mute=False, dim=False, pwr=True
+2025-12-09 15:05:41,910 [DEBUG] HID: delta=135ms, dist=2, key=VolUp
+2025-12-09 15:05:41,910 [DEBUG] Volume: 82 -> 84 (delta=+2, CC 20)
+2025-12-09 15:05:41,954 [DEBUG] HID: delta=45ms, dist=2, key=VolUp
+2025-12-09 15:05:41,954 [DEBUG] Volume: 84 -> 86 (delta=+2, CC 20)
+2025-12-09 15:05:41,973 [DEBUG] GLM state: vol=84, mute=False, dim=False, pwr=True
+2025-12-09 15:05:42,944 [DEBUG] HID: delta=990ms, dist=1, key=VolUp (*)
+2025-12-09 15:05:42,945 [DEBUG] Volume: 86 -> 87 (delta=+1, CC 20)
+2025-12-09 15:05:43,008 [DEBUG] GLM state: vol=87, mute=False, dim=False, pwr=True
+2025-12-09 15:05:43,034 [DEBUG] HID: delta=90ms, dist=1, key=VolUp
+2025-12-09 15:05:43,035 [DEBUG] Volume: 87 -> 88 (delta=+1, CC 20)
+2025-12-09 15:05:43,124 [DEBUG] HID: delta=90ms, dist=1, key=VolUp
+2025-12-09 15:05:43,125 [DEBUG] Volume: 88 -> 89 (delta=+1, CC 20)
+2025-12-09 15:05:43,188 [DEBUG] GLM state: vol=89, mute=False, dim=False, pwr=True
+2025-12-09 15:05:43,349 [DEBUG] HID: delta=225ms, dist=1, key=VolUp (*)
+2025-12-09 15:05:43,350 [DEBUG] Volume: 89 -> 90 (delta=+1, CC 20)
+2025-12-09 15:05:43,413 [DEBUG] GLM state: vol=90, mute=False, dim=False, pwr=True
+2025-12-09 15:05:43,529 [DEBUG] HID: delta=180ms, dist=1, key=VolUp (*)
+2025-12-09 15:05:43,530 [DEBUG] Volume: 90 -> 91 (delta=+1, CC 20)
+2025-12-09 15:05:43,593 [DEBUG] GLM state: vol=91, mute=False, dim=False, pwr=True
+2025-12-09 15:05:45,375 [DEBUG] HID: delta=1846ms, dist=1, key=VolUp (*)
+2025-12-09 15:05:45,375 [DEBUG] Volume: 91 -> 92 (delta=+1, CC 20)
+2025-12-09 15:05:45,439 [DEBUG] GLM state: vol=92, mute=False, dim=False, pwr=True
+2025-12-09 15:05:45,509 [DEBUG] HID: delta=134ms, dist=1, key=VolUp
+2025-12-09 15:05:45,510 [DEBUG] Volume: 92 -> 93 (delta=+1, CC 20)
+2025-12-09 15:05:45,572 [DEBUG] GLM state: vol=93, mute=False, dim=False, pwr=True
+2025-12-09 15:05:45,599 [DEBUG] HID: delta=90ms, dist=1, key=VolUp
+2025-12-09 15:05:45,599 [DEBUG] Volume: 93 -> 94 (delta=+1, CC 20)
+2025-12-09 15:05:45,667 [DEBUG] GLM state: vol=94, mute=False, dim=False, pwr=True
+2025-12-09 15:05:45,689 [DEBUG] HID: delta=90ms, dist=1, key=VolUp
+2025-12-09 15:05:45,690 [DEBUG] Volume: 94 -> 95 (delta=+1, CC 20)
+2025-12-09 15:05:45,825 [DEBUG] HID: delta=136ms, dist=2, key=VolUp
+2025-12-09 15:05:45,825 [DEBUG] Volume: 95 -> 97 (delta=+2, CC 20)
+2025-12-09 15:05:45,964 [DEBUG] GLM state: vol=97, mute=False, dim=False, pwr=True
+2025-12-09 15:05:47,444 [DEBUG] HID: delta=1619ms, dist=1, key=VolDown (*)
+2025-12-09 15:05:47,445 [DEBUG] Volume: 97 -> 96 (delta=-1, CC 20)
+2025-12-09 15:05:47,508 [DEBUG] GLM state: vol=96, mute=False, dim=False, pwr=True
+2025-12-09 15:05:47,534 [DEBUG] HID: delta=90ms, dist=1, key=VolDown
+2025-12-09 15:05:47,534 [DEBUG] Volume: 96 -> 95 (delta=-1, CC 20)
+2025-12-09 15:05:47,625 [DEBUG] HID: delta=90ms, dist=1, key=VolDown
+2025-12-09 15:05:47,625 [DEBUG] Volume: 95 -> 94 (delta=-1, CC 20)
+2025-12-09 15:05:47,687 [DEBUG] GLM state: vol=94, mute=False, dim=False, pwr=True
+2025-12-09 15:05:47,714 [DEBUG] HID: delta=90ms, dist=1, key=VolDown
+2025-12-09 15:05:47,715 [DEBUG] Volume: 94 -> 93 (delta=-1, CC 20)
+2025-12-09 15:05:47,804 [DEBUG] HID: delta=90ms, dist=2, key=VolDown
+2025-12-09 15:05:47,805 [DEBUG] Volume: 93 -> 91 (delta=-2, CC 20)
+2025-12-09 15:05:47,894 [DEBUG] HID: delta=90ms, dist=2, key=VolDown
+2025-12-09 15:05:47,894 [DEBUG] Volume: 91 -> 89 (delta=-2, CC 20)
+2025-12-09 15:05:47,985 [DEBUG] GLM state: vol=89, mute=False, dim=False, pwr=True
+2025-12-09 15:05:47,985 [DEBUG] HID: delta=91ms, dist=2, key=VolDown
+2025-12-09 15:05:47,985 [DEBUG] Volume: 89 -> 87 (delta=-2, CC 20)
+2025-12-09 15:05:48,075 [DEBUG] HID: delta=90ms, dist=2, key=VolDown
+2025-12-09 15:05:48,075 [DEBUG] Volume: 87 -> 85 (delta=-2, CC 20)
+2025-12-09 15:05:48,119 [DEBUG] HID: delta=45ms, dist=3, key=VolDown
+2025-12-09 15:05:48,120 [DEBUG] Volume: 85 -> 82 (delta=-3, CC 20)
+2025-12-09 15:05:48,137 [DEBUG] GLM state: vol=85, mute=False, dim=False, pwr=True
+2025-12-09 15:05:48,165 [DEBUG] HID: delta=46ms, dist=3, key=VolDown
+2025-12-09 15:05:48,165 [DEBUG] Volume: 82 -> 79 (delta=-3, CC 20)
+2025-12-09 15:05:48,209 [DEBUG] HID: delta=44ms, dist=3, key=VolDown
+2025-12-09 15:05:48,210 [DEBUG] Volume: 79 -> 76 (delta=-3, CC 20)
+2025-12-09 15:05:48,273 [DEBUG] GLM state: vol=76, mute=False, dim=False, pwr=True
+2025-12-09 15:05:48,839 [DEBUG] HID: delta=630ms, dist=1, key=VolUp (*)
+2025-12-09 15:05:48,840 [DEBUG] Volume: 76 -> 77 (delta=+1, CC 20)
+2025-12-09 15:05:48,929 [DEBUG] HID: delta=90ms, dist=1, key=VolUp
+2025-12-09 15:05:48,929 [DEBUG] Volume: 77 -> 78 (delta=+1, CC 20)
+2025-12-09 15:05:48,985 [DEBUG] GLM state: vol=77, mute=False, dim=False, pwr=True
+2025-12-09 15:05:49,019 [DEBUG] HID: delta=90ms, dist=1, key=VolUp
+2025-12-09 15:05:49,019 [DEBUG] Volume: 78 -> 79 (delta=+1, CC 20)
+2025-12-09 15:05:49,082 [DEBUG] GLM state: vol=79, mute=False, dim=False, pwr=True
+2025-12-09 15:05:49,109 [DEBUG] HID: delta=90ms, dist=1, key=VolUp
+2025-12-09 15:05:49,109 [DEBUG] Volume: 79 -> 80 (delta=+1, CC 20)
+2025-12-09 15:05:49,199 [DEBUG] HID: delta=90ms, dist=2, key=VolUp
+2025-12-09 15:05:49,199 [DEBUG] Volume: 80 -> 82 (delta=+2, CC 20)
+2025-12-09 15:05:49,263 [DEBUG] GLM state: vol=82, mute=False, dim=False, pwr=True
+2025-12-09 15:05:49,289 [DEBUG] HID: delta=90ms, dist=2, key=VolUp
+2025-12-09 15:05:49,290 [DEBUG] Volume: 82 -> 84 (delta=+2, CC 20)
+2025-12-09 15:05:49,380 [DEBUG] HID: delta=90ms, dist=2, key=VolUp
+2025-12-09 15:05:49,380 [DEBUG] Volume: 84 -> 86 (delta=+2, CC 20)
+2025-12-09 15:05:49,443 [DEBUG] GLM state: vol=86, mute=False, dim=False, pwr=True
+2025-12-09 15:05:49,514 [DEBUG] HID: delta=135ms, dist=2, key=VolUp
+2025-12-09 15:05:49,515 [DEBUG] Volume: 86 -> 88 (delta=+2, CC 20)
+2025-12-09 15:05:49,578 [DEBUG] GLM state: vol=88, mute=False, dim=False, pwr=True
+2025-12-09 15:05:49,605 [DEBUG] HID: delta=91ms, dist=3, key=VolUp
+2025-12-09 15:05:49,605 [DEBUG] Volume: 88 -> 91 (delta=+3, CC 20)
+2025-12-09 15:05:49,694 [DEBUG] HID: delta=89ms, dist=3, key=VolUp
+2025-12-09 15:05:49,695 [DEBUG] Volume: 91 -> 94 (delta=+3, CC 20)
+2025-12-09 15:05:49,758 [DEBUG] GLM state: vol=94, mute=False, dim=False, pwr=True
+2025-12-09 15:05:50,415 [DEBUG] HID: delta=721ms, dist=1, key=VolDown (*)
+2025-12-09 15:05:50,415 [DEBUG] Volume: 94 -> 93 (delta=-1, CC 20)
+2025-12-09 15:05:50,479 [DEBUG] GLM state: vol=93, mute=False, dim=False, pwr=True
+2025-12-09 15:05:50,550 [DEBUG] HID: delta=135ms, dist=1, key=VolDown
+2025-12-09 15:05:50,550 [DEBUG] Volume: 93 -> 92 (delta=-1, CC 20)
+2025-12-09 15:05:50,614 [DEBUG] GLM state: vol=92, mute=False, dim=False, pwr=True
+2025-12-09 15:06:01,980 [DEBUG] HID: delta=11430ms, dist=1, key=VolDown (*)
+2025-12-09 15:06:01,980 [DEBUG] Volume: 92 -> 91 (delta=-1, CC 20)
+2025-12-09 15:06:02,069 [DEBUG] HID: delta=90ms, dist=1, key=VolDown
+2025-12-09 15:06:02,070 [DEBUG] Volume: 91 -> 90 (delta=-1, CC 20)
+2025-12-09 15:06:02,071 [DEBUG] GLM state: vol=91, mute=False, dim=False, pwr=True
+2025-12-09 15:06:02,205 [DEBUG] HID: delta=135ms, dist=1, key=VolDown
+2025-12-09 15:06:02,205 [DEBUG] Volume: 90 -> 89 (delta=-1, CC 20)
+2025-12-09 15:06:02,268 [DEBUG] GLM state: vol=89, mute=False, dim=False, pwr=True
+2025-12-09 15:06:02,340 [DEBUG] HID: delta=135ms, dist=1, key=VolDown
+2025-12-09 15:06:02,340 [DEBUG] Volume: 89 -> 88 (delta=-1, CC 20)
+2025-12-09 15:06:02,403 [DEBUG] GLM state: vol=88, mute=False, dim=False, pwr=True
+2025-12-09 15:06:02,429 [DEBUG] HID: delta=90ms, dist=2, key=VolDown
+2025-12-09 15:06:02,430 [DEBUG] Volume: 88 -> 86 (delta=-2, CC 20)
+2025-12-09 15:06:02,565 [DEBUG] HID: delta=135ms, dist=2, key=VolDown
+2025-12-09 15:06:02,565 [DEBUG] Volume: 86 -> 84 (delta=-2, CC 20)
+2025-12-09 15:06:02,628 [DEBUG] GLM state: vol=84, mute=False, dim=False, pwr=True
+2025-12-09 15:06:02,700 [DEBUG] HID: delta=135ms, dist=2, key=VolDown
+2025-12-09 15:06:02,700 [DEBUG] Volume: 84 -> 82 (delta=-2, CC 20)
+2025-12-09 15:06:02,763 [DEBUG] GLM state: vol=82, mute=False, dim=False, pwr=True
+2025-12-09 15:06:02,789 [DEBUG] HID: delta=90ms, dist=2, key=VolDown
+2025-12-09 15:06:02,789 [DEBUG] Volume: 82 -> 80 (delta=-2, CC 20)
+2025-12-09 15:06:02,880 [DEBUG] HID: delta=90ms, dist=3, key=VolDown
+2025-12-09 15:06:02,880 [DEBUG] Volume: 80 -> 77 (delta=-3, CC 20)
+2025-12-09 15:06:02,970 [DEBUG] HID: delta=90ms, dist=3, key=VolDown
+2025-12-09 15:06:02,970 [DEBUG] Volume: 77 -> 74 (delta=-3, CC 20)
+2025-12-09 15:06:03,014 [DEBUG] HID: delta=45ms, dist=3, key=VolDown
+2025-12-09 15:06:03,015 [DEBUG] Volume: 74 -> 71 (delta=-3, CC 20)
+2025-12-09 15:06:03,073 [DEBUG] GLM state: vol=74, mute=False, dim=False, pwr=True
+2025-12-09 15:06:03,104 [DEBUG] HID: delta=90ms, dist=4, key=VolDown
+2025-12-09 15:06:03,104 [DEBUG] Volume: 71 -> 67 (delta=-4, CC 20)
+2025-12-09 15:06:03,150 [DEBUG] HID: delta=45ms, dist=4, key=VolDown
+2025-12-09 15:06:03,150 [DEBUG] Volume: 67 -> 63 (delta=-4, CC 20)
+2025-12-09 15:06:03,168 [DEBUG] GLM state: vol=67, mute=False, dim=False, pwr=True
+2025-12-09 15:06:03,239 [DEBUG] HID: delta=90ms, dist=4, key=VolDown
+2025-12-09 15:06:03,239 [DEBUG] Volume: 63 -> 59 (delta=-4, CC 20)
+2025-12-09 15:06:03,303 [DEBUG] GLM state: vol=59, mute=False, dim=False, pwr=True
+2025-12-09 15:06:03,689 [DEBUG] HID: delta=450ms, dist=1, key=VolUp (*)
+2025-12-09 15:06:03,690 [DEBUG] Volume: 59 -> 60 (delta=+1, CC 20)
+2025-12-09 15:06:03,756 [DEBUG] GLM state: vol=60, mute=False, dim=False, pwr=True
+2025-12-09 15:06:03,779 [DEBUG] HID: delta=90ms, dist=1, key=VolUp
+2025-12-09 15:06:03,779 [DEBUG] Volume: 60 -> 61 (delta=+1, CC 20)
+2025-12-09 15:06:03,870 [DEBUG] HID: delta=90ms, dist=1, key=VolUp
+2025-12-09 15:06:03,870 [DEBUG] Volume: 61 -> 62 (delta=+1, CC 20)
+2025-12-09 15:06:03,959 [DEBUG] HID: delta=90ms, dist=1, key=VolUp
+2025-12-09 15:06:03,960 [DEBUG] Volume: 62 -> 63 (delta=+1, CC 20)
+2025-12-09 15:06:04,049 [DEBUG] HID: delta=90ms, dist=2, key=VolUp
+2025-12-09 15:06:04,050 [DEBUG] Volume: 63 -> 65 (delta=+2, CC 20)
+2025-12-09 15:06:04,076 [DEBUG] GLM state: vol=63, mute=False, dim=False, pwr=True
+2025-12-09 15:06:04,140 [DEBUG] HID: delta=90ms, dist=2, key=VolUp
+2025-12-09 15:06:04,140 [DEBUG] Volume: 65 -> 67 (delta=+2, CC 20)
+2025-12-09 15:06:04,203 [DEBUG] GLM state: vol=67, mute=False, dim=False, pwr=True
+2025-12-09 15:06:04,229 [DEBUG] HID: delta=90ms, dist=2, key=VolUp
+2025-12-09 15:06:04,229 [DEBUG] Volume: 67 -> 69 (delta=+2, CC 20)
+2025-12-09 15:06:04,365 [DEBUG] HID: delta=135ms, dist=2, key=VolUp
+2025-12-09 15:06:04,365 [DEBUG] Volume: 69 -> 71 (delta=+2, CC 20)
+2025-12-09 15:06:04,409 [DEBUG] HID: delta=45ms, dist=3, key=VolUp
+2025-12-09 15:06:04,409 [DEBUG] Volume: 71 -> 74 (delta=+3, CC 20)
+2025-12-09 15:06:04,429 [DEBUG] GLM state: vol=71, mute=False, dim=False, pwr=True
+2025-12-09 15:06:04,454 [DEBUG] HID: delta=45ms, dist=3, key=VolUp
+2025-12-09 15:06:04,454 [DEBUG] Volume: 74 -> 77 (delta=+3, CC 20)
+2025-12-09 15:06:04,499 [DEBUG] HID: delta=45ms, dist=3, key=VolUp
+2025-12-09 15:06:04,500 [DEBUG] Volume: 77 -> 80 (delta=+3, CC 20)
+2025-12-09 15:06:04,564 [DEBUG] GLM state: vol=80, mute=False, dim=False, pwr=True
+2025-12-09 15:06:04,589 [DEBUG] HID: delta=90ms, dist=4, key=VolUp
+2025-12-09 15:06:04,590 [DEBUG] Volume: 80 -> 84 (delta=+4, CC 20)
+2025-12-09 15:06:04,635 [DEBUG] HID: delta=45ms, dist=4, key=VolUp
+2025-12-09 15:06:04,635 [DEBUG] Volume: 84 -> 88 (delta=+4, CC 20)
+2025-12-09 15:06:04,699 [DEBUG] GLM state: vol=88, mute=False, dim=False, pwr=True
+2025-12-09 15:06:05,849 [DEBUG] HID: delta=1215ms, dist=1, key=VolUp (*)
+2025-12-09 15:06:05,850 [DEBUG] Volume: 88 -> 89 (delta=+1, CC 20)
+2025-12-09 15:06:05,985 [DEBUG] HID: delta=135ms, dist=1, key=VolUp
+2025-12-09 15:06:05,985 [DEBUG] Volume: 89 -> 90 (delta=+1, CC 20)
+2025-12-09 15:06:06,074 [DEBUG] HID: delta=90ms, dist=1, key=VolUp
+2025-12-09 15:06:06,075 [DEBUG] Volume: 90 -> 91 (delta=+1, CC 20)
+2025-12-09 15:06:06,081 [DEBUG] GLM state: vol=90, mute=False, dim=False, pwr=True
+2025-12-09 15:06:06,165 [DEBUG] HID: delta=90ms, dist=1, key=VolUp
+2025-12-09 15:06:06,165 [DEBUG] Volume: 91 -> 92 (delta=+1, CC 20)
+2025-12-09 15:06:06,228 [DEBUG] GLM state: vol=92, mute=False, dim=False, pwr=True
+2025-12-09 15:06:06,255 [DEBUG] HID: delta=90ms, dist=2, key=VolUp
+2025-12-09 15:06:06,255 [DEBUG] Volume: 92 -> 94 (delta=+2, CC 20)
+2025-12-09 15:06:06,345 [DEBUG] HID: delta=90ms, dist=2, key=VolUp
+2025-12-09 15:06:06,345 [DEBUG] Volume: 94 -> 96 (delta=+2, CC 20)
+2025-12-09 15:06:06,408 [DEBUG] GLM state: vol=96, mute=False, dim=False, pwr=True
+2025-12-09 15:06:06,479 [DEBUG] HID: delta=135ms, dist=2, key=VolUp
+2025-12-09 15:06:06,480 [DEBUG] Volume: 96 -> 98 (delta=+2, CC 20)
+2025-12-09 15:06:06,543 [DEBUG] GLM state: vol=98, mute=False, dim=False, pwr=True
+2025-12-09 15:06:06,570 [DEBUG] HID: delta=90ms, dist=2, key=VolUp
+2025-12-09 15:06:06,570 [DEBUG] Volume: 98 -> 100 (delta=+2, CC 20)
+2025-12-09 15:06:06,660 [DEBUG] HID: delta=90ms, dist=3, key=VolUp
+2025-12-09 15:06:06,660 [DEBUG] Volume: 100 -> 103 (delta=+3, CC 20)
+2025-12-09 15:06:06,722 [DEBUG] GLM state: vol=103, mute=False, dim=False, pwr=True
+2025-12-09 15:06:06,750 [DEBUG] HID: delta=90ms, dist=3, key=VolUp
+2025-12-09 15:06:06,750 [DEBUG] Volume: 103 -> 106 (delta=+3, CC 20)
+2025-12-09 15:06:07,109 [DEBUG] HID: delta=360ms, dist=1, key=VolDown (*)
+2025-12-09 15:06:07,110 [DEBUG] Volume: 106 -> 105 (delta=-1, CC 20)
+2025-12-09 15:06:07,174 [DEBUG] GLM state: vol=105, mute=False, dim=False, pwr=True
+2025-12-09 15:06:07,199 [DEBUG] HID: delta=90ms, dist=1, key=VolDown
+2025-12-09 15:06:07,200 [DEBUG] Volume: 105 -> 104 (delta=-1, CC 20)
+2025-12-09 15:06:07,289 [DEBUG] HID: delta=90ms, dist=1, key=VolDown
+2025-12-09 15:06:07,290 [DEBUG] Volume: 104 -> 103 (delta=-1, CC 20)
+2025-12-09 15:06:07,353 [DEBUG] GLM state: vol=103, mute=False, dim=False, pwr=True
+2025-12-09 15:06:07,379 [DEBUG] HID: delta=90ms, dist=1, key=VolDown
+2025-12-09 15:06:07,380 [DEBUG] Volume: 103 -> 102 (delta=-1, CC 20)
+2025-12-09 15:06:07,469 [DEBUG] HID: delta=90ms, dist=2, key=VolDown
+2025-12-09 15:06:07,470 [DEBUG] Volume: 102 -> 100 (delta=-2, CC 20)
+2025-12-09 15:06:07,533 [DEBUG] GLM state: vol=100, mute=False, dim=False, pwr=True
+2025-12-09 15:06:07,560 [DEBUG] HID: delta=90ms, dist=2, key=VolDown
+2025-12-09 15:06:07,560 [DEBUG] Volume: 100 -> 98 (delta=-2, CC 20)
+2025-12-09 15:06:07,649 [DEBUG] HID: delta=90ms, dist=2, key=VolDown
+2025-12-09 15:06:07,649 [DEBUG] Volume: 98 -> 96 (delta=-2, CC 20)
+2025-12-09 15:06:07,713 [DEBUG] GLM state: vol=96, mute=False, dim=False, pwr=True
+2025-12-09 15:06:07,784 [DEBUG] HID: delta=135ms, dist=2, key=VolDown
+2025-12-09 15:06:07,784 [DEBUG] Volume: 96 -> 94 (delta=-2, CC 20)
+2025-12-09 15:06:07,847 [DEBUG] GLM state: vol=94, mute=False, dim=False, pwr=True
+2025-12-09 15:06:07,874 [DEBUG] HID: delta=90ms, dist=3, key=VolDown
+2025-12-09 15:06:07,874 [DEBUG] Volume: 94 -> 91 (delta=-3, CC 20)
+2025-12-09 15:06:08,370 [DEBUG] HID: delta=495ms, dist=1, key=VolDown (*)
+2025-12-09 15:06:08,370 [DEBUG] Volume: 91 -> 90 (delta=-1, CC 20)
+2025-12-09 15:06:08,433 [DEBUG] GLM state: vol=90, mute=False, dim=False, pwr=True
+2025-12-09 15:06:08,639 [DEBUG] HID: delta=270ms, dist=1, key=VolDown (*)
+2025-12-09 15:06:08,639 [DEBUG] Volume: 90 -> 89 (delta=-1, CC 20)
+2025-12-09 15:06:08,703 [DEBUG] GLM state: vol=89, mute=False, dim=False, pwr=True
+2025-12-09 15:06:09,179 [DEBUG] HID: delta=540ms, dist=1, key=VolDown (*)
+2025-12-09 15:06:09,180 [DEBUG] Volume: 89 -> 88 (delta=-1, CC 20)
+2025-12-09 15:06:09,243 [DEBUG] GLM state: vol=88, mute=False, dim=False, pwr=True
+2025-12-09 15:40:47,473 [DEBUG] HID: delta=2078293ms, dist=1, key=VolDown (*)
+2025-12-09 15:40:47,473 [DEBUG] Volume: 88 -> 87 (delta=-1, CC 20)
+2025-12-09 15:40:47,608 [DEBUG] HID: delta=135ms, dist=1, key=VolDown
+2025-12-09 15:40:47,608 [DEBUG] Volume: 87 -> 86 (delta=-1, CC 20)
+2025-12-09 15:40:47,693 [DEBUG] GLM state: vol=86, mute=False, dim=False, pwr=True
+2025-12-09 15:40:47,697 [DEBUG] HID: delta=89ms, dist=1, key=VolDown
+2025-12-09 15:40:47,697 [DEBUG] Volume: 86 -> 85 (delta=-1, CC 20)
+2025-12-09 15:40:47,787 [DEBUG] HID: delta=90ms, dist=1, key=VolDown
+2025-12-09 15:40:47,788 [DEBUG] Volume: 85 -> 84 (delta=-1, CC 20)
+2025-12-09 15:40:47,850 [DEBUG] GLM state: vol=84, mute=False, dim=False, pwr=True
+2025-12-09 15:40:47,922 [DEBUG] HID: delta=135ms, dist=2, key=VolDown
+2025-12-09 15:40:47,922 [DEBUG] Volume: 84 -> 82 (delta=-2, CC 20)
+2025-12-09 15:40:47,985 [DEBUG] GLM state: vol=82, mute=False, dim=False, pwr=True
+2025-12-09 15:40:48,057 [DEBUG] HID: delta=135ms, dist=2, key=VolDown
+2025-12-09 15:40:48,057 [DEBUG] Volume: 82 -> 80 (delta=-2, CC 20)
+2025-12-09 15:40:48,137 [DEBUG] GLM state: vol=80, mute=False, dim=False, pwr=True
+2025-12-09 15:40:48,507 [DEBUG] HID: delta=450ms, dist=1, key=VolDown (*)
+2025-12-09 15:40:48,508 [DEBUG] Volume: 80 -> 79 (delta=-1, CC 20)
+2025-12-09 15:40:48,695 [DEBUG] GLM state: vol=79, mute=False, dim=False, pwr=True
+2025-12-09 15:40:48,777 [DEBUG] HID: delta=270ms, dist=1, key=VolDown (*)
+2025-12-09 15:40:48,777 [DEBUG] Volume: 79 -> 78 (delta=-1, CC 20)
+2025-12-09 15:40:48,841 [DEBUG] GLM state: vol=78, mute=False, dim=False, pwr=True
+2025-12-09 15:40:49,408 [DEBUG] HID: delta=630ms, dist=1, key=VolDown (*)
+2025-12-09 15:40:49,408 [DEBUG] Volume: 78 -> 77 (delta=-1, CC 20)
+2025-12-09 15:40:49,472 [DEBUG] GLM state: vol=77, mute=False, dim=False, pwr=True
+2025-12-09 15:40:49,497 [DEBUG] HID: delta=90ms, dist=1, key=VolDown
+2025-12-09 15:40:49,497 [DEBUG] Volume: 77 -> 76 (delta=-1, CC 20)
+2025-12-09 15:40:49,587 [DEBUG] HID: delta=90ms, dist=1, key=VolDown
+2025-12-09 15:40:49,587 [DEBUG] Volume: 76 -> 75 (delta=-1, CC 20)
+2025-12-09 15:40:49,677 [DEBUG] HID: delta=90ms, dist=1, key=VolDown
+2025-12-09 15:40:49,678 [DEBUG] Volume: 75 -> 74 (delta=-1, CC 20)
+2025-12-09 15:40:49,771 [DEBUG] GLM state: vol=74, mute=False, dim=False, pwr=True
+2025-12-09 15:40:49,947 [DEBUG] HID: delta=270ms, dist=1, key=VolUp (*)
+2025-12-09 15:40:49,948 [DEBUG] Volume: 74 -> 75 (delta=+1, CC 20)
+2025-12-09 15:40:50,011 [DEBUG] GLM state: vol=75, mute=False, dim=False, pwr=True
+2025-12-09 15:40:50,082 [DEBUG] HID: delta=135ms, dist=1, key=VolUp
+2025-12-09 15:40:50,083 [DEBUG] Volume: 75 -> 76 (delta=+1, CC 20)
+2025-12-09 15:40:50,146 [DEBUG] GLM state: vol=76, mute=False, dim=False, pwr=True
+2025-12-09 15:40:50,172 [DEBUG] HID: delta=90ms, dist=1, key=VolUp
+2025-12-09 15:40:50,172 [DEBUG] Volume: 76 -> 77 (delta=+1, CC 20)
+2025-12-09 15:40:50,262 [DEBUG] HID: delta=90ms, dist=1, key=VolUp
+2025-12-09 15:40:50,262 [DEBUG] Volume: 77 -> 78 (delta=+1, CC 20)
+2025-12-09 15:40:50,326 [DEBUG] GLM state: vol=78, mute=False, dim=False, pwr=True
+2025-12-09 15:40:50,352 [DEBUG] HID: delta=90ms, dist=2, key=VolUp
+2025-12-09 15:40:50,352 [DEBUG] Volume: 78 -> 80 (delta=+2, CC 20)
+2025-12-09 15:40:50,443 [DEBUG] HID: delta=90ms, dist=2, key=VolUp
+2025-12-09 15:40:50,443 [DEBUG] Volume: 80 -> 82 (delta=+2, CC 20)
+2025-12-09 15:40:50,506 [DEBUG] GLM state: vol=82, mute=False, dim=False, pwr=True
+2025-12-09 15:40:50,533 [DEBUG] HID: delta=90ms, dist=2, key=VolUp
+2025-12-09 15:40:50,533 [DEBUG] Volume: 82 -> 84 (delta=+2, CC 20)
+2025-12-09 15:40:50,577 [DEBUG] HID: delta=45ms, dist=2, key=VolUp
+2025-12-09 15:40:50,577 [DEBUG] Volume: 84 -> 86 (delta=+2, CC 20)
+2025-12-09 15:40:50,622 [DEBUG] HID: delta=45ms, dist=3, key=VolUp
+2025-12-09 15:40:50,623 [DEBUG] Volume: 86 -> 89 (delta=+3, CC 20)
+2025-12-09 15:40:50,667 [DEBUG] HID: delta=45ms, dist=3, key=VolUp
+2025-12-09 15:40:50,668 [DEBUG] Volume: 89 -> 92 (delta=+3, CC 20)
+2025-12-09 15:40:50,712 [DEBUG] HID: delta=45ms, dist=3, key=VolUp
+2025-12-09 15:40:50,712 [DEBUG] Volume: 92 -> 95 (delta=+3, CC 20)
+2025-12-09 15:40:50,758 [DEBUG] HID: delta=45ms, dist=4, key=VolUp
+2025-12-09 15:40:50,758 [DEBUG] Volume: 95 -> 99 (delta=+4, CC 20)
+2025-12-09 15:40:50,802 [DEBUG] HID: delta=45ms, dist=4, key=VolUp
+2025-12-09 15:40:50,802 [DEBUG] Volume: 99 -> 103 (delta=+4, CC 20)
+2025-12-09 15:40:50,805 [DEBUG] GLM state: vol=95, mute=False, dim=False, pwr=True
+2025-12-09 15:40:50,847 [DEBUG] HID: delta=45ms, dist=4, key=VolUp
+2025-12-09 15:40:50,848 [DEBUG] Volume: 103 -> 107 (delta=+4, CC 20)
+2025-12-09 15:40:50,911 [DEBUG] GLM state: vol=107, mute=False, dim=False, pwr=True
+2025-12-09 15:40:51,207 [DEBUG] HID: delta=360ms, dist=1, key=VolDown (*)
+2025-12-09 15:40:51,208 [DEBUG] Volume: 107 -> 106 (delta=-1, CC 20)
+2025-12-09 15:40:51,271 [DEBUG] GLM state: vol=106, mute=False, dim=False, pwr=True
+2025-12-09 15:40:51,297 [DEBUG] HID: delta=90ms, dist=1, key=VolDown
+2025-12-09 15:40:51,297 [DEBUG] Volume: 106 -> 105 (delta=-1, CC 20)
+2025-12-09 15:40:51,388 [DEBUG] HID: delta=90ms, dist=1, key=VolDown
+2025-12-09 15:40:51,388 [DEBUG] Volume: 105 -> 104 (delta=-1, CC 20)
+2025-12-09 15:40:51,452 [DEBUG] GLM state: vol=104, mute=False, dim=False, pwr=True
+2025-12-09 15:40:51,477 [DEBUG] HID: delta=90ms, dist=1, key=VolDown
+2025-12-09 15:40:51,477 [DEBUG] Volume: 104 -> 103 (delta=-1, CC 20)
+2025-12-09 15:40:51,612 [DEBUG] HID: delta=135ms, dist=2, key=VolDown
+2025-12-09 15:40:51,613 [DEBUG] Volume: 103 -> 101 (delta=-2, CC 20)
+2025-12-09 15:40:51,702 [DEBUG] HID: delta=90ms, dist=2, key=VolDown
+2025-12-09 15:40:51,703 [DEBUG] Volume: 101 -> 99 (delta=-2, CC 20)
+2025-12-09 15:40:51,792 [DEBUG] HID: delta=90ms, dist=2, key=VolDown
+2025-12-09 15:40:51,792 [DEBUG] Volume: 99 -> 97 (delta=-2, CC 20)
+2025-12-09 15:40:51,804 [DEBUG] GLM state: vol=99, mute=False, dim=False, pwr=True
+2025-12-09 15:40:51,882 [DEBUG] HID: delta=90ms, dist=2, key=VolDown
+2025-12-09 15:40:51,883 [DEBUG] Volume: 97 -> 95 (delta=-2, CC 20)
+2025-12-09 15:40:51,927 [DEBUG] HID: delta=45ms, dist=3, key=VolDown
+2025-12-09 15:40:51,927 [DEBUG] Volume: 95 -> 92 (delta=-3, CC 20)
+2025-12-09 15:40:51,945 [DEBUG] GLM state: vol=95, mute=False, dim=False, pwr=True
+2025-12-09 15:40:51,972 [DEBUG] HID: delta=45ms, dist=3, key=VolDown
+2025-12-09 15:40:51,973 [DEBUG] Volume: 92 -> 89 (delta=-3, CC 20)
+2025-12-09 15:40:52,018 [DEBUG] HID: delta=45ms, dist=3, key=VolDown
+2025-12-09 15:40:52,018 [DEBUG] Volume: 89 -> 86 (delta=-3, CC 20)
+2025-12-09 15:40:52,080 [DEBUG] GLM state: vol=86, mute=False, dim=False, pwr=True
+2025-12-09 15:40:52,153 [DEBUG] HID: delta=136ms, dist=4, key=VolDown
+2025-12-09 15:40:52,154 [DEBUG] Volume: 86 -> 82 (delta=-4, CC 20)
+2025-12-09 15:40:52,217 [DEBUG] GLM state: vol=82, mute=False, dim=False, pwr=True
+2025-12-09 15:40:53,953 [DEBUG] HID: delta=1799ms, dist=1, key=VolDown (*)
+2025-12-09 15:40:53,953 [DEBUG] Volume: 82 -> 81 (delta=-1, CC 20)
+2025-12-09 15:40:54,017 [DEBUG] GLM state: vol=81, mute=False, dim=False, pwr=True
+2025-12-09 15:40:54,087 [DEBUG] HID: delta=135ms, dist=1, key=VolDown
+2025-12-09 15:40:54,088 [DEBUG] Volume: 81 -> 80 (delta=-1, CC 20)
+2025-12-09 15:40:54,151 [DEBUG] GLM state: vol=80, mute=False, dim=False, pwr=True
+2025-12-09 15:40:54,177 [DEBUG] HID: delta=90ms, dist=1, key=VolDown
+2025-12-09 15:40:54,177 [DEBUG] Volume: 80 -> 79 (delta=-1, CC 20)
+2025-12-09 15:40:54,267 [DEBUG] HID: delta=90ms, dist=1, key=VolDown
+2025-12-09 15:40:54,268 [DEBUG] Volume: 79 -> 78 (delta=-1, CC 20)
+2025-12-09 15:40:54,331 [DEBUG] GLM state: vol=78, mute=False, dim=False, pwr=True
+2025-12-09 15:41:04,393 [DEBUG] HID: delta=10126ms, dist=1, key=VolDown (*)
+2025-12-09 15:41:04,393 [DEBUG] Volume: 78 -> 77 (delta=-1, CC 20)
+2025-12-09 15:41:04,456 [DEBUG] GLM state: vol=77, mute=False, dim=False, pwr=True
+2025-12-09 15:41:04,617 [DEBUG] HID: delta=225ms, dist=1, key=VolDown (*)
+2025-12-09 15:41:04,618 [DEBUG] Volume: 77 -> 76 (delta=-1, CC 20)
+2025-12-09 15:41:04,821 [DEBUG] GLM state: vol=76, mute=False, dim=False, pwr=True
+2025-12-09 15:41:04,887 [DEBUG] HID: delta=270ms, dist=1, key=VolDown (*)
+2025-12-09 15:41:04,888 [DEBUG] Volume: 76 -> 75 (delta=-1, CC 20)
+2025-12-09 15:41:04,951 [DEBUG] GLM state: vol=75, mute=False, dim=False, pwr=True
