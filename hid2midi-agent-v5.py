@@ -168,8 +168,8 @@ class GlmController:
         with self._lock:
             if cc == GLM_VOLUME_ABS:
                 self._volume_initialized = True
-                # Sync pending volume to GLM's confirmed value (GLM is source of truth)
-                self._pending_volume = value
+                # Don't update _pending_volume here - let it track user intent
+                # Only update confirmed volume from GLM
                 if self.volume != value:
                     self.volume = value
                     self._volume_changed.set()  # Signal volume change
