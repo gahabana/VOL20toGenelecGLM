@@ -16,15 +16,33 @@ import argparse
 import logging
 from logging.handlers import RotatingFileHandler, QueueHandler, QueueListener
 
-import ctypes
-import win32api
-import win32process
-import win32con
+# Platform-specific imports (Windows thread priority)
+IS_WINDOWS = sys.platform == 'win32'
+if IS_WINDOWS:
+    try:
+        import ctypes
+        import win32api
+        import win32process
+        import win32con
+        HAS_WIN32 = True
+        # Thread priority constants
+        THREAD_PRIORITY_IDLE = win32process.THREAD_PRIORITY_IDLE
+        THREAD_PRIORITY_BELOW_NORMAL = win32process.THREAD_PRIORITY_BELOW_NORMAL
+        THREAD_PRIORITY_ABOVE_NORMAL = win32process.THREAD_PRIORITY_ABOVE_NORMAL
+        THREAD_PRIORITY_HIGHEST = win32process.THREAD_PRIORITY_HIGHEST
+    except ImportError:
+        HAS_WIN32 = False
+        THREAD_PRIORITY_IDLE = THREAD_PRIORITY_BELOW_NORMAL = 0
+        THREAD_PRIORITY_ABOVE_NORMAL = THREAD_PRIORITY_HIGHEST = 0
+else:
+    HAS_WIN32 = False
+    THREAD_PRIORITY_IDLE = THREAD_PRIORITY_BELOW_NORMAL = 0
+    THREAD_PRIORITY_ABOVE_NORMAL = THREAD_PRIORITY_HIGHEST = 0
 
 # Parameters
 
 MAX_EVENT_AGE = 2.0  # seconds
-VOLUME_SEND_DELAY = 0.08  # 80ms between volume commands (allows ~12/sec)
+# VOLUME_SEND_DELAY = 0.08  # 80ms - reserved for future rate limiting if needed
 SEND_DELAY = 0  # seconds for non-volume commands
 RETRY_DELAY = 2.0  # seconds
 
@@ -158,6 +176,20 @@ class GlmController:
                 return self._pending_volume
             return self.volume
 
+    def get_volume_if_valid(self) -> Optional[int]:
+        """
+        Atomically check if volume is initialized and return effective volume.
+
+        Returns effective volume (pending or confirmed) if initialized, None otherwise.
+        This combines has_valid_volume + get_effective_volume in a single lock acquisition.
+        """
+        with self._lock:
+            if not self._volume_initialized:
+                return None
+            if self._pending_volume is not None:
+                return self._pending_volume
+            return self.volume
+
     def set_pending_volume(self, target: int):
         """Set the pending volume after sending a command."""
         with self._lock:
@@ -185,15 +217,6 @@ class GlmController:
                     self.dim = new_dim
                     return True
             return False
-
-    def wait_for_volume_change(self, timeout: float = 0.15) -> bool:
-        """Wait for GLM to confirm volume change. Returns True if confirmed."""
-        # Note: Event should be cleared BEFORE sending the command (by caller)
-        return self._volume_changed.wait(timeout)
-
-    def clear_volume_change_event(self):
-        """Clear the volume change event before sending a command."""
-        self._volume_changed.clear()
 
     def get_state(self) -> dict:
         """Get current state as a dictionary (for future REST API)."""
@@ -321,7 +344,7 @@ def parse_arguments():
     parser.add_argument("--click_times", type=validate_click_times, default=(0.2, 0.15),
                         help="Comma-separated values for MIN_CLICK_TIME and MAX_AVG_CLICK_TIME. "
                              "MIN_CLICK_TIME must be > 0.01 and < 1, and MAX_AVG_CLICK_TIME must be <= MIN_CLICK_TIME. "
-                             "Default is '0.2,0.18'.")
+                             "Default is '0.2,0.15'.")
     
     parser.add_argument("--volume_increases_list", type=validate_volume_increases, default=[1, 1, 2, 2, 3],
                         help="List of volume increases. Must be between 2 and 15 integers, each >=1 and <=10. Default is [1, 1, 2, 2, 3].")
@@ -361,14 +384,14 @@ def set_higher_priority():
         print(f"Failed to set higher priority: {e}")
 
 def set_current_thread_priority(priority_level):
-    """Set the priority of the current thread."""
+    """Set the priority of the current thread (Windows only)."""
+    if not HAS_WIN32:
+        return  # Skip on non-Windows platforms
+
+    thread_name = threading.current_thread().name
+    thread_id = threading.get_ident()
     try:
-        # Get the current thread handle
         thread_handle = ctypes.windll.kernel32.GetCurrentThread()
-        # Get the thread's name and ID
-        thread_name = threading.current_thread().name
-        thread_id = threading.get_ident()
-        # Set the thread priority
         success = win32process.SetThreadPriority(thread_handle, priority_level)
         if not success:
             last_error = ctypes.windll.kernel32.GetLastError()
@@ -423,7 +446,7 @@ def setup_logging(log_level, log_file_name, max_bytes=4*1024*1024, backup_count=
         # logger.info(f">----- Starting {os.path.basename(__file__)} agent. Logger setup complete. Initializing application...")
 
         # Lower thread priority
-        set_current_thread_priority(win32process.THREAD_PRIORITY_IDLE)
+        set_current_thread_priority(THREAD_PRIORITY_IDLE)
 
         stop_event.wait()
         listener.stop()
@@ -485,27 +508,51 @@ class HIDToMIDIDaemon:
         self.midi_out_channel = midi_out_channel
         self.vid = VID
         self.pid = PID
-        self.midi_output = None  # Shared MIDI output for sending to GLM
+        self._midi_output = None  # Shared MIDI output for sending to GLM
+        self._midi_output_lock = threading.Lock()  # Protects _midi_output access
         self.midi_input = None   # MIDI input for reading GLM state
+        self.hid_device = None   # HID device handle for cleanup
         self.startup_volume = startup_volume  # Optional startup volume (0-127)
+
+    def _get_midi_output(self):
+        """Get connected MIDI output, reconnecting if necessary. Thread-safe."""
+        with self._midi_output_lock:
+            if self._midi_output is None:
+                try:
+                    self._midi_output = open_output(self.midi_in_channel)
+                    logger.info(f"Connected to MIDI channel '{self.midi_in_channel}'.")
+                except Exception as e:
+                    logger.warning(f"Failed to connect to MIDI channel: {e}")
+                    return None
+            return self._midi_output
+
+    def _reset_midi_output(self):
+        """Reset MIDI output connection (call after send error). Thread-safe."""
+        with self._midi_output_lock:
+            if self._midi_output:
+                try:
+                    self._midi_output.close()
+                except Exception:
+                    pass
+            self._midi_output = None
 
     def hid_reader(self):
         """Reads events from the HID device and puts them in the queue."""
-        set_current_thread_priority(win32process.THREAD_PRIORITY_HIGHEST)
-        device = None
+        set_current_thread_priority(THREAD_PRIORITY_HIGHEST)
         while self.running:
-            if device is None:
+            if self.hid_device is None:
                 try:
-                    device = hid.device()
-                    device.open(self.vid, self.pid)
+                    self.hid_device = hid.device()
+                    self.hid_device.open(self.vid, self.pid)
                     logger.info(f"Connected to HID device VID: {hex(self.vid)} PID: {hex(self.pid)}.")
                 except Exception as e:
                     logger.warning(f"Failed to open HID device: {e}. Retrying...")
+                    self.hid_device = None
                     time.sleep(RETRY_DELAY)
                     continue
 
             try:
-                report = device.read(3, timeout_ms=1000)
+                report = self.hid_device.read(3, timeout_ms=1000)
                 if report:
                     keyreported = report[0]
                     if keyreported == 0:
@@ -516,14 +563,17 @@ class HIDToMIDIDaemon:
                     logger.debug(f"HID: delta={self.volume_knob.delta_time*1000:.0f}ms, dist={distance}, key={KEY_NAMES.get(keyreported, keyreported)} {'(*)' if self.volume_knob.count == 1 else ''}")
             except Exception as e:
                 logger.warning(f"HID device error: {e}. Reconnecting...")
-                if device:
-                    device.close()
-                device = None
+                if self.hid_device:
+                    try:
+                        self.hid_device.close()
+                    except Exception:
+                        pass
+                self.hid_device = None
                 time.sleep(RETRY_DELAY)
 
     def midi_reader(self):
         """Reads MIDI messages from GLMOUT and updates GLM state."""
-        set_current_thread_priority(win32process.THREAD_PRIORITY_BELOW_NORMAL)
+        set_current_thread_priority(THREAD_PRIORITY_BELOW_NORMAL)
 
         while self.running:
             try:
@@ -554,16 +604,11 @@ class HIDToMIDIDaemon:
 
     def consumer(self):
         """Processes events from the queue and sends MIDI messages."""
-        set_current_thread_priority(win32process.THREAD_PRIORITY_ABOVE_NORMAL)
+        set_current_thread_priority(THREAD_PRIORITY_ABOVE_NORMAL)
 
-        # Connect to MIDI output
-        while self.midi_output is None and self.running:
-            try:
-                self.midi_output = open_output(self.midi_in_channel)
-                logger.info(f"Connected to MIDI input channel '{self.midi_in_channel}' for sending commands.")
-            except Exception as e:
-                logger.warning(f"Failed to open MIDI input channel '{self.midi_in_channel}': {e}. Retrying...")
-                time.sleep(RETRY_DELAY)
+        # Wait for initial MIDI connection
+        while self._get_midi_output() is None and self.running:
+            time.sleep(RETRY_DELAY)
 
         while True:
             event = self.queue.get()
@@ -603,15 +648,16 @@ class HIDToMIDIDaemon:
 
     def _send_action(self, action: Action):
         """Send an action to GLM using the controller."""
-        try:
-            if self.midi_output is None:
-                logger.warning("MIDI output not connected. Reconnecting...")
-                self.midi_output = open_output(self.midi_in_channel)
+        midi_out = self._get_midi_output()
+        if midi_out is None:
+            logger.warning("MIDI output not connected, skipping action.")
+            return
 
-            glm_controller.send_action(action, self.midi_output)
+        try:
+            glm_controller.send_action(action, midi_out)
         except Exception as e:
             logger.error(f"Error sending MIDI message: {e}")
-            self.midi_output = None  # Force reconnect
+            self._reset_midi_output()
 
     def _handle_volume_action(self, action: Action, distance: int):
         """
@@ -622,15 +668,17 @@ class HIDToMIDIDaemon:
 
         If volume is not yet initialized, fall back to single CC 21/22.
         """
-        try:
-            if self.midi_output is None:
-                logger.warning("MIDI output not connected. Reconnecting...")
-                self.midi_output = open_output(self.midi_in_channel)
+        midi_out = self._get_midi_output()
+        if midi_out is None:
+            logger.warning("MIDI output not connected, skipping volume action.")
+            return
 
-            if glm_controller.has_valid_volume:
+        try:
+            # Atomically check if volume is initialized and get effective volume
+            current = glm_controller.get_volume_if_valid()
+            if current is not None:
                 # Calculate target volume based on effective volume (pending or confirmed)
                 # This allows consecutive commands to accumulate before GLM confirms
-                current = glm_controller.get_effective_volume()
                 if action == Action.VOL_UP:
                     target = min(127, current + distance)
                 else:  # VOL_DOWN
@@ -639,16 +687,16 @@ class HIDToMIDIDaemon:
                 if target != current:
                     logger.debug(f"Volume: {current} -> {target} (delta={'+' if action == Action.VOL_UP else '-'}{distance}, CC 20)")
                     glm_controller.set_pending_volume(target)
-                    glm_controller.send_volume_absolute(target, self.midi_output)
+                    glm_controller.send_volume_absolute(target, midi_out)
                 else:
                     logger.debug(f"Volume already at limit ({current}), ignoring {action.value}")
             else:
                 # Volume not initialized yet - use CC 21/22 to trigger GLM state report
                 logger.debug(f"Volume not initialized, using {action.value} (CC 21/22) to trigger state")
-                glm_controller.send_action(action, self.midi_output)
+                glm_controller.send_action(action, midi_out)
         except Exception as e:
             logger.error(f"Error handling volume action: {e}")
-            self.midi_output = None
+            self._reset_midi_output()
 
     def _initialize_glm_volume(self):
         """
@@ -659,14 +707,15 @@ class HIDToMIDIDaemon:
 
         This must be called AFTER midi_reader is started so we can receive the response.
         """
-        # Connect to MIDI output if needed
-        while self.midi_output is None and self.running:
-            try:
-                self.midi_output = open_output(self.midi_in_channel)
-                logger.info(f"Connected to MIDI channel '{self.midi_in_channel}' for initialization.")
-            except Exception as e:
-                logger.warning(f"Failed to open MIDI channel for initialization: {e}. Retrying...")
+        # Wait for MIDI output connection
+        midi_out = None
+        while midi_out is None and self.running:
+            midi_out = self._get_midi_output()
+            if midi_out is None:
                 time.sleep(RETRY_DELAY)
+
+        if midi_out is None:
+            return  # Shutting down
 
         # Wait a moment for MIDI reader to connect and be ready
         time.sleep(0.5)
@@ -674,13 +723,13 @@ class HIDToMIDIDaemon:
         if self.startup_volume is not None:
             # Set volume to specified value
             logger.info(f"Setting startup volume to {self.startup_volume}")
-            glm_controller.send_volume_absolute(self.startup_volume, self.midi_output)
+            glm_controller.send_volume_absolute(self.startup_volume, midi_out)
         else:
             # Query current volume by sending vol+1 then vol-1
             logger.info("Querying current GLM volume (sending vol+1, vol-1)...")
-            glm_controller.send_action(Action.VOL_UP, self.midi_output)
+            glm_controller.send_action(Action.VOL_UP, midi_out)
             time.sleep(0.1)
-            glm_controller.send_action(Action.VOL_DOWN, self.midi_output)
+            glm_controller.send_action(Action.VOL_DOWN, midi_out)
 
         # Wait for GLM to respond with volume state
         time.sleep(0.3)
@@ -706,12 +755,27 @@ class HIDToMIDIDaemon:
         logger.info("Stopping daemon...")
         self.running = False
         self.queue.put(None)  # Sentinel to unblock the consumer
+
         # Close MIDI input to unblock the blocking read
         if self.midi_input:
             try:
                 self.midi_input.close()
             except Exception:
                 pass
+
+        # Close HID device
+        if self.hid_device:
+            try:
+                self.hid_device.close()
+                logger.debug("HID device closed.")
+            except Exception:
+                pass
+            self.hid_device = None
+
+        # Close MIDI output
+        self._reset_midi_output()
+
+        # Wait for threads to finish
         self.hid_reader_thread.join(timeout=2.0)
         self.midi_reader_thread.join(timeout=2.0)
         self.consumer_thread.join(timeout=2.0)
