@@ -135,13 +135,21 @@ class GlmController:
         self.mute: bool = False    # from CC 23
         self.dim: bool = False     # from CC 24
         self.power: bool = True    # tracked locally (no MIDI feedback from GLM)
+        self._volume_initialized = False  # True once we've received volume from GLM
         self._lock = threading.Lock()
         self._volume_changed = threading.Event()
+
+    @property
+    def has_valid_volume(self) -> bool:
+        """Check if we have received a valid volume reading from GLM."""
+        with self._lock:
+            return self._volume_initialized
 
     def update_from_midi(self, cc: int, value: int) -> bool:
         """Update state from MIDI message. Returns True if state changed."""
         with self._lock:
             if cc == GLM_VOLUME_ABS:
+                self._volume_initialized = True
                 if self.volume != value:
                     self.volume = value
                     self._volume_changed.set()  # Signal volume change
@@ -176,6 +184,19 @@ class GlmController:
                 "dim": self.dim,
                 "power": self.power,
             }
+
+    def send_volume_absolute(self, target: int, midi_output) -> bool:
+        """
+        Send absolute volume command to GLM via CC 20.
+        Target is clamped to 0-127 range.
+        Returns True if message was sent.
+        """
+        target = max(0, min(127, target))
+        try:
+            midi_output.send(Message('control_change', control=GLM_VOLUME_ABS, value=target))
+            return True
+        except Exception:
+            return False
 
     def send_action(self, action: Action, midi_output, explicit_state: Optional[bool] = None) -> bool:
         """
@@ -296,6 +317,10 @@ def parse_arguments():
 
     parser.add_argument("--midi_out_channel", type=str, default="GLMOUT 1",
                         help="MIDI output channel name (to receive state FROM GLM). Default is 'GLMOUT 1'.")
+
+    parser.add_argument("--startup_volume", type=int, default=None, choices=range(0, 128), metavar="0-127",
+                        help="Optional startup volume (0-127). If set, GLM volume will be set to this value on startup. "
+                             "79 corresponds to -46dB in GLM. If not set, script will query current volume.")
 
     # Parse arguments
     args = parser.parse_args()
@@ -429,7 +454,7 @@ class AccelerationHandler:
 
 class HIDToMIDIDaemon:
     def __init__(self, min_click_time, max_avg_click_time, volume_increases_list,
-                 VID, PID, midi_in_channel, midi_out_channel):
+                 VID, PID, midi_in_channel, midi_out_channel, startup_volume=None):
         self.queue = queue.Queue()
         self.running = True
         self.hid_reader_thread = threading.Thread(target=self.hid_reader, daemon=True, name="HIDReaderThread")
@@ -442,6 +467,7 @@ class HIDToMIDIDaemon:
         self.pid = PID
         self.midi_output = None  # Shared MIDI output for sending to GLM
         self.midi_input = None   # MIDI input for reading GLM state
+        self.startup_volume = startup_volume  # Optional startup volume (0-127)
 
     def hid_reader(self):
         """Reads events from the HID device and puts them in the queue."""
@@ -541,21 +567,19 @@ class HIDToMIDIDaemon:
                 logger.debug(f"No binding for key {button}")
                 continue
 
-            # Get GLM control info for logging
-            glm_ctrl = ACTION_TO_GLM.get(action)
-            if glm_ctrl:
-                logger.debug(f"Sending {action.value} (CC {glm_ctrl.cc}) x{distance}")
-
-                for _ in range(distance):
-                    self._send_action(action)
-                    # Volume commands need delay to let GLM process
-                    if action in (Action.VOL_UP, Action.VOL_DOWN):
-                        time.sleep(VOLUME_SEND_DELAY)
-                    else:
-                        time.sleep(SEND_DELAY)
+            # Handle volume actions specially - use absolute volume if we have valid state
+            if action in (Action.VOL_UP, Action.VOL_DOWN):
+                self._handle_volume_action(action, distance)
             else:
-                # Non-GLM action (future: route to other apps)
-                logger.debug(f"Action {action.value} has no GLM mapping (yet)")
+                # Get GLM control info for logging
+                glm_ctrl = ACTION_TO_GLM.get(action)
+                if glm_ctrl:
+                    logger.debug(f"Sending {action.value} (CC {glm_ctrl.cc})")
+                    self._send_action(action)
+                    time.sleep(SEND_DELAY)
+                else:
+                    # Non-GLM action (future: route to other apps)
+                    logger.debug(f"Action {action.value} has no GLM mapping (yet)")
 
     def _send_action(self, action: Action):
         """Send an action to GLM using the controller."""
@@ -569,10 +593,90 @@ class HIDToMIDIDaemon:
             logger.error(f"Error sending MIDI message: {e}")
             self.midi_output = None  # Force reconnect
 
+    def _handle_volume_action(self, action: Action, distance: int):
+        """
+        Handle volume changes using absolute volume (CC 20) when possible.
+
+        If we have a valid volume reading from GLM, calculate target and send
+        one absolute command. This avoids GLM dropping rapid increment commands.
+
+        If volume is not yet initialized, fall back to single CC 21/22.
+        """
+        try:
+            if self.midi_output is None:
+                logger.warning("MIDI output not connected. Reconnecting...")
+                self.midi_output = open_output(self.midi_in_channel)
+
+            if glm_controller.has_valid_volume:
+                # Calculate target volume based on current state
+                current = glm_controller.volume
+                if action == Action.VOL_UP:
+                    target = min(127, current + distance)
+                else:  # VOL_DOWN
+                    target = max(0, current - distance)
+
+                if target != current:
+                    logger.debug(f"Volume: {current} -> {target} (delta={'+' if action == Action.VOL_UP else '-'}{distance}, CC 20)")
+                    glm_controller.send_volume_absolute(target, self.midi_output)
+                else:
+                    logger.debug(f"Volume already at limit ({current}), ignoring {action.value}")
+            else:
+                # Volume not initialized yet - use CC 21/22 to trigger GLM state report
+                logger.debug(f"Volume not initialized, using {action.value} (CC 21/22) to trigger state")
+                glm_controller.send_action(action, self.midi_output)
+        except Exception as e:
+            logger.error(f"Error handling volume action: {e}")
+            self.midi_output = None
+
+    def _initialize_glm_volume(self):
+        """
+        Initialize GLM volume state on startup.
+
+        If startup_volume is set, send that absolute volume to GLM.
+        Otherwise, send vol+1 then vol-1 to trigger GLM to report its current volume.
+
+        This must be called AFTER midi_reader is started so we can receive the response.
+        """
+        # Connect to MIDI output if needed
+        while self.midi_output is None and self.running:
+            try:
+                self.midi_output = open_output(self.midi_in_channel)
+                logger.info(f"Connected to MIDI channel '{self.midi_in_channel}' for initialization.")
+            except Exception as e:
+                logger.warning(f"Failed to open MIDI channel for initialization: {e}. Retrying...")
+                time.sleep(RETRY_DELAY)
+
+        # Wait a moment for MIDI reader to connect and be ready
+        time.sleep(0.5)
+
+        if self.startup_volume is not None:
+            # Set volume to specified value
+            logger.info(f"Setting startup volume to {self.startup_volume}")
+            glm_controller.send_volume_absolute(self.startup_volume, self.midi_output)
+        else:
+            # Query current volume by sending vol+1 then vol-1
+            logger.info("Querying current GLM volume (sending vol+1, vol-1)...")
+            glm_controller.send_action(Action.VOL_UP, self.midi_output)
+            time.sleep(0.1)
+            glm_controller.send_action(Action.VOL_DOWN, self.midi_output)
+
+        # Wait for GLM to respond with volume state
+        time.sleep(0.3)
+        if glm_controller.has_valid_volume:
+            logger.info(f"GLM volume initialized: {glm_controller.volume}")
+        else:
+            logger.warning("GLM volume state not yet received. Will initialize on first volume command.")
+
     def start(self):
         """Starts all threads."""
-        self.hid_reader_thread.start()
+        # Start MIDI reader first so we can receive GLM responses
         self.midi_reader_thread.start()
+
+        # Initialize GLM volume state
+        self._initialize_glm_volume()
+
+        # Start remaining threads
+        self.hid_reader_thread.start()
         self.consumer_thread.start()
 
     def stop(self):
@@ -603,6 +707,10 @@ if __name__ == "__main__":
     logger.info(f"     MIDI IN (to GLM): {args.midi_in_channel}")
     logger.info(f"     MIDI OUT (from GLM): {args.midi_out_channel}")
     logger.info(f"     HID Device: VID={hex(args.vid)}, PID={hex(args.pid)}")
+    if args.startup_volume is not None:
+        logger.info(f"     Startup volume: {args.startup_volume}")
+    else:
+        logger.info(f"     Startup volume: (query current)")
     logger.info(f"<--- End configuration")
 
     set_higher_priority()
@@ -615,7 +723,8 @@ if __name__ == "__main__":
         args.vid,
         args.pid,
         args.midi_in_channel,
-        args.midi_out_channel
+        args.midi_out_channel,
+        args.startup_volume
     )
     signal.signal(signal.SIGINT, lambda sig, frame: signal_handler(sig, frame, daemon))
     daemon.start()
