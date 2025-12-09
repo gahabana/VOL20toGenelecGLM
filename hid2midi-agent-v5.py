@@ -131,7 +131,8 @@ class GlmController:
     """Tracks GLM state and provides smart control methods."""
 
     def __init__(self):
-        self.volume: int = 0       # 0-127, from CC 20
+        self.volume: int = 0       # 0-127, confirmed from GLM via CC 20
+        self._pending_volume: Optional[int] = None  # What we've sent but GLM hasn't confirmed yet
         self.mute: bool = False    # from CC 23
         self.dim: bool = False     # from CC 24
         self.power: bool = True    # tracked locally (no MIDI feedback from GLM)
@@ -145,11 +146,30 @@ class GlmController:
         with self._lock:
             return self._volume_initialized
 
+    def get_effective_volume(self) -> int:
+        """
+        Get the effective volume for calculating new targets.
+
+        Returns pending volume if we've sent a command that GLM hasn't confirmed yet,
+        otherwise returns the last confirmed volume from GLM.
+        """
+        with self._lock:
+            if self._pending_volume is not None:
+                return self._pending_volume
+            return self.volume
+
+    def set_pending_volume(self, target: int):
+        """Set the pending volume after sending a command."""
+        with self._lock:
+            self._pending_volume = target
+
     def update_from_midi(self, cc: int, value: int) -> bool:
         """Update state from MIDI message. Returns True if state changed."""
         with self._lock:
             if cc == GLM_VOLUME_ABS:
                 self._volume_initialized = True
+                # Sync pending volume to GLM's confirmed value (GLM is source of truth)
+                self._pending_volume = value
                 if self.volume != value:
                     self.volume = value
                     self._volume_changed.set()  # Signal volume change
@@ -608,8 +628,9 @@ class HIDToMIDIDaemon:
                 self.midi_output = open_output(self.midi_in_channel)
 
             if glm_controller.has_valid_volume:
-                # Calculate target volume based on current state
-                current = glm_controller.volume
+                # Calculate target volume based on effective volume (pending or confirmed)
+                # This allows consecutive commands to accumulate before GLM confirms
+                current = glm_controller.get_effective_volume()
                 if action == Action.VOL_UP:
                     target = min(127, current + distance)
                 else:  # VOL_DOWN
@@ -617,6 +638,7 @@ class HIDToMIDIDaemon:
 
                 if target != current:
                     logger.debug(f"Volume: {current} -> {target} (delta={'+' if action == Action.VOL_UP else '-'}{distance}, CC 20)")
+                    glm_controller.set_pending_volume(target)
                     glm_controller.send_volume_absolute(target, self.midi_output)
                 else:
                     logger.debug(f"Volume already at limit ({current}), ignoring {action.value}")
