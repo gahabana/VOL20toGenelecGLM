@@ -323,8 +323,9 @@ class GlmController:
         with self._lock:
             if cc == GLM_VOLUME_ABS:
                 self._volume_initialized = True
-                # Don't update _pending_volume here - let it track user intent
-                # Only update confirmed volume from GLM
+                # Clear pending and trust GLM's reported value as source of truth.
+                # This ensures we respect GLM's volume limits (e.g., max volume cap).
+                self._pending_volume = None
                 if self.volume != value:
                     self.volume = value
                     return True
