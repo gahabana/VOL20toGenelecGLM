@@ -504,9 +504,9 @@ class HIDToMIDIDaemon:
                  VID, PID, midi_in_channel, midi_out_channel, startup_volume=None):
         self.queue = queue.Queue(maxsize=QUEUE_MAX_SIZE)
         self._stop_event = threading.Event()
-        self.hid_reader_thread = threading.Thread(target=self.hid_reader, daemon=False, name="HIDReaderThread")
-        self.midi_reader_thread = threading.Thread(target=self.midi_reader, daemon=False, name="MIDIReaderThread")
-        self.consumer_thread = threading.Thread(target=self.consumer, daemon=False, name="ConsumerThread")
+        self.hid_reader_thread = threading.Thread(target=self.hid_reader, daemon=True, name="HIDReaderThread")
+        self.midi_reader_thread = threading.Thread(target=self.midi_reader, daemon=True, name="MIDIReaderThread")
+        self.consumer_thread = threading.Thread(target=self.consumer, daemon=True, name="ConsumerThread")
         self.volume_knob = AccelerationHandler(min_click_time, max_avg_click_time, volume_increases_list)
         self.midi_in_channel = midi_in_channel
         self.midi_out_channel = midi_out_channel
@@ -780,19 +780,9 @@ class HIDToMIDIDaemon:
         # Close MIDI output
         self._reset_midi_output()
 
-        # Wait for threads to finish with timeout
-        threads = [
-            ("HID reader", self.hid_reader_thread),
-            ("MIDI reader", self.midi_reader_thread),
-            ("Consumer", self.consumer_thread)
-        ]
-
-        for name, thread in threads:
-            thread.join(timeout=2.0)
-            if thread.is_alive():
-                logger.warning(f"{name} thread did not exit cleanly, forcing daemon mode")
-                # Last resort: make it daemon so Python can exit
-                thread.daemon = True
+        # Give threads a moment to exit cleanly (they're daemon threads)
+        # This allows graceful shutdown but doesn't block if they're stuck
+        time.sleep(0.1)
 
         logger.info("Daemon stopped.")
 
