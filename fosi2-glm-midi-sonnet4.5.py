@@ -45,6 +45,129 @@ RETRY_DELAY = 2.0  # seconds
 HID_READ_TIMEOUT_MS = 200  # milliseconds - responsive shutdown
 QUEUE_MAX_SIZE = 100  # Maximum queued events before backpressure
 
+# Smart retry logging intervals (exponential backoff for log messages, not retries)
+# Format: list of seconds between log messages, last value repeats indefinitely
+RETRY_LOG_INTERVALS = [2, 10, 60, 600, 3600, 86400]  # 2s, 10s, 1min, 10min, 1hr, 1day
+
+
+# ==============================================================================
+# SMART RETRY LOGGER - Exponential backoff for log messages during retries
+# ==============================================================================
+
+class SmartRetryLogger:
+    """
+    Manages smart logging during retry loops with exponential backoff.
+
+    Retries continue at their normal frequency (RETRY_DELAY), but log messages
+    are throttled using exponential backoff intervals to avoid log spam.
+
+    Example intervals: 2s → 10s → 1min → 10min → 1hour → 1day
+    """
+
+    def __init__(self, intervals: list = None):
+        """
+        Initialize the smart retry logger.
+
+        Args:
+            intervals: List of seconds between log messages.
+                      Last value repeats indefinitely.
+                      Defaults to RETRY_LOG_INTERVALS.
+        """
+        self.intervals = intervals or RETRY_LOG_INTERVALS
+        self._trackers: Dict[str, dict] = {}
+        self._lock = threading.Lock()
+
+    def should_log(self, key: str) -> bool:
+        """
+        Check if we should log a retry message for the given key.
+
+        Args:
+            key: Unique identifier for this retry context (e.g., "hid_connect", "midi_reader")
+
+        Returns:
+            True if enough time has passed since the last log, False otherwise.
+        """
+        now = time.time()
+
+        with self._lock:
+            if key not in self._trackers:
+                # First attempt - always log
+                self._trackers[key] = {
+                    'last_log_time': now,
+                    'interval_index': 0,
+                    'retry_count': 1
+                }
+                return True
+
+            tracker = self._trackers[key]
+            tracker['retry_count'] += 1
+
+            # Get current interval (use last value if we've exceeded the list)
+            idx = min(tracker['interval_index'], len(self.intervals) - 1)
+            current_interval = self.intervals[idx]
+
+            elapsed = now - tracker['last_log_time']
+
+            if elapsed >= current_interval:
+                # Time to log - update tracker
+                tracker['last_log_time'] = now
+                tracker['interval_index'] += 1
+                return True
+
+            return False
+
+    def get_retry_count(self, key: str) -> int:
+        """Get the current retry count for a key."""
+        with self._lock:
+            if key in self._trackers:
+                return self._trackers[key]['retry_count']
+            return 0
+
+    def reset(self, key: str):
+        """
+        Reset the tracker for a key (call when connection succeeds).
+
+        Args:
+            key: The retry context key to reset.
+        """
+        with self._lock:
+            if key in self._trackers:
+                del self._trackers[key]
+
+    def format_retry_info(self, key: str) -> str:
+        """
+        Format retry information for logging.
+
+        Returns a string like "(retry #5)" or "(retry #100, logging every 1h)"
+        """
+        with self._lock:
+            if key not in self._trackers:
+                return ""
+
+            tracker = self._trackers[key]
+            count = tracker['retry_count']
+            idx = min(tracker['interval_index'], len(self.intervals) - 1)
+            interval = self.intervals[idx]
+
+            # Format interval nicely
+            if interval < 60:
+                interval_str = f"{interval}s"
+            elif interval < 3600:
+                interval_str = f"{interval // 60}m"
+            elif interval < 86400:
+                interval_str = f"{interval // 3600}h"
+            else:
+                interval_str = f"{interval // 86400}d"
+
+            if idx > 0:
+                return f"(retry #{count}, next log in ~{interval_str})"
+            else:
+                return f"(retry #{count})"
+
+
+# Global smart retry logger instance
+retry_logger = SmartRetryLogger()
+
 # GLM volume initialization timing
 GLM_INIT_WAIT = 0.5  # seconds - wait for MIDI reader to connect
 GLM_VOL_QUERY_DELAY = 0.1  # seconds - delay between vol+1 and vol-1
@@ -526,8 +649,11 @@ class HIDToMIDIDaemon:
                 try:
                     self._midi_output = open_output(self.midi_in_channel)
                     logger.info(f"Connected to MIDI channel '{self.midi_in_channel}'.")
+                    retry_logger.reset("midi_output")  # Reset on successful connection
                 except (OSError, IOError) as e:
-                    logger.warning(f"Failed to connect to MIDI channel: {e}")
+                    if retry_logger.should_log("midi_output"):
+                        info = retry_logger.format_retry_info("midi_output")
+                        logger.warning(f"Failed to connect to MIDI channel '{self.midi_in_channel}': {e} {info}")
                     return None
             return self._midi_output
 
@@ -550,8 +676,11 @@ class HIDToMIDIDaemon:
                     self.hid_device = hid.device()
                     self.hid_device.open(self.vid, self.pid)
                     logger.info(f"Connected to HID device VID: {hex(self.vid)} PID: {hex(self.pid)}.")
+                    retry_logger.reset("hid_connect")  # Reset on successful connection
                 except (OSError, IOError) as e:
-                    logger.warning(f"Failed to open HID device: {e}. Retrying...")
+                    if retry_logger.should_log("hid_connect"):
+                        info = retry_logger.format_retry_info("hid_connect")
+                        logger.warning(f"Failed to open HID device: {e}. Retrying... {info}")
                     self.hid_device = None
                     time.sleep(RETRY_DELAY)
                     continue
@@ -567,13 +696,16 @@ class HIDToMIDIDaemon:
                     self.queue.put({'timestamp': now, 'key': keyreported, 'distance': distance})
                     logger.debug(f"HID: delta={self.volume_knob.delta_time*1000:.0f}ms, dist={distance}, key={KEY_NAMES.get(keyreported, keyreported)} {'(*)' if self.volume_knob.count == 1 else ''}")
             except (OSError, IOError) as e:
-                logger.warning(f"HID device error: {e}. Reconnecting...")
+                if retry_logger.should_log("hid_error"):
+                    info = retry_logger.format_retry_info("hid_error")
+                    logger.warning(f"HID device error: {e}. Reconnecting... {info}")
                 if self.hid_device:
                     try:
                         self.hid_device.close()
                     except (OSError, IOError):
                         logger.debug("Error closing HID device during reconnect")
                 self.hid_device = None
+                retry_logger.reset("hid_connect")  # Reset connect tracker since we need to reconnect
                 time.sleep(RETRY_DELAY)
 
     def midi_reader(self):
@@ -584,6 +716,7 @@ class HIDToMIDIDaemon:
             try:
                 self.midi_input = open_input(self.midi_out_channel)
                 logger.info(f"Connected to MIDI output channel '{self.midi_out_channel}' for state reading.")
+                retry_logger.reset("midi_reader")  # Reset on successful connection
 
                 # Blocking iteration - waits for messages, no polling
                 for msg in self.midi_input:
@@ -597,7 +730,9 @@ class HIDToMIDIDaemon:
 
             except (OSError, IOError) as e:
                 if not self._stop_event.is_set():  # Only log if not shutting down
-                    logger.warning(f"MIDI reader error: {e}. Reconnecting...")
+                    if retry_logger.should_log("midi_reader"):
+                        info = retry_logger.format_retry_info("midi_reader")
+                        logger.warning(f"MIDI reader error: {e}. Reconnecting... {info}")
                     time.sleep(RETRY_DELAY)
             finally:
                 if self.midi_input:
