@@ -711,7 +711,7 @@ class HIDToMIDIDaemon:
 
     def midi_reader(self):
         """Reads MIDI messages from GLMOUT and updates GLM state."""
-        set_current_thread_priority(THREAD_PRIORITY_BELOW_NORMAL)
+        set_current_thread_priority(THREAD_PRIORITY_ABOVE_NORMAL)  # Match consumer for balanced send/receive
 
         while not self._stop_event.is_set():
             try:
