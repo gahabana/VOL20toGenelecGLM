@@ -458,10 +458,11 @@ def setup_logging(log_level, log_file_name, max_bytes=4*1024*1024, backup_count=
 
     return stop_logging
 
-def signal_handler(sig, frame, daemon):
+def signal_handler(sig, frame, daemon, stop_logging_func):
     """Handles SIGINT and shuts down the daemon."""
     logger.info("SIGINT received, shutting down...")
     daemon.stop()
+    stop_logging_func()
     sys.exit(0)
 
 class AccelerationHandler:
@@ -779,10 +780,20 @@ class HIDToMIDIDaemon:
         # Close MIDI output
         self._reset_midi_output()
 
-        # Wait for threads to finish
-        self.hid_reader_thread.join(timeout=2.0)
-        self.midi_reader_thread.join(timeout=2.0)
-        self.consumer_thread.join(timeout=2.0)
+        # Wait for threads to finish with timeout
+        threads = [
+            ("HID reader", self.hid_reader_thread),
+            ("MIDI reader", self.midi_reader_thread),
+            ("Consumer", self.consumer_thread)
+        ]
+
+        for name, thread in threads:
+            thread.join(timeout=2.0)
+            if thread.is_alive():
+                logger.warning(f"{name} thread did not exit cleanly, forcing daemon mode")
+                # Last resort: make it daemon so Python can exit
+                thread.daemon = True
+
         logger.info("Daemon stopped.")
 
 if __name__ == "__main__":
@@ -816,13 +827,13 @@ if __name__ == "__main__":
         args.midi_out_channel,
         args.startup_volume
     )
-    signal.signal(signal.SIGINT, lambda sig, frame: signal_handler(sig, frame, daemon))
+    signal.signal(signal.SIGINT, lambda sig, frame: signal_handler(sig, frame, daemon, stop_logging))
     daemon.start()
 
     try:
         while True:
             time.sleep(3)  # Keep the main thread alive
     except KeyboardInterrupt:
-        signal_handler(None, None, daemon)
+        signal_handler(None, None, daemon, stop_logging)
     finally:
         stop_logging()
