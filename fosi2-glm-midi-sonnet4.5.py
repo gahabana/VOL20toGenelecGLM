@@ -594,6 +594,7 @@ class AccelerationHandler:
         self.min_click = min_click
         self.max_per_click_avg = max_per_click_avg
         self.volume_increases_list = volume_list
+        self.len = len(volume_list)  # Cache length (list is immutable)
         self.last_button = 0
         self.last_time = 0
         self.first_time = 0
@@ -614,8 +615,8 @@ class AccelerationHandler:
             self.count = 1
             self.first_time = current_time
         else:
-            if self.count < len(self.volume_increases_list):
-                self.distance = self.volume_increases_list[self.count]
+            if self.count <= self.len:  # count 1..len maps to indices 0..len-1
+                self.distance = self.volume_increases_list[self.count - 1]
             else:
                 self.distance = self.volume_increases_list[-1]
             self.count += 1
