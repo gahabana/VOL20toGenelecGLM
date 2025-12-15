@@ -363,15 +363,16 @@
             }
         }
 
-        // Slider events
+        // Slider events - isSliding only true during active dragging
         volumeSlider.addEventListener('input', (e) => {
             isSliding = true;
             volumeValue.textContent = e.target.value;
         });
 
         volumeSlider.addEventListener('change', (e) => {
+            // Release happened - allow updates, then send command
+            isSliding = false;
             setVolume(e.target.value);
-            setTimeout(() => { isSliding = false; }, 100);
         });
 
         // Prevent double-tap zoom on mobile
