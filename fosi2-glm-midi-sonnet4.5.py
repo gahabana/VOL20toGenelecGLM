@@ -44,6 +44,7 @@ else:
 MAX_EVENT_AGE = 2.0  # seconds
 SEND_DELAY = 0  # seconds for non-volume commands
 RETRY_DELAY = 2.0  # seconds
+POWER_COOLDOWN = 8.0  # seconds - minimum time between power commands
 HID_READ_TIMEOUT_MS = 200  # milliseconds - responsive shutdown
 QUEUE_MAX_SIZE = 100  # Maximum queued events before backpressure
 
@@ -312,7 +313,6 @@ class GlmController:
         self._state_callbacks: List[Callable[[dict], None]] = []
         self._last_notified_state: Optional[dict] = None  # Debounce duplicate notifications
         self._last_power_time: float = 0  # Rate limit power commands
-        self._power_cooldown: float = 8.0  # Seconds between power commands
 
     def add_state_callback(self, callback: Callable[[dict], None]):
         """Register a callback to be called when state changes."""
@@ -450,8 +450,8 @@ class GlmController:
         if action == Action.POWER:
             now = time.time()
             time_since_last = now - self._last_power_time
-            if time_since_last < self._power_cooldown:
-                remaining = self._power_cooldown - time_since_last
+            if time_since_last < POWER_COOLDOWN:
+                remaining = POWER_COOLDOWN - time_since_last
                 logger.warning(f"Power cooldown active, ignoring command ({remaining:.1f}s remaining)")
                 return False
             self._last_power_time = now
