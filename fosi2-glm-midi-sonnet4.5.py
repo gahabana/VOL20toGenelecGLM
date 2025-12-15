@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from typing import Dict, Optional, List, Callable
 import hid
 
-from glm_core import AdjustVolume, SetMute, SetDim, SetPower, QueuedAction
+from glm_core import SetVolume, AdjustVolume, SetMute, SetDim, SetPower, QueuedAction
 from mido import Message, open_output, open_input
 import psutil
 import argparse
@@ -546,6 +546,10 @@ def parse_arguments():
                         help="Optional startup volume (0-127). If set, GLM volume will be set to this value on startup. "
                              "79 corresponds to -46dB in GLM. If not set, script will query current volume.")
 
+    # REST API
+    parser.add_argument("--api_port", type=int, default=8080,
+                        help="Port for REST API server. Set to 0 to disable API. Default is 8080.")
+
     # Parse arguments
     args = parser.parse_args()
 
@@ -682,7 +686,7 @@ class AccelerationHandler:
 
 class HIDToMIDIDaemon:
     def __init__(self, min_click_time, max_avg_click_time, volume_increases_list,
-                 VID, PID, midi_in_channel, midi_out_channel, startup_volume=None):
+                 VID, PID, midi_in_channel, midi_out_channel, startup_volume=None, api_port=8080):
         self.queue = queue.Queue(maxsize=QUEUE_MAX_SIZE)
         self._stop_event = threading.Event()
         self.hid_reader_thread = threading.Thread(target=self.hid_reader, daemon=True, name="HIDReaderThread")
@@ -699,6 +703,8 @@ class HIDToMIDIDaemon:
         self.hid_device = None   # HID device handle for cleanup
         self.startup_volume = startup_volume  # Optional startup volume (0-127)
         self.bindings = DEFAULT_BINDINGS.copy()  # Instance-level key bindings
+        self.api_port = api_port  # REST API port (0 = disabled)
+        self.api_thread = None   # API server thread
 
     def _get_midi_output(self):
         """Get connected MIDI output, reconnecting if necessary. Thread-safe."""
@@ -848,7 +854,9 @@ class HIDToMIDIDaemon:
             action = queued.action
 
             # Dispatch based on action type
-            if isinstance(action, AdjustVolume):
+            if isinstance(action, SetVolume):
+                self._handle_set_volume(action.target)
+            elif isinstance(action, AdjustVolume):
                 self._handle_adjust_volume(action.delta)
             elif isinstance(action, SetMute):
                 logger.debug(f"Sending Mute (CC {GLM_MUTE_CC})")
@@ -920,6 +928,27 @@ class HIDToMIDIDaemon:
             logger.error(f"Error handling volume action: {e}")
             self._reset_midi_output()
 
+    def _handle_set_volume(self, target: int):
+        """
+        Handle absolute volume setting (from REST API).
+
+        Args:
+            target: Target volume (0-127).
+        """
+        midi_out = self._get_midi_output()
+        if midi_out is None:
+            logger.warning("MIDI output not connected, skipping volume action.")
+            return
+
+        target = max(0, min(127, target))
+        try:
+            logger.debug(f"Setting volume to {target} (CC 20)")
+            glm_controller.set_pending_volume(target)
+            glm_controller.send_volume_absolute(target, midi_out)
+        except (OSError, IOError) as e:
+            logger.error(f"Error setting volume: {e}")
+            self._reset_midi_output()
+
     def _initialize_glm_volume(self):
         """
         Initialize GLM volume state on startup.
@@ -977,6 +1006,11 @@ class HIDToMIDIDaemon:
         self.hid_reader_thread.start()
         self.consumer_thread.start()
 
+        # Start REST API server if enabled
+        if self.api_port > 0:
+            from api import start_api_server
+            self.api_thread = start_api_server(self.queue, glm_controller, port=self.api_port)
+
     def stop(self):
         """Stops the daemon gracefully."""
         logger.info("Stopping daemon...")
@@ -1024,6 +1058,10 @@ if __name__ == "__main__":
         logger.info(f"     Startup volume: {args.startup_volume}")
     else:
         logger.info(f"     Startup volume: (query current)")
+    if args.api_port > 0:
+        logger.info(f"     REST API: http://0.0.0.0:{args.api_port}")
+    else:
+        logger.info(f"     REST API: disabled")
     logger.info(f"<--- End configuration")
 
     set_higher_priority()
@@ -1037,7 +1075,8 @@ if __name__ == "__main__":
         args.pid,
         args.midi_in_channel,
         args.midi_out_channel,
-        args.startup_volume
+        args.startup_volume,
+        args.api_port
     )
     signal.signal(signal.SIGINT, lambda sig, frame: signal_handler(sig, frame, daemon, stop_logging))
     daemon.start()

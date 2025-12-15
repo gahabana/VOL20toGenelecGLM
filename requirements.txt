@@ -1,0 +1,12 @@
+# Core dependencies (existing)
+hidapi
+mido
+python-rtmidi
+psutil
+
+# REST API (Phase 3)
+fastapi
+uvicorn[standard]
+
+# MQTT/Home Assistant (Phase 5 - install when needed)
+# paho-mqtt
