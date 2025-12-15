@@ -5,13 +5,16 @@ Provides HTTP endpoints for control and WebSocket for real-time state updates.
 """
 import asyncio
 import logging
+import os
 import threading
 import time
+from pathlib import Path
 from typing import Optional, Set
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, FileResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from glm_core import SetVolume, AdjustVolume, SetMute, SetDim, SetPower, QueuedAction
@@ -77,7 +80,7 @@ def create_app(action_queue, glm_controller) -> FastAPI:
         lifespan=lifespan
     )
 
-    # Register routes
+    # Register API routes
     app.get("/api/state")(get_state)
     app.post("/api/volume")(set_volume)
     app.post("/api/volume/adjust")(adjust_volume)
@@ -86,6 +89,16 @@ def create_app(action_queue, glm_controller) -> FastAPI:
     app.post("/api/power")(toggle_power)
     app.get("/api/health")(health_check)
     app.websocket("/ws/state")(websocket_state)
+
+    # Serve web UI
+    @app.get("/")
+    async def serve_index():
+        """Serve the web UI."""
+        web_dir = Path(__file__).parent.parent / "web"
+        index_path = web_dir / "index.html"
+        if index_path.exists():
+            return FileResponse(index_path, media_type="text/html")
+        return JSONResponse({"error": "Web UI not found"}, status_code=404)
 
     return app
 
