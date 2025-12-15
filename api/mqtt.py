@@ -70,9 +70,9 @@ class MqttClient:
         self._cmd_dim_topic = f"{topic_prefix}/set/dim"
         self._cmd_power_topic = f"{topic_prefix}/set/power"
 
-    def _on_connect(self, client, userdata, flags, rc, properties=None):
+    def _on_connect(self, client, userdata, flags, reason_code, properties):
         """Handle connection to broker."""
-        if rc == 0:
+        if reason_code == 0:
             logger.info(f"Connected to MQTT broker {self._broker}:{self._port}")
             self._connected = True
 
@@ -93,13 +93,13 @@ class MqttClient:
             # Publish current state
             self._publish_state(self._glm_controller.get_state())
         else:
-            logger.error(f"Failed to connect to MQTT broker, rc={rc}")
+            logger.error(f"Failed to connect to MQTT broker, rc={reason_code}")
 
-    def _on_disconnect(self, client, userdata, rc, properties=None):
+    def _on_disconnect(self, client, userdata, disconnect_flags, reason_code, properties):
         """Handle disconnection from broker."""
         self._connected = False
-        if rc != 0:
-            logger.warning(f"Unexpected MQTT disconnect, rc={rc}")
+        if reason_code != 0:
+            logger.warning(f"Unexpected MQTT disconnect, rc={reason_code}")
 
     def _on_message(self, client, userdata, msg):
         """Handle incoming MQTT messages."""
