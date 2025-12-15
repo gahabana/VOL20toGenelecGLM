@@ -905,7 +905,9 @@ class HIDToMIDIDaemon:
             elif isinstance(action, SetPower):
                 logger.debug(f"Sending Power (CC {GLM_POWER_CC})")
                 self._send_action(Action.POWER)
-                time.sleep(SEND_DELAY)
+                # GLM needs time to stabilize after power toggle - block all commands
+                logger.debug("Power cooldown: waiting 3 seconds")
+                time.sleep(3.0)
             else:
                 logger.debug(f"Unknown action type: {type(action).__name__}")
 
