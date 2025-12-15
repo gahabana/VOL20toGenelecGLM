@@ -369,6 +369,7 @@ class GlmController:
     def update_from_midi(self, cc: int, value: int) -> bool:
         """Update state from MIDI message. Returns True if state changed."""
         changed = False
+        notify = False
         with self._lock:
             if cc == GLM_VOLUME_ABS:
                 self._volume_initialized = True
@@ -378,18 +379,22 @@ class GlmController:
                 if self.volume != value:
                     self.volume = value
                     changed = True
+                # Always notify on volume to sync UI when GLM clamps values
+                notify = True
             elif cc == GLM_MUTE_CC:
                 new_mute = value > 0
                 if self.mute != new_mute:
                     self.mute = new_mute
                     changed = True
+                    notify = True
             elif cc == GLM_DIM_CC:
                 new_dim = value > 0
                 if self.dim != new_dim:
                     self.dim = new_dim
                     changed = True
+                    notify = True
 
-        if changed:
+        if notify:
             self._notify_state_change()
         return changed
 
