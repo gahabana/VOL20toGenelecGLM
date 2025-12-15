@@ -9,8 +9,6 @@ from enum import Enum
 from dataclasses import dataclass
 from typing import Dict, Optional
 import hid
-
-from glm_core import AdjustVolume, SetMute, SetDim, SetPower, QueuedAction
 from mido import Message, open_output, open_input
 import psutil
 import argparse
@@ -723,33 +721,9 @@ class HIDToMIDIDaemon:
                     if keyreported == 0:
                         continue
                     now = time.time()
-
-                    # Map physical key to logical action
-                    action_type = self.bindings.get(keyreported)
-                    if not action_type:
-                        logger.debug(f"No binding for key {KEY_NAMES.get(keyreported, keyreported)}")
-                        continue
-
-                    # Create appropriate GlmAction based on action type
-                    if action_type == Action.VOL_UP:
-                        distance = self.volume_knob.calculate_speed(now, keyreported)
-                        glm_action = AdjustVolume(delta=distance)
-                    elif action_type == Action.VOL_DOWN:
-                        distance = self.volume_knob.calculate_speed(now, keyreported)
-                        glm_action = AdjustVolume(delta=-distance)
-                    elif action_type == Action.MUTE:
-                        glm_action = SetMute()
-                    elif action_type == Action.DIM:
-                        glm_action = SetDim()
-                    elif action_type == Action.POWER:
-                        glm_action = SetPower()
-                    else:
-                        # Non-GLM actions (PLAY_PAUSE, etc.) - skip for now
-                        logger.debug(f"Action {action_type.value} not yet supported")
-                        continue
-
-                    self.queue.put(QueuedAction(action=glm_action, timestamp=now))
-                    logger.debug(f"HID: key={KEY_NAMES.get(keyreported, keyreported)} -> {glm_action}")
+                    distance = self.volume_knob.calculate_speed(now, keyreported)
+                    self.queue.put({'timestamp': now, 'key': keyreported, 'distance': distance})
+                    logger.debug(f"HID: delta={self.volume_knob.delta_time*1000:.0f}ms, dist={distance}, key={KEY_NAMES.get(keyreported, keyreported)} {'(*)' if self.volume_knob.count == 1 else ''}")
             except (OSError, IOError) as e:
                 if retry_logger.should_log("hid_error"):
                     info = retry_logger.format_retry_info("hid_error")
@@ -798,7 +772,7 @@ class HIDToMIDIDaemon:
                     self.midi_input = None
 
     def consumer(self):
-        """Processes GlmAction objects from the queue and sends MIDI messages."""
+        """Processes events from the queue and sends MIDI messages."""
         set_current_thread_priority(THREAD_PRIORITY_ABOVE_NORMAL)
 
         # Wait for initial MIDI connection
@@ -806,37 +780,40 @@ class HIDToMIDIDaemon:
             time.sleep(RETRY_DELAY)
 
         while True:
-            queued = self.queue.get()
-            if queued is None:  # Sentinel for consumer shutdown
+            event = self.queue.get()
+            if event is None:  # Sentinel for consumer shutdown
                 logger.info("Consumer thread exiting...")
                 break
 
-            # Handle QueuedAction objects
             now = time.time()
-            event_age = now - queued.timestamp
+            time_then = event['timestamp']
+            event_age = now - time_then
             if event_age > MAX_EVENT_AGE:
-                logger.warning(f"Discarded stale action: {queued.action}")
+                logger.warning(f"Discarded stale event: {event}")
                 continue
 
-            action = queued.action
+            button = event['key']
+            distance = event['distance']
 
-            # Dispatch based on action type
-            if isinstance(action, AdjustVolume):
-                self._handle_adjust_volume(action.delta)
-            elif isinstance(action, SetMute):
-                logger.debug(f"Sending Mute (CC {GLM_MUTE_CC})")
-                self._send_action(Action.MUTE)
-                time.sleep(SEND_DELAY)
-            elif isinstance(action, SetDim):
-                logger.debug(f"Sending Dim (CC {GLM_DIM_CC})")
-                self._send_action(Action.DIM)
-                time.sleep(SEND_DELAY)
-            elif isinstance(action, SetPower):
-                logger.debug(f"Sending Power (CC {GLM_POWER_CC})")
-                self._send_action(Action.POWER)
-                time.sleep(SEND_DELAY)
+            # Get the action for this key
+            action = self.bindings.get(button)
+            if not action:
+                logger.debug(f"No binding for key {button}")
+                continue
+
+            # Handle volume actions specially - use absolute volume if we have valid state
+            if action in (Action.VOL_UP, Action.VOL_DOWN):
+                self._handle_volume_action(action, distance)
             else:
-                logger.debug(f"Unknown action type: {type(action).__name__}")
+                # Get GLM control info for logging
+                glm_ctrl = ACTION_TO_GLM.get(action)
+                if glm_ctrl:
+                    logger.debug(f"Sending {action.value} (CC {glm_ctrl.cc})")
+                    self._send_action(action)
+                    time.sleep(SEND_DELAY)
+                else:
+                    # Non-GLM action (future: route to other apps)
+                    logger.debug(f"Action {action.value} has no GLM mapping (yet)")
 
     def _send_action(self, action: Action):
         """Send an action to GLM using the controller."""
@@ -851,12 +828,9 @@ class HIDToMIDIDaemon:
             logger.error(f"Error sending MIDI message: {e}")
             self._reset_midi_output()
 
-    def _handle_adjust_volume(self, delta: int):
+    def _handle_volume_action(self, action: Action, distance: int):
         """
         Handle volume changes using absolute volume (CC 20) when possible.
-
-        Args:
-            delta: Volume change amount. Positive = up, negative = down.
 
         If we have a valid volume reading from GLM, calculate target and send
         one absolute command. This avoids GLM dropping rapid increment commands.
@@ -874,19 +848,19 @@ class HIDToMIDIDaemon:
             if current is not None:
                 # Calculate target volume based on effective volume (pending or confirmed)
                 # This allows consecutive commands to accumulate before GLM confirms
-                target = max(0, min(127, current + delta))
+                if action == Action.VOL_UP:
+                    target = min(127, current + distance)
+                else:  # VOL_DOWN
+                    target = max(0, current - distance)
 
                 if target != current:
-                    sign = '+' if delta > 0 else ''
-                    logger.debug(f"Volume: {current} -> {target} (delta={sign}{delta}, CC 20)")
+                    logger.debug(f"Volume: {current} -> {target} (delta={'+' if action == Action.VOL_UP else '-'}{distance}, CC 20)")
                     glm_controller.set_pending_volume(target)
                     glm_controller.send_volume_absolute(target, midi_out)
                 else:
-                    direction = "up" if delta > 0 else "down"
-                    logger.debug(f"Volume already at limit ({current}), ignoring {direction}")
+                    logger.debug(f"Volume already at limit ({current}), ignoring {action.value}")
             else:
                 # Volume not initialized yet - use CC 21/22 to trigger GLM state report
-                action = Action.VOL_UP if delta > 0 else Action.VOL_DOWN
                 logger.debug(f"Volume not initialized, using {action.value} (CC 21/22) to trigger state")
                 glm_controller.send_action(action, midi_out)
         except (OSError, IOError) as e:
