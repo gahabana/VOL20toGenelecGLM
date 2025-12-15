@@ -555,6 +555,22 @@ def parse_arguments():
     parser.add_argument("--api_port", type=int, default=8080,
                         help="Port for REST API server. Set to 0 to disable API. Default is 8080.")
 
+    # MQTT / Home Assistant
+    parser.add_argument("--mqtt_broker", type=str, default=None,
+                        help="MQTT broker hostname. If not set, MQTT is disabled.")
+    parser.add_argument("--mqtt_port", type=int, default=1883,
+                        help="MQTT broker port. Default is 1883.")
+    parser.add_argument("--mqtt_user", type=str, default=None,
+                        help="MQTT username (optional).")
+    parser.add_argument("--mqtt_pass", type=str, default=None,
+                        help="MQTT password (optional).")
+    parser.add_argument("--mqtt_topic", type=str, default="glm",
+                        help="MQTT topic prefix. Default is 'glm'.")
+    parser.add_argument("--mqtt_ha_discovery", action="store_true", default=True,
+                        help="Enable Home Assistant MQTT Discovery. Default is True.")
+    parser.add_argument("--no_mqtt_ha_discovery", action="store_false", dest="mqtt_ha_discovery",
+                        help="Disable Home Assistant MQTT Discovery.")
+
     # Parse arguments
     args = parser.parse_args()
 
@@ -691,7 +707,9 @@ class AccelerationHandler:
 
 class HIDToMIDIDaemon:
     def __init__(self, min_click_time, max_avg_click_time, volume_increases_list,
-                 VID, PID, midi_in_channel, midi_out_channel, startup_volume=None, api_port=8080):
+                 VID, PID, midi_in_channel, midi_out_channel, startup_volume=None, api_port=8080,
+                 mqtt_broker=None, mqtt_port=1883, mqtt_user=None, mqtt_pass=None,
+                 mqtt_topic="glm", mqtt_ha_discovery=True):
         self.queue = queue.Queue(maxsize=QUEUE_MAX_SIZE)
         self._stop_event = threading.Event()
         self.hid_reader_thread = threading.Thread(target=self.hid_reader, daemon=True, name="HIDReaderThread")
@@ -710,6 +728,14 @@ class HIDToMIDIDaemon:
         self.bindings = DEFAULT_BINDINGS.copy()  # Instance-level key bindings
         self.api_port = api_port  # REST API port (0 = disabled)
         self.api_thread = None   # API server thread
+        # MQTT settings
+        self.mqtt_broker = mqtt_broker
+        self.mqtt_port = mqtt_port
+        self.mqtt_user = mqtt_user
+        self.mqtt_pass = mqtt_pass
+        self.mqtt_topic = mqtt_topic
+        self.mqtt_ha_discovery = mqtt_ha_discovery
+        self.mqtt_client = None  # MQTT client instance
 
     def _get_midi_output(self):
         """Get connected MIDI output, reconnecting if necessary. Thread-safe."""
@@ -1016,11 +1042,29 @@ class HIDToMIDIDaemon:
             from api import start_api_server
             self.api_thread = start_api_server(self.queue, glm_controller, port=self.api_port)
 
+        # Start MQTT client if enabled
+        if self.mqtt_broker:
+            from api.mqtt import start_mqtt_client
+            self.mqtt_client = start_mqtt_client(
+                action_queue=self.queue,
+                glm_controller=glm_controller,
+                broker=self.mqtt_broker,
+                port=self.mqtt_port,
+                username=self.mqtt_user,
+                password=self.mqtt_pass,
+                topic_prefix=self.mqtt_topic,
+                ha_discovery=self.mqtt_ha_discovery,
+            )
+
     def stop(self):
         """Stops the daemon gracefully."""
         logger.info("Stopping daemon...")
         self._stop_event.set()
         self.queue.put(None)  # Sentinel to unblock the consumer
+
+        # Stop MQTT client
+        if self.mqtt_client:
+            self.mqtt_client.stop()
 
         # Close MIDI input to unblock the blocking read
         if self.midi_input:
@@ -1067,6 +1111,11 @@ if __name__ == "__main__":
         logger.info(f"     REST API: http://0.0.0.0:{args.api_port}")
     else:
         logger.info(f"     REST API: disabled")
+    if args.mqtt_broker:
+        logger.info(f"     MQTT: {args.mqtt_broker}:{args.mqtt_port} (topic: {args.mqtt_topic})")
+        logger.info(f"     MQTT HA Discovery: {args.mqtt_ha_discovery}")
+    else:
+        logger.info(f"     MQTT: disabled")
     logger.info(f"<--- End configuration")
 
     set_higher_priority()
@@ -1081,7 +1130,13 @@ if __name__ == "__main__":
         args.midi_in_channel,
         args.midi_out_channel,
         args.startup_volume,
-        args.api_port
+        args.api_port,
+        args.mqtt_broker,
+        args.mqtt_port,
+        args.mqtt_user,
+        args.mqtt_pass,
+        args.mqtt_topic,
+        args.mqtt_ha_discovery,
     )
     signal.signal(signal.SIGINT, lambda sig, frame: signal_handler(sig, frame, daemon, stop_logging))
     daemon.start()

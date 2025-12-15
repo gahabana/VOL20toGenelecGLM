@@ -8,5 +8,5 @@ psutil
 fastapi
 uvicorn[standard]
 
-# MQTT/Home Assistant (Phase 5 - install when needed)
-# paho-mqtt
+# MQTT/Home Assistant (Phase 5)
+paho-mqtt
