@@ -7,7 +7,7 @@ import queue
 from queue import Queue
 from enum import Enum
 from dataclasses import dataclass
-from typing import Dict, Optional
+from typing import Dict, Optional, List, Callable
 import hid
 
 from glm_core import AdjustVolume, SetMute, SetDim, SetPower, QueuedAction
@@ -309,6 +309,25 @@ class GlmController:
         self.power: bool = True    # tracked locally (no MIDI feedback from GLM)
         self._volume_initialized = False  # True once we've received volume from GLM
         self._lock = threading.Lock()
+        self._state_callbacks: List[Callable[[dict], None]] = []
+
+    def add_state_callback(self, callback: Callable[[dict], None]):
+        """Register a callback to be called when state changes."""
+        self._state_callbacks.append(callback)
+
+    def remove_state_callback(self, callback: Callable[[dict], None]):
+        """Unregister a state change callback."""
+        if callback in self._state_callbacks:
+            self._state_callbacks.remove(callback)
+
+    def _notify_state_change(self):
+        """Call all registered callbacks with current state."""
+        state = self.get_state()
+        for callback in self._state_callbacks:
+            try:
+                callback(state)
+            except Exception as e:
+                logger.error(f"State callback error: {e}")
 
     @property
     def has_valid_volume(self) -> bool:
@@ -349,6 +368,7 @@ class GlmController:
 
     def update_from_midi(self, cc: int, value: int) -> bool:
         """Update state from MIDI message. Returns True if state changed."""
+        changed = False
         with self._lock:
             if cc == GLM_VOLUME_ABS:
                 self._volume_initialized = True
@@ -357,18 +377,21 @@ class GlmController:
                 self._pending_volume = None
                 if self.volume != value:
                     self.volume = value
-                    return True
+                    changed = True
             elif cc == GLM_MUTE_CC:
                 new_mute = value > 0
                 if self.mute != new_mute:
                     self.mute = new_mute
-                    return True
+                    changed = True
             elif cc == GLM_DIM_CC:
                 new_dim = value > 0
                 if self.dim != new_dim:
                     self.dim = new_dim
-                    return True
-            return False
+                    changed = True
+
+        if changed:
+            self._notify_state_change()
+        return changed
 
     def get_state(self) -> dict:
         """Get current state as a dictionary (for future REST API)."""
@@ -411,6 +434,7 @@ class GlmController:
         if not glm_ctrl:
             return False  # Action doesn't map to GLM
 
+        power_changed = False
         with self._lock:
             if glm_ctrl.mode == ControlMode.TOGGLE:
                 if action == Action.MUTE:
@@ -433,9 +457,12 @@ class GlmController:
             # Special handling for power (track locally since no MIDI feedback)
             if action == Action.POWER:
                 self.power = not self.power
+                power_changed = True
 
         try:
             midi_output.send(Message('control_change', control=glm_ctrl.cc, value=value))
+            if power_changed:
+                self._notify_state_change()
             return True
         except (OSError, IOError) as e:
             logger.debug(f"Failed to send action {action.value}: {e}")
@@ -935,6 +962,11 @@ class HIDToMIDIDaemon:
 
     def start(self):
         """Starts all threads."""
+        # Register state change callback for logging (proof of concept)
+        def log_state_change(state: dict):
+            logger.info(f"State changed: vol={state['volume']}, mute={state['mute']}, dim={state['dim']}, pwr={state['power']}")
+        glm_controller.add_state_callback(log_state_change)
+
         # Start MIDI reader first so we can receive GLM responses
         self.midi_reader_thread.start()
 
