@@ -26,6 +26,9 @@ _glm_controller = None
 _websocket_clients: Set[WebSocket] = set()
 _ws_lock = threading.Lock()
 
+# Event loop for the API server thread (set when server starts)
+_api_event_loop = None
+
 
 # Pydantic models for request validation
 class VolumeRequest(BaseModel):
@@ -101,21 +104,29 @@ def _broadcast_state_sync(state: dict):
     Synchronous callback for state changes - schedules async broadcast.
     Called from GlmController in various threads.
     """
+    global _api_event_loop
+
+    if _api_event_loop is None:
+        logger.debug("API event loop not ready, skipping broadcast")
+        return
+
     with _ws_lock:
         clients = list(_websocket_clients)
 
     if not clients:
         return
 
-    # Schedule broadcast in each client's event loop
+    # Schedule broadcast in the API server's event loop
+    try:
+        asyncio.run_coroutine_threadsafe(_broadcast_to_all(clients, state), _api_event_loop)
+    except Exception as e:
+        logger.debug(f"Failed to schedule WebSocket broadcast: {e}")
+
+
+async def _broadcast_to_all(clients: list, state: dict):
+    """Broadcast state to all WebSocket clients."""
     for ws in clients:
-        try:
-            # Get the event loop for this websocket and schedule the send
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                asyncio.run_coroutine_threadsafe(_send_state_to_client(ws, state), loop)
-        except Exception as e:
-            logger.debug(f"Failed to schedule WebSocket broadcast: {e}")
+        await _send_state_to_client(ws, state)
 
 
 async def _send_state_to_client(ws: WebSocket, state: dict):
@@ -223,6 +234,7 @@ def start_api_server(action_queue, glm_controller, host: str = "0.0.0.0", port: 
         The server thread
     """
     import uvicorn
+    global _api_event_loop
 
     app = create_app(action_queue, glm_controller)
 
@@ -236,9 +248,11 @@ def start_api_server(action_queue, glm_controller, host: str = "0.0.0.0", port: 
     server = uvicorn.Server(config)
 
     def run_server():
+        global _api_event_loop
         # Create new event loop for this thread
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
+        _api_event_loop = loop  # Store for cross-thread WebSocket broadcasts
         loop.run_until_complete(server.serve())
 
     thread = threading.Thread(target=run_server, name="APIServerThread", daemon=True)
