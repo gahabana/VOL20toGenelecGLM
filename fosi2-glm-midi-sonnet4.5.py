@@ -310,6 +310,7 @@ class GlmController:
         self._volume_initialized = False  # True once we've received volume from GLM
         self._lock = threading.Lock()
         self._state_callbacks: List[Callable[[dict], None]] = []
+        self._last_notified_state: Optional[dict] = None  # Debounce duplicate notifications
 
     def add_state_callback(self, callback: Callable[[dict], None]):
         """Register a callback to be called when state changes."""
@@ -321,8 +322,12 @@ class GlmController:
             self._state_callbacks.remove(callback)
 
     def _notify_state_change(self):
-        """Call all registered callbacks with current state."""
+        """Call all registered callbacks with current state (if changed)."""
         state = self.get_state()
+        # Debounce: only notify if state actually changed
+        if state == self._last_notified_state:
+            return
+        self._last_notified_state = state.copy()
         for callback in self._state_callbacks:
             try:
                 callback(state)
