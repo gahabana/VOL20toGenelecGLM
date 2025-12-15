@@ -311,6 +311,8 @@ class GlmController:
         self._lock = threading.Lock()
         self._state_callbacks: List[Callable[[dict], None]] = []
         self._last_notified_state: Optional[dict] = None  # Debounce duplicate notifications
+        self._last_power_time: float = 0  # Rate limit power commands
+        self._power_cooldown: float = 8.0  # Seconds between power commands
 
     def add_state_callback(self, callback: Callable[[dict], None]):
         """Register a callback to be called when state changes."""
@@ -443,6 +445,16 @@ class GlmController:
         glm_ctrl = ACTION_TO_GLM.get(action)
         if not glm_ctrl:
             return False  # Action doesn't map to GLM
+
+        # Rate limit power commands
+        if action == Action.POWER:
+            now = time.time()
+            time_since_last = now - self._last_power_time
+            if time_since_last < self._power_cooldown:
+                remaining = self._power_cooldown - time_since_last
+                logger.warning(f"Power cooldown active, ignoring command ({remaining:.1f}s remaining)")
+                return False
+            self._last_power_time = now
 
         power_changed = False
         with self._lock:
@@ -905,9 +917,7 @@ class HIDToMIDIDaemon:
             elif isinstance(action, SetPower):
                 logger.debug(f"Sending Power (CC {GLM_POWER_CC})")
                 self._send_action(Action.POWER)
-                # GLM needs time to stabilize after power toggle - block all commands
-                logger.debug("Power cooldown: waiting 3 seconds")
-                time.sleep(3.0)
+                time.sleep(SEND_DELAY)
             else:
                 logger.debug(f"Unknown action type: {type(action).__name__}")
 
