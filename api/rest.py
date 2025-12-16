@@ -227,6 +227,9 @@ async def websocket_state(websocket: WebSocket):
             await websocket.receive_text()
     except WebSocketDisconnect:
         pass
+    except OSError as e:
+        # Windows semaphore timeout or other connection errors
+        logger.debug(f"WebSocket connection error: {e}")
     finally:
         with _ws_lock:
             _websocket_clients.discard(websocket)
