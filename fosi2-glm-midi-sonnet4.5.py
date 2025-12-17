@@ -902,24 +902,27 @@ class HIDToMIDIDaemon:
             action = queued.action
 
             # Dispatch based on action type
-            if isinstance(action, SetVolume):
-                self._handle_set_volume(action.target)
-            elif isinstance(action, AdjustVolume):
-                self._handle_adjust_volume(action.delta)
-            elif isinstance(action, SetMute):
-                logger.debug(f"Sending Mute (CC {GLM_MUTE_CC})")
-                self._send_action(Action.MUTE)
-                time.sleep(SEND_DELAY)
-            elif isinstance(action, SetDim):
-                logger.debug(f"Sending Dim (CC {GLM_DIM_CC})")
-                self._send_action(Action.DIM)
-                time.sleep(SEND_DELAY)
-            elif isinstance(action, SetPower):
-                logger.debug(f"Sending Power (CC {GLM_POWER_CC})")
-                self._send_action(Action.POWER)
-                time.sleep(SEND_DELAY)
-            else:
-                logger.debug(f"Unknown action type: {type(action).__name__}")
+            try:
+                if isinstance(action, SetVolume):
+                    self._handle_set_volume(action.target)
+                elif isinstance(action, AdjustVolume):
+                    self._handle_adjust_volume(action.delta)
+                elif isinstance(action, SetMute):
+                    logger.debug(f"Sending Mute (CC {GLM_MUTE_CC})")
+                    self._send_action(Action.MUTE)
+                    time.sleep(SEND_DELAY)
+                elif isinstance(action, SetDim):
+                    logger.debug(f"Sending Dim (CC {GLM_DIM_CC})")
+                    self._send_action(Action.DIM)
+                    time.sleep(SEND_DELAY)
+                elif isinstance(action, SetPower):
+                    logger.debug(f"Sending Power (CC {GLM_POWER_CC})")
+                    self._send_action(Action.POWER)
+                    time.sleep(SEND_DELAY)
+                else:
+                    logger.debug(f"Unknown action type: {type(action).__name__}")
+            except Exception as e:
+                logger.error(f"Error processing action {action}: {e}", exc_info=True)
 
     def _send_action(self, action: Action):
         """Send an action to GLM using the controller."""
