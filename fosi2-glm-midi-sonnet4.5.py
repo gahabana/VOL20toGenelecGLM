@@ -244,6 +244,43 @@ GLM_MUTE_CC = 23      # Mute (toggle)
 GLM_DIM_CC = 24       # Dim (toggle)
 GLM_POWER_CC = 28     # System Power (momentary trigger, no MIDI feedback)
 
+# CC number to human-readable name (for logging)
+CC_NAMES = {
+    GLM_VOLUME_ABS: "Volume",
+    GLM_VOL_UP_CC: "Vol+",
+    GLM_VOL_DOWN_CC: "Vol-",
+    GLM_MUTE_CC: "Mute",
+    GLM_DIM_CC: "Dim",
+    GLM_POWER_CC: "Power",
+}
+
+
+def log_midi(direction: str, msg_type: str, cc: int = None, value: int = None, channel: int = None, raw: str = None):
+    """
+    Log MIDI message in consistent format.
+
+    Args:
+        direction: "TX" for sent, "RX" for received
+        msg_type: MIDI message type (e.g., "control_change", "note_on")
+        cc: Control change number (if applicable)
+        value: Value (if applicable)
+        channel: MIDI channel (if applicable)
+        raw: Raw message string for unknown types
+    """
+    if msg_type == "control_change" and cc is not None:
+        cc_name = CC_NAMES.get(cc, f"CC{cc}")
+        logger.info(f"MIDI {direction}: {cc_name}(CC{cc})={value}")
+    elif raw:
+        logger.info(f"MIDI {direction}: {raw}")
+    else:
+        parts = [f"MIDI {direction}: {msg_type}"]
+        if channel is not None:
+            parts.append(f"ch={channel}")
+        if value is not None:
+            parts.append(f"val={value}")
+        logger.info(" ".join(parts))
+
+
 # Catalogue of GLM controls
 ACTION_TO_GLM: Dict[Action, GlmControl] = {
     Action.VOL_UP:   GlmControl(cc=GLM_VOL_UP_CC,   label="Vol+",  mode=ControlMode.MOMENTARY),
@@ -424,6 +461,7 @@ class GlmController:
         target = max(0, min(127, target))
         try:
             midi_output.send(Message('control_change', control=GLM_VOLUME_ABS, value=target))
+            log_midi("TX", "control_change", cc=GLM_VOLUME_ABS, value=target)
             return True
         except (OSError, IOError) as e:
             logger.debug(f"Failed to send volume command: {e}")
@@ -483,6 +521,7 @@ class GlmController:
 
         try:
             midi_output.send(Message('control_change', control=glm_ctrl.cc, value=value))
+            log_midi("TX", "control_change", cc=glm_ctrl.cc, value=value)
             if power_changed:
                 self._notify_state_change()
             return True
@@ -539,9 +578,10 @@ def parse_arguments():
     parser.add_argument("--log_level", choices=["DEBUG", "INFO", "NONE"], default="DEBUG",
                         help="Set logging level. Default is DEBUG.")
 
-    # Log file name
-    parser.add_argument("--log_file_name", type=str, default="hid_to_midi.log",
-                        help="Name of the log file. Default is 'hid_to_midi.log'.")
+    # Log file name (defaults to script name with .log extension)
+    default_log_file = os.path.splitext(os.path.basename(__file__))[0] + ".log"
+    parser.add_argument("--log_file_name", type=str, default=default_log_file,
+                        help=f"Name of the log file. Default is '{default_log_file}'.")
 
     # Single argument for click times
     parser.add_argument("--click_times", type=validate_click_times, default=(0.2, 0.15),
@@ -858,11 +898,16 @@ class HIDToMIDIDaemon:
                 for msg in self.midi_input:
                     if self._stop_event.is_set():
                         break
+                    # Log ALL received MIDI messages
                     if msg.type == 'control_change':
+                        log_midi("RX", "control_change", cc=msg.control, value=msg.value)
                         changed = glm_controller.update_from_midi(msg.control, msg.value)
                         if changed:
                             state = glm_controller.get_state()
                             logger.debug(f"GLM state: vol={state['volume']}, mute={state['mute']}, dim={state['dim']}, pwr={state['power']}")
+                    else:
+                        # Log non-control_change messages (unexpected but want to see them)
+                        log_midi("RX", msg.type, raw=str(msg))
 
             except (OSError, IOError) as e:
                 if not self._stop_event.is_set():  # Only log if not shutting down
