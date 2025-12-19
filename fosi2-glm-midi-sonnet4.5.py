@@ -294,7 +294,7 @@ ACTION_TO_GLM: Dict[Action, GlmControl] = {
     Action.VOL_DOWN: GlmControl(cc=GLM_VOL_DOWN_CC, label="Vol-",  mode=ControlMode.MOMENTARY),
     Action.MUTE:     GlmControl(cc=GLM_MUTE_CC,     label="Mute",  mode=ControlMode.TOGGLE),
     Action.DIM:      GlmControl(cc=GLM_DIM_CC,      label="Dim",   mode=ControlMode.TOGGLE),
-    Action.POWER:    GlmControl(cc=GLM_POWER_CC,    label="Power", mode=ControlMode.MOMENTARY),
+    Action.POWER:    GlmControl(cc=GLM_POWER_CC,    label="Power", mode=ControlMode.TOGGLE),
     # Non-GLM actions don't have GLM controls (yet)
 }
 
@@ -507,6 +507,8 @@ class GlmController:
                     current = self.mute
                 elif action == Action.DIM:
                     current = self.dim
+                elif action == Action.POWER:
+                    current = self.power
                 else:
                     current = False
 
