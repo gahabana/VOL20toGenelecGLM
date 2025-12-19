@@ -244,6 +244,13 @@ GLM_MUTE_CC = 23      # Mute (toggle)
 GLM_DIM_CC = 24       # Dim (toggle)
 GLM_POWER_CC = 28     # System Power (momentary trigger, no MIDI feedback)
 
+# Power detection pattern: MUTE -> VOL -> DIM -> MUTE -> VOL (5 messages within ~150ms)
+# GLM sends this pattern on power toggle and startup (startup sends 7 then 5)
+POWER_PATTERN = [GLM_MUTE_CC, GLM_VOLUME_ABS, GLM_DIM_CC, GLM_MUTE_CC, GLM_VOLUME_ABS]
+POWER_PATTERN_WINDOW = 0.5  # seconds - max time window for pattern
+POWER_PATTERN_MIN_SPAN = 0.05  # seconds - min span (faster = buffer dump, ignore)
+POWER_STARTUP_WINDOW = 3.0  # seconds - if second pattern within this, it's GLM startup
+
 # CC number to human-readable name (for logging)
 CC_NAMES = {
     GLM_VOLUME_ABS: "Volume",
@@ -494,7 +501,6 @@ class GlmController:
                 return False
             self._last_power_time = now
 
-        power_changed = False
         with self._lock:
             if glm_ctrl.mode == ControlMode.TOGGLE:
                 if action == Action.MUTE:
@@ -514,16 +520,12 @@ class GlmController:
                 # Momentary: always send 127
                 value = 127
 
-            # Special handling for power (track locally since no MIDI feedback)
-            if action == Action.POWER:
-                self.power = not self.power
-                power_changed = True
+            # Note: Power state is now tracked via MIDI pattern detection in midi_reader,
+            # not here. GLM responds to power commands with a 5-message pattern that we detect.
 
         try:
             midi_output.send(Message('control_change', control=glm_ctrl.cc, value=value))
             log_midi("TX", "control_change", cc=glm_ctrl.cc, value=value)
-            if power_changed:
-                self._notify_state_change()
             return True
         except (OSError, IOError) as e:
             logger.debug(f"Failed to send action {action.value}: {e}")
@@ -793,6 +795,9 @@ class HIDToMIDIDaemon:
         self.mqtt_topic = mqtt_topic
         self.mqtt_ha_discovery = mqtt_ha_discovery
         self.mqtt_client = None  # MQTT client instance
+        # Power pattern detection state
+        self._rx_seq = []  # List of (timestamp, cc) for pattern detection
+        self._last_pattern_time = None  # For startup detection (double-burst)
 
     def _get_midi_output(self):
         """Get connected MIDI output, reconnecting if necessary. Thread-safe."""
@@ -901,6 +906,43 @@ class HIDToMIDIDaemon:
                     # Log ALL received MIDI messages
                     if msg.type == 'control_change':
                         log_midi("RX", "control_change", cc=msg.control, value=msg.value)
+
+                        # Power pattern detection
+                        now = time.time()
+                        self._rx_seq.append((now, msg.control))
+                        # Keep only messages within time window
+                        self._rx_seq = [(t, c) for (t, c) in self._rx_seq
+                                       if now - t <= POWER_PATTERN_WINDOW]
+
+                        seq = [c for _, c in self._rx_seq]
+                        if len(seq) >= 5 and seq[-5:] == POWER_PATTERN:
+                            time_span = self._rx_seq[-1][0] - self._rx_seq[-5][0]
+                            if time_span >= POWER_PATTERN_MIN_SPAN:  # Not a buffer dump
+                                if len(seq) == 5:
+                                    # Clean 5-message burst
+                                    if (self._last_pattern_time and
+                                        (now - self._last_pattern_time) < POWER_STARTUP_WINDOW):
+                                        # Second pattern within window = GLM startup
+                                        old_power = glm_controller.power
+                                        glm_controller.power = True  # Sync to ON
+                                        logger.info(f"GLM startup detected - power synced to ON (was {'ON' if old_power else 'OFF'})")
+                                        glm_controller._notify_state_change()
+                                        self._last_pattern_time = None
+                                    else:
+                                        # Single burst = real power toggle
+                                        glm_controller.power = not glm_controller.power
+                                        logger.info(f"Power toggle detected (now {'ON' if glm_controller.power else 'OFF'})")
+                                        glm_controller._notify_state_change()
+                                        self._last_pattern_time = now
+                                    self._rx_seq = []  # Clear after detection
+                                else:
+                                    # Burst with extra messages (len > 5) - likely first burst of startup
+                                    # Record time but don't toggle - wait for second burst
+                                    logger.debug(f"Power pattern with {len(seq)} msgs - recording for startup detection")
+                                    self._last_pattern_time = now
+                                    self._rx_seq = []
+
+                        # Process state update
                         changed = glm_controller.update_from_midi(msg.control, msg.value)
                         if changed:
                             state = glm_controller.get_state()
