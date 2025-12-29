@@ -67,95 +67,117 @@
             background: var(--success);
         }
 
-        /* Volume Display */
-        .volume-display {
-            background: var(--bg-card);
-            border-radius: 16px;
-            padding: 32px;
-            text-align: center;
-            box-shadow: var(--shadow);
-            margin-bottom: 24px;
-        }
-
-        .volume-value {
-            font-size: 4rem;
-            font-weight: 300;
-            line-height: 1;
-            margin-bottom: 8px;
-            font-variant-numeric: tabular-nums;
-        }
-
-        .volume-label {
-            font-size: 0.875rem;
-            color: var(--text-secondary);
-            text-transform: uppercase;
-            letter-spacing: 1px;
-        }
-
-        /* Volume Slider */
-        .slider-container {
+        /* Rotary Volume Knob */
+        .knob-container {
             background: var(--bg-card);
             border-radius: 16px;
             padding: 24px;
             box-shadow: var(--shadow);
             margin-bottom: 24px;
-        }
-
-        .slider-track {
-            position: relative;
-            height: 48px;
             display: flex;
+            flex-direction: column;
             align-items: center;
         }
 
-        input[type="range"] {
-            -webkit-appearance: none;
-            appearance: none;
+        .knob {
+            position: relative;
+            width: 200px;
+            height: 200px;
+            cursor: pointer;
+            touch-action: none;
+        }
+
+        .knob-track {
+            position: absolute;
             width: 100%;
-            height: 8px;
-            border-radius: 4px;
-            background: var(--bg-elevated);
-            outline: none;
-            cursor: pointer;
+            height: 100%;
         }
 
-        input[type="range"]::-webkit-slider-thumb {
-            -webkit-appearance: none;
-            appearance: none;
-            width: 28px;
-            height: 28px;
-            border-radius: 50%;
+        .knob-track circle {
+            fill: none;
+            stroke-width: 12;
+            stroke-linecap: round;
+        }
+
+        .knob-track .track-bg {
+            stroke: var(--bg-elevated);
+        }
+
+        .knob-track .track-fill {
+            stroke: var(--accent);
+            transition: stroke-dashoffset 0.1s ease-out;
+        }
+
+        .knob-pointer {
+            position: absolute;
+            width: 100%;
+            height: 100%;
+            transition: transform 0.1s ease-out;
+        }
+
+        .knob-pointer::after {
+            content: '';
+            position: absolute;
+            top: 12px;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 6px;
+            height: 24px;
             background: var(--accent);
-            cursor: pointer;
+            border-radius: 3px;
             box-shadow: var(--shadow);
-            transition: transform 0.15s, box-shadow 0.15s;
         }
 
-        input[type="range"]::-webkit-slider-thumb:hover {
-            transform: scale(1.1);
-            box-shadow: var(--shadow-elevated);
-        }
-
-        input[type="range"]::-webkit-slider-thumb:active {
-            transform: scale(0.95);
-        }
-
-        input[type="range"]::-moz-range-thumb {
-            width: 28px;
-            height: 28px;
+        .knob-center {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: 120px;
+            height: 120px;
+            background: var(--bg-card);
             border-radius: 50%;
-            background: var(--accent);
-            cursor: pointer;
-            border: none;
-            box-shadow: var(--shadow);
-        }
-
-        .slider-labels {
             display: flex;
-            justify-content: space-between;
-            margin-top: 8px;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            box-shadow: inset 0 2px 8px rgba(0,0,0,0.3);
+        }
+
+        .knob-value {
+            font-size: 2.5rem;
+            font-weight: 300;
+            line-height: 1;
+            font-variant-numeric: tabular-nums;
+        }
+
+        .knob-label {
+            font-size: 0.7rem;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            margin-top: 4px;
+        }
+
+        .knob-min, .knob-max {
+            position: absolute;
             font-size: 0.75rem;
             color: var(--text-secondary);
+        }
+
+        .knob-min {
+            bottom: 8px;
+            left: 16px;
+        }
+
+        .knob-max {
+            bottom: 8px;
+            right: 16px;
+        }
+
+        .knob.dragging .knob-pointer,
+        .knob.dragging .track-fill {
+            transition: none;
         }
 
         /* Control Buttons */
@@ -233,18 +255,23 @@
             <h1><span class="status-dot" id="statusDot"></span>GLM Control</h1>
         </header>
 
-        <div class="volume-display">
-            <div class="volume-value" id="volumeValue">--</div>
-            <div class="volume-label">Volume (0-127)</div>
-        </div>
-
-        <div class="slider-container">
-            <div class="slider-track">
-                <input type="range" id="volumeSlider" min="0" max="127" value="0">
-            </div>
-            <div class="slider-labels">
-                <span>0</span>
-                <span>127</span>
+        <div class="knob-container">
+            <div class="knob" id="volumeKnob">
+                <svg class="knob-track" viewBox="0 0 200 200">
+                    <circle class="track-bg" cx="100" cy="100" r="88"
+                        stroke-dasharray="460" stroke-dashoffset="92"
+                        transform="rotate(120 100 100)"/>
+                    <circle class="track-fill" id="knobFill" cx="100" cy="100" r="88"
+                        stroke-dasharray="460" stroke-dashoffset="460"
+                        transform="rotate(120 100 100)"/>
+                </svg>
+                <div class="knob-pointer" id="knobPointer"></div>
+                <div class="knob-center">
+                    <div class="knob-value" id="volumeValue">--</div>
+                    <div class="knob-label">Volume</div>
+                </div>
+                <span class="knob-min">0</span>
+                <span class="knob-max">127</span>
             </div>
         </div>
 
@@ -272,28 +299,118 @@
 
         let ws = null;
         let reconnectTimeout = null;
-        let isSliding = false;
+        let isDragging = false;
+        let currentVolume = 0;
+
+        // Knob constants
+        const MIN_ANGLE = -150;  // 8 o'clock position (degrees from top)
+        const MAX_ANGLE = 150;   // 4 o'clock position
+        const ANGLE_RANGE = MAX_ANGLE - MIN_ANGLE;  // 300 degrees
+        const MIN_VALUE = 0;
+        const MAX_VALUE = 127;
+        const ARC_LENGTH = 460;  // Approximate circumference for stroke-dasharray
+        const ARC_VISIBLE = 368; // 300/360 * 460 ≈ 383, adjusted for visual
 
         // DOM elements
         const statusDot = document.getElementById('statusDot');
         const volumeValue = document.getElementById('volumeValue');
-        const volumeSlider = document.getElementById('volumeSlider');
+        const volumeKnob = document.getElementById('volumeKnob');
+        const knobPointer = document.getElementById('knobPointer');
+        const knobFill = document.getElementById('knobFill');
         const muteBtn = document.getElementById('muteBtn');
         const dimBtn = document.getElementById('dimBtn');
         const powerBtn = document.getElementById('powerBtn');
         const footer = document.getElementById('footer');
 
+        // Convert volume (0-127) to angle (-150 to 150)
+        function volumeToAngle(volume) {
+            return MIN_ANGLE + (volume / MAX_VALUE) * ANGLE_RANGE;
+        }
+
+        // Convert angle to volume
+        function angleToVolume(angle) {
+            const clampedAngle = Math.max(MIN_ANGLE, Math.min(MAX_ANGLE, angle));
+            return Math.round(((clampedAngle - MIN_ANGLE) / ANGLE_RANGE) * MAX_VALUE);
+        }
+
+        // Update knob visual
+        function updateKnobVisual(volume) {
+            const angle = volumeToAngle(volume);
+            knobPointer.style.transform = `rotate(${angle}deg)`;
+
+            // Update fill arc
+            const fillAmount = volume / MAX_VALUE;
+            const dashOffset = ARC_LENGTH - (fillAmount * ARC_VISIBLE);
+            knobFill.style.strokeDashoffset = dashOffset;
+
+            volumeValue.textContent = volume;
+        }
+
         // Update UI with state
         function updateUI(state) {
-            if (!isSliding) {
-                volumeValue.textContent = state.volume;
-                volumeSlider.value = state.volume;
+            if (!isDragging) {
+                currentVolume = state.volume;
+                updateKnobVisual(state.volume);
             }
 
             muteBtn.classList.toggle('active', state.mute);
             dimBtn.classList.toggle('active', state.dim);
             powerBtn.classList.toggle('active', state.power);
         }
+
+        // Get angle from pointer position relative to knob center
+        function getAngleFromEvent(e) {
+            const rect = volumeKnob.getBoundingClientRect();
+            const centerX = rect.left + rect.width / 2;
+            const centerY = rect.top + rect.height / 2;
+
+            const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+            const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+
+            const deltaX = clientX - centerX;
+            const deltaY = clientY - centerY;
+
+            // atan2 gives angle from positive X axis, we want from negative Y (top)
+            let angle = Math.atan2(deltaX, -deltaY) * (180 / Math.PI);
+
+            return angle;
+        }
+
+        // Knob drag handlers
+        function startDrag(e) {
+            e.preventDefault();
+            isDragging = true;
+            volumeKnob.classList.add('dragging');
+            handleDrag(e);
+        }
+
+        function handleDrag(e) {
+            if (!isDragging) return;
+            e.preventDefault();
+
+            const angle = getAngleFromEvent(e);
+            const volume = angleToVolume(angle);
+
+            currentVolume = volume;
+            updateKnobVisual(volume);
+        }
+
+        function endDrag(e) {
+            if (!isDragging) return;
+            isDragging = false;
+            volumeKnob.classList.remove('dragging');
+            setVolume(currentVolume);
+        }
+
+        // Mouse events
+        volumeKnob.addEventListener('mousedown', startDrag);
+        document.addEventListener('mousemove', handleDrag);
+        document.addEventListener('mouseup', endDrag);
+
+        // Touch events
+        volumeKnob.addEventListener('touchstart', startDrag, { passive: false });
+        document.addEventListener('touchmove', handleDrag, { passive: false });
+        document.addEventListener('touchend', endDrag);
 
         // WebSocket connection
         function connectWS() {
@@ -363,24 +480,15 @@
             }
         }
 
-        // Slider events - isSliding only true during active dragging
-        volumeSlider.addEventListener('input', (e) => {
-            isSliding = true;
-            volumeValue.textContent = e.target.value;
-        });
-
-        volumeSlider.addEventListener('change', (e) => {
-            // Release happened - allow updates, then send command
-            isSliding = false;
-            setVolume(e.target.value);
-        });
-
         // Prevent double-tap zoom on mobile
         document.addEventListener('touchend', (e) => {
             if (e.target.tagName === 'BUTTON') {
                 e.preventDefault();
             }
         }, { passive: false });
+
+        // Initialize knob at 0
+        updateKnobVisual(0);
 
         // Start connection
         connectWS();
