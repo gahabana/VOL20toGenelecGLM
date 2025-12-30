@@ -123,12 +123,12 @@
         .knob-pointer::after {
             content: '';
             position: absolute;
-            top: 12px;
+            top: 20px;
             left: 50%;
             transform: translateX(-50%);
             width: 6px;
-            height: 24px;
-            background: var(--accent);
+            height: 30px;
+            background: var(--pointer-color, #5c6bc0);
             border-radius: 3px;
             box-shadow: var(--shadow);
         }
@@ -324,6 +324,17 @@
         const COLOR_PURPLE = '#bb86fc';  // 70-90
         const COLOR_RED = '#ff1744';     // 90-127 (vibrant red)
 
+        // Brighter pointer colors (2 shades lighter)
+        const POINTER_NAVY = '#5c6bc0';
+        const POINTER_PURPLE = '#e1c4ff';
+        const POINTER_RED = '#ff8a80';
+
+        function getPointerColor(volume) {
+            if (volume < BREAK1_VOL) return POINTER_NAVY;
+            if (volume < BREAK2_VOL) return POINTER_PURPLE;
+            return POINTER_RED;
+        }
+
         // DOM elements
         const statusDot = document.getElementById('statusDot');
         const volumeValue = document.getElementById('volumeValue');
@@ -425,6 +436,9 @@
         function updateKnobVisual(volume) {
             const angle = volumeToAngle(volume);
             knobPointer.style.transform = `rotate(${angle}deg)`;
+
+            // Update pointer color based on volume zone
+            knobPointer.style.setProperty('--pointer-color', getPointerColor(volume));
 
             // Calculate fill angle (0-300 degrees from 6 o'clock)
             const fillAngle = angle - MIN_ANGLE;
