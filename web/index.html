@@ -377,16 +377,37 @@
         }
 
         // Knob drag handlers
+        let dragTimeout = null;
+
         function startDrag(e) {
             e.preventDefault();
             isDragging = true;
             volumeKnob.classList.add('dragging');
+
+            // Safety timeout - auto-release after 5 seconds of no activity
+            clearTimeout(dragTimeout);
+            dragTimeout = setTimeout(() => {
+                if (isDragging) {
+                    console.warn('Drag timeout - auto-releasing');
+                    endDrag();
+                }
+            }, 5000);
+
             handleDrag(e);
         }
 
         function handleDrag(e) {
             if (!isDragging) return;
             e.preventDefault();
+
+            // Reset safety timeout on activity
+            clearTimeout(dragTimeout);
+            dragTimeout = setTimeout(() => {
+                if (isDragging) {
+                    console.warn('Drag timeout - auto-releasing');
+                    endDrag();
+                }
+            }, 5000);
 
             const angle = getAngleFromEvent(e);
             const volume = angleToVolume(angle);
@@ -397,6 +418,7 @@
 
         function endDrag(e) {
             if (!isDragging) return;
+            clearTimeout(dragTimeout);
             isDragging = false;
             volumeKnob.classList.remove('dragging');
             setVolume(currentVolume);
@@ -411,6 +433,10 @@
         volumeKnob.addEventListener('touchstart', startDrag, { passive: false });
         document.addEventListener('touchmove', handleDrag, { passive: false });
         document.addEventListener('touchend', endDrag);
+        document.addEventListener('touchcancel', endDrag);
+
+        // Additional safety: release on window blur
+        window.addEventListener('blur', endDrag);
 
         // WebSocket connection
         function connectWS() {
