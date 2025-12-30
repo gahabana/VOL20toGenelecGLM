@@ -367,11 +367,11 @@ class GlmController:
         if callback in self._state_callbacks:
             self._state_callbacks.remove(callback)
 
-    def _notify_state_change(self):
-        """Call all registered callbacks with current state (if changed)."""
+    def _notify_state_change(self, force: bool = False):
+        """Call all registered callbacks with current state (if changed or forced)."""
         state = self.get_state()
-        # Debounce: only notify if state actually changed
-        if state == self._last_notified_state:
+        # Debounce: only notify if state actually changed (unless forced)
+        if not force and state == self._last_notified_state:
             return
         self._last_notified_state = state.copy()
         for callback in self._state_callbacks:
@@ -421,9 +421,15 @@ class GlmController:
         """Update state from MIDI message. Returns True if state changed."""
         changed = False
         notify = False
+        force_notify = False  # Force notification even if state unchanged (for clipped values)
         with self._lock:
             if cc == GLM_VOLUME_ABS:
                 self._volume_initialized = True
+                # Check if GLM clipped/adjusted our requested value
+                # If so, force notification to sync UI even if volume unchanged
+                if self._pending_volume is not None and self._pending_volume != value:
+                    logger.debug(f"GLM clipped volume: sent {self._pending_volume}, got {value}")
+                    force_notify = True
                 # Clear pending and trust GLM's reported value as source of truth.
                 # This ensures we respect GLM's volume limits (e.g., max volume cap).
                 self._pending_volume = None
@@ -446,7 +452,7 @@ class GlmController:
                     notify = True
 
         if notify:
-            self._notify_state_change()
+            self._notify_state_change(force=force_notify)
         return changed
 
     def get_state(self) -> dict:
