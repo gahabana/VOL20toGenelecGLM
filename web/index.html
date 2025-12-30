@@ -534,14 +534,21 @@
             updateKnobVisual(volume);
         }
 
+        // GLM minimum volume is 27 (equals -100dB)
+        const GLM_MIN_VOLUME = 27;
+
         async function endDrag(e) {
             if (!isDragging) return;
             clearTimeout(dragTimeout);
             isDragging = false;
             volumeKnob.classList.remove('dragging');
             await setVolume(currentVolume);
-            // Fetch actual state to sync (in case GLM clipped the value)
-            await refreshState();
+            // Only refresh state if value might be clipped by GLM
+            if (currentVolume < GLM_MIN_VOLUME) {
+                // Small delay to let MIDI command process
+                await new Promise(r => setTimeout(r, 100));
+                await refreshState();
+            }
         }
 
         async function refreshState() {
