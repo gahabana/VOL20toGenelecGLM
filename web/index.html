@@ -89,11 +89,10 @@
             /* Ring dimensions (percentage of radius from center) */
             --ring-inner: 52;
             --ring-outer: 78;
-            /* Pointer calculated from ring dimensions, with small inset from inner edge */
-            --knob-radius: 100px;
+            /* Pointer: starts at outer edge of ring, ends 6px before inner edge */
             --pointer-inset: 6px;
-            --pointer-top: calc(var(--knob-radius) * (100 - var(--ring-outer)) / 100);
-            --pointer-height: calc(var(--knob-radius) * (var(--ring-outer) - var(--ring-inner)) / 100 - var(--pointer-inset));
+            --pointer-top: 22px;   /* 100px - 78% = 22px from edge */
+            --pointer-height: 20px; /* ring is 26px thick, minus 6px inset = 20px */
         }
 
         .knob-track {
