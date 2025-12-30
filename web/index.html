@@ -166,13 +166,15 @@
         }
 
         .knob-min {
-            bottom: 8px;
-            left: 16px;
+            bottom: -4px;
+            left: 50%;
+            transform: translateX(-50%);
         }
 
         .knob-max {
-            bottom: 8px;
-            right: 16px;
+            top: 50%;
+            right: -8px;
+            transform: translateY(-50%);
         }
 
         .knob.dragging .knob-pointer,
@@ -259,11 +261,11 @@
             <div class="knob" id="volumeKnob">
                 <svg class="knob-track" viewBox="0 0 200 200">
                     <circle class="track-bg" cx="100" cy="100" r="88"
-                        stroke-dasharray="369 553"
-                        transform="rotate(150 100 100)"/>
+                        stroke-dasharray="461 553"
+                        transform="rotate(90 100 100)"/>
                     <circle class="track-fill" id="knobFill" cx="100" cy="100" r="88"
-                        stroke-dasharray="369 553" stroke-dashoffset="369"
-                        transform="rotate(150 100 100)"/>
+                        stroke-dasharray="461 553" stroke-dashoffset="461"
+                        transform="rotate(90 100 100)"/>
                 </svg>
                 <div class="knob-pointer" id="knobPointer"></div>
                 <div class="knob-center">
@@ -303,13 +305,24 @@
         let currentVolume = 0;
 
         // Knob constants
-        const MIN_ANGLE = -120;  // 8 o'clock position (degrees from 12 o'clock)
+        const MIN_ANGLE = -180;  // 6 o'clock position (degrees from 12 o'clock)
         const MAX_ANGLE = 120;   // 4 o'clock position
-        const ANGLE_RANGE = MAX_ANGLE - MIN_ANGLE;  // 240 degrees
+        const ANGLE_RANGE = MAX_ANGLE - MIN_ANGLE;  // 300 degrees
         const MIN_VALUE = 0;
         const MAX_VALUE = 127;
         const CIRCUMFERENCE = 553;  // 2 * PI * 88 (radius)
-        const ARC_VISIBLE = 369;    // 240/360 * 553 = visible arc length
+        const ARC_VISIBLE = 461;    // 300/360 * 553 = visible arc length
+
+        // Volume color thresholds
+        const COLOR_NAVY = '#1a237e';    // 0-70
+        const COLOR_PURPLE = '#bb86fc';  // 70-90 (original accent)
+        const COLOR_RED = '#cf6679';     // 90-127
+
+        function getVolumeColor(volume) {
+            if (volume < 70) return COLOR_NAVY;
+            if (volume < 90) return COLOR_PURPLE;
+            return COLOR_RED;
+        }
 
         // DOM elements
         const statusDot = document.getElementById('statusDot');
@@ -342,6 +355,10 @@
             const fillAmount = volume / MAX_VALUE;
             const dashOffset = ARC_VISIBLE * (1 - fillAmount);
             knobFill.style.strokeDashoffset = dashOffset;
+
+            // Update color based on volume
+            const color = getVolumeColor(volume);
+            knobFill.style.stroke = color;
 
             volumeValue.textContent = volume;
         }
