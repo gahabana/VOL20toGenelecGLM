@@ -313,14 +313,23 @@
         const CIRCUMFERENCE = 553;  // 2 * PI * 88 (radius)
         const ARC_VISIBLE = 461;    // 300/360 * 553 = visible arc length
 
+        // Non-linear volume mapping breakpoints
+        // Volume 0-70 → 6 to 8 o'clock (60°), angles -180 to -120
+        // Volume 70-100 → 8 to 2 o'clock (180°), angles -120 to 60
+        // Volume 100-127 → 2 to 4 o'clock (60°), angles 60 to 120
+        const BREAK1_VOL = 70;
+        const BREAK2_VOL = 100;
+        const BREAK1_ANGLE = -120;  // 8 o'clock
+        const BREAK2_ANGLE = 60;    // 2 o'clock
+
         // Volume color thresholds
         const COLOR_NAVY = '#1a237e';    // 0-70
-        const COLOR_PURPLE = '#bb86fc';  // 70-90 (original accent)
-        const COLOR_RED = '#cf6679';     // 90-127
+        const COLOR_PURPLE = '#bb86fc';  // 70-100
+        const COLOR_RED = '#cf6679';     // 100-127
 
         function getVolumeColor(volume) {
-            if (volume < 70) return COLOR_NAVY;
-            if (volume < 90) return COLOR_PURPLE;
+            if (volume < BREAK1_VOL) return COLOR_NAVY;
+            if (volume < BREAK2_VOL) return COLOR_PURPLE;
             return COLOR_RED;
         }
 
@@ -335,15 +344,34 @@
         const powerBtn = document.getElementById('powerBtn');
         const footer = document.getElementById('footer');
 
-        // Convert volume (0-127) to angle (-150 to 150)
+        // Convert volume (0-127) to angle using piecewise linear mapping
         function volumeToAngle(volume) {
-            return MIN_ANGLE + (volume / MAX_VALUE) * ANGLE_RANGE;
+            if (volume <= BREAK1_VOL) {
+                // 0-70 → -180 to -120 (60 degrees)
+                return MIN_ANGLE + (volume / BREAK1_VOL) * (BREAK1_ANGLE - MIN_ANGLE);
+            } else if (volume <= BREAK2_VOL) {
+                // 70-100 → -120 to 60 (180 degrees)
+                return BREAK1_ANGLE + ((volume - BREAK1_VOL) / (BREAK2_VOL - BREAK1_VOL)) * (BREAK2_ANGLE - BREAK1_ANGLE);
+            } else {
+                // 100-127 → 60 to 120 (60 degrees)
+                return BREAK2_ANGLE + ((volume - BREAK2_VOL) / (MAX_VALUE - BREAK2_VOL)) * (MAX_ANGLE - BREAK2_ANGLE);
+            }
         }
 
-        // Convert angle to volume
+        // Convert angle to volume using inverse piecewise linear mapping
         function angleToVolume(angle) {
             const clampedAngle = Math.max(MIN_ANGLE, Math.min(MAX_ANGLE, angle));
-            return Math.round(((clampedAngle - MIN_ANGLE) / ANGLE_RANGE) * MAX_VALUE);
+
+            if (clampedAngle <= BREAK1_ANGLE) {
+                // -180 to -120 → 0-70
+                return Math.round((clampedAngle - MIN_ANGLE) / (BREAK1_ANGLE - MIN_ANGLE) * BREAK1_VOL);
+            } else if (clampedAngle <= BREAK2_ANGLE) {
+                // -120 to 60 → 70-100
+                return Math.round(BREAK1_VOL + (clampedAngle - BREAK1_ANGLE) / (BREAK2_ANGLE - BREAK1_ANGLE) * (BREAK2_VOL - BREAK1_VOL));
+            } else {
+                // 60 to 120 → 100-127
+                return Math.round(BREAK2_VOL + (clampedAngle - BREAK2_ANGLE) / (MAX_ANGLE - BREAK2_ANGLE) * (MAX_VALUE - BREAK2_VOL));
+            }
         }
 
         // Update knob visual
@@ -351,9 +379,9 @@
             const angle = volumeToAngle(volume);
             knobPointer.style.transform = `rotate(${angle}deg)`;
 
-            // Update fill arc - offset decreases as volume increases
-            const fillAmount = volume / MAX_VALUE;
-            const dashOffset = ARC_VISIBLE * (1 - fillAmount);
+            // Update fill arc based on angle position (not linear volume)
+            const angleProgress = (angle - MIN_ANGLE) / ANGLE_RANGE;
+            const dashOffset = ARC_VISIBLE * (1 - angleProgress);
             knobFill.style.strokeDashoffset = dashOffset;
 
             // Update color based on volume
