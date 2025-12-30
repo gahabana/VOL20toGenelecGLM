@@ -91,21 +91,26 @@
             position: absolute;
             width: 100%;
             height: 100%;
+            border-radius: 50%;
+            /* Gray background arc from 6 o'clock to 4 o'clock */
+            background: conic-gradient(
+                from 180deg,
+                var(--bg-elevated) 0deg,
+                var(--bg-elevated) 300deg,
+                transparent 300deg
+            );
+            -webkit-mask: radial-gradient(transparent 65%, black 66%, black 78%, transparent 79%);
+            mask: radial-gradient(transparent 65%, black 66%, black 78%, transparent 79%);
         }
 
-        .knob-track circle {
-            fill: none;
-            stroke-width: 12;
-            stroke-linecap: round;
-        }
-
-        .knob-track .track-bg {
-            stroke: var(--bg-elevated);
-        }
-
-        .knob-track .track-fill {
-            stroke: var(--accent);
-            transition: stroke-dashoffset 0.1s ease-out;
+        .knob-fill {
+            position: absolute;
+            width: 100%;
+            height: 100%;
+            border-radius: 50%;
+            -webkit-mask: radial-gradient(transparent 65%, black 66%, black 78%, transparent 79%);
+            mask: radial-gradient(transparent 65%, black 66%, black 78%, transparent 79%);
+            /* Background set dynamically via JS */
         }
 
         .knob-pointer {
@@ -259,14 +264,8 @@
 
         <div class="knob-container">
             <div class="knob" id="volumeKnob">
-                <svg class="knob-track" viewBox="0 0 200 200">
-                    <circle class="track-bg" cx="100" cy="100" r="88"
-                        stroke-dasharray="461 553"
-                        transform="rotate(90 100 100)"/>
-                    <circle class="track-fill" id="knobFill" cx="100" cy="100" r="88"
-                        stroke-dasharray="461 553" stroke-dashoffset="461"
-                        transform="rotate(90 100 100)"/>
-                </svg>
+                <div class="knob-track"></div>
+                <div class="knob-fill" id="knobFill"></div>
                 <div class="knob-pointer" id="knobPointer"></div>
                 <div class="knob-center">
                     <div class="knob-value" id="volumeValue">--</div>
@@ -310,8 +309,6 @@
         const ANGLE_RANGE = MAX_ANGLE - MIN_ANGLE;  // 300 degrees
         const MIN_VALUE = 0;
         const MAX_VALUE = 127;
-        const CIRCUMFERENCE = 553;  // 2 * PI * 88 (radius)
-        const ARC_VISIBLE = 461;    // 300/360 * 553 = visible arc length
 
         // Non-linear volume mapping breakpoints
         // Volume 0-70 → 6 to 8 o'clock (60°), angles -180 to -120
@@ -322,16 +319,10 @@
         const BREAK1_ANGLE = -120;  // 8 o'clock
         const BREAK2_ANGLE = 60;    // 2 o'clock
 
-        // Volume color thresholds
+        // Gradient colors
         const COLOR_NAVY = '#1a237e';    // 0-70
         const COLOR_PURPLE = '#bb86fc';  // 70-100
         const COLOR_RED = '#cf6679';     // 100-127
-
-        function getVolumeColor(volume) {
-            if (volume < BREAK1_VOL) return COLOR_NAVY;
-            if (volume < BREAK2_VOL) return COLOR_PURPLE;
-            return COLOR_RED;
-        }
 
         // DOM elements
         const statusDot = document.getElementById('statusDot');
@@ -374,19 +365,72 @@
             }
         }
 
+        // Color stops for gradient (in degrees from start at 6 o'clock)
+        // Navy: 0-60°, transition 45-75°
+        // Purple: 60-240°, transition 225-255°
+        // Red: 240-300°
+        const GRAD_TRANSITION = 15;  // degrees for color transition
+
+        // Build conic gradient string up to a given angle
+        function buildFillGradient(fillAngle) {
+            if (fillAngle <= 0) {
+                return 'transparent';
+            }
+
+            // Color zones (in degrees from 6 o'clock)
+            const navyEnd = 60;
+            const purpleStart = 60;
+            const purpleEnd = 240;
+            const redStart = 240;
+
+            let stops = [];
+            stops.push(`${COLOR_NAVY} 0deg`);
+
+            if (fillAngle <= navyEnd - GRAD_TRANSITION) {
+                // Only in navy zone
+                stops.push(`${COLOR_NAVY} ${fillAngle}deg`);
+                stops.push(`transparent ${fillAngle}deg`);
+            } else if (fillAngle <= navyEnd + GRAD_TRANSITION) {
+                // In navy-to-purple transition
+                stops.push(`${COLOR_NAVY} ${navyEnd - GRAD_TRANSITION}deg`);
+                stops.push(`${COLOR_PURPLE} ${fillAngle}deg`);
+                stops.push(`transparent ${fillAngle}deg`);
+            } else if (fillAngle <= purpleEnd - GRAD_TRANSITION) {
+                // In purple zone
+                stops.push(`${COLOR_NAVY} ${navyEnd - GRAD_TRANSITION}deg`);
+                stops.push(`${COLOR_PURPLE} ${navyEnd + GRAD_TRANSITION}deg`);
+                stops.push(`${COLOR_PURPLE} ${fillAngle}deg`);
+                stops.push(`transparent ${fillAngle}deg`);
+            } else if (fillAngle <= purpleEnd + GRAD_TRANSITION) {
+                // In purple-to-red transition
+                stops.push(`${COLOR_NAVY} ${navyEnd - GRAD_TRANSITION}deg`);
+                stops.push(`${COLOR_PURPLE} ${navyEnd + GRAD_TRANSITION}deg`);
+                stops.push(`${COLOR_PURPLE} ${purpleEnd - GRAD_TRANSITION}deg`);
+                stops.push(`${COLOR_RED} ${fillAngle}deg`);
+                stops.push(`transparent ${fillAngle}deg`);
+            } else {
+                // In red zone
+                stops.push(`${COLOR_NAVY} ${navyEnd - GRAD_TRANSITION}deg`);
+                stops.push(`${COLOR_PURPLE} ${navyEnd + GRAD_TRANSITION}deg`);
+                stops.push(`${COLOR_PURPLE} ${purpleEnd - GRAD_TRANSITION}deg`);
+                stops.push(`${COLOR_RED} ${purpleEnd + GRAD_TRANSITION}deg`);
+                stops.push(`${COLOR_RED} ${fillAngle}deg`);
+                stops.push(`transparent ${fillAngle}deg`);
+            }
+
+            return `conic-gradient(from 180deg, ${stops.join(', ')})`;
+        }
+
         // Update knob visual
         function updateKnobVisual(volume) {
             const angle = volumeToAngle(volume);
             knobPointer.style.transform = `rotate(${angle}deg)`;
 
-            // Update fill arc based on angle position (not linear volume)
-            const angleProgress = (angle - MIN_ANGLE) / ANGLE_RANGE;
-            const dashOffset = ARC_VISIBLE * (1 - angleProgress);
-            knobFill.style.strokeDashoffset = dashOffset;
+            // Calculate fill angle (0-300 degrees from 6 o'clock)
+            const fillAngle = angle - MIN_ANGLE;
 
-            // Update color based on volume
-            const color = getVolumeColor(volume);
-            knobFill.style.stroke = color;
+            // Update fill with dynamic gradient
+            knobFill.style.background = buildFillGradient(fillAngle);
 
             volumeValue.textContent = volume;
         }
