@@ -365,7 +365,22 @@
         }
 
         // Convert angle to volume using inverse piecewise linear mapping
+        // Includes dead zone handling to prevent wraparound
         function angleToVolume(angle) {
+            // Dead zone is between MAX_ANGLE (120°, 4 o'clock) and MIN_ANGLE (-180°, 6 o'clock)
+            // Center of dead zone is at 150° (5 o'clock)
+            const DEAD_ZONE_CENTER = 150;
+
+            // Handle dead zone - angles between 120° and 180° (or very close to -180°)
+            if (angle > MAX_ANGLE) {
+                // In dead zone on the max side (past 4 o'clock toward 5 o'clock)
+                if (angle <= DEAD_ZONE_CENTER) {
+                    return MAX_VALUE;  // Clamp to 127
+                } else {
+                    return MIN_VALUE;  // Closer to 6 o'clock, clamp to 0
+                }
+            }
+
             const clampedAngle = Math.max(MIN_ANGLE, Math.min(MAX_ANGLE, angle));
 
             if (clampedAngle <= BREAK1_ANGLE) {
