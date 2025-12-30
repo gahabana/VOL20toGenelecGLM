@@ -534,12 +534,24 @@
             updateKnobVisual(volume);
         }
 
-        function endDrag(e) {
+        async function endDrag(e) {
             if (!isDragging) return;
             clearTimeout(dragTimeout);
             isDragging = false;
             volumeKnob.classList.remove('dragging');
-            setVolume(currentVolume);
+            await setVolume(currentVolume);
+            // Fetch actual state to sync (in case GLM clipped the value)
+            await refreshState();
+        }
+
+        async function refreshState() {
+            try {
+                const response = await fetch(`${API_BASE}/api/state`);
+                const state = await response.json();
+                updateUI(state);
+            } catch (e) {
+                console.error('Failed to refresh state:', e);
+            }
         }
 
         // Mouse events
