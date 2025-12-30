@@ -312,17 +312,17 @@
 
         // Non-linear volume mapping breakpoints
         // Volume 0-70 → 6 to 8 o'clock (60°), angles -180 to -120
-        // Volume 70-100 → 8 to 2 o'clock (180°), angles -120 to 60
-        // Volume 100-127 → 2 to 4 o'clock (60°), angles 60 to 120
+        // Volume 70-90 → 8 to 12 o'clock (120°), angles -120 to 0
+        // Volume 90-127 → 12 to 4 o'clock (120°), angles 0 to 120
         const BREAK1_VOL = 70;
-        const BREAK2_VOL = 100;
+        const BREAK2_VOL = 90;
         const BREAK1_ANGLE = -120;  // 8 o'clock
-        const BREAK2_ANGLE = 60;    // 2 o'clock
+        const BREAK2_ANGLE = 0;     // 12 o'clock
 
         // Gradient colors
         const COLOR_NAVY = '#1a237e';    // 0-70
-        const COLOR_PURPLE = '#bb86fc';  // 70-100
-        const COLOR_RED = '#ff1744';     // 100-127 (vibrant red)
+        const COLOR_PURPLE = '#bb86fc';  // 70-90
+        const COLOR_RED = '#ff1744';     // 90-127 (vibrant red)
 
         // DOM elements
         const statusDot = document.getElementById('statusDot');
@@ -366,9 +366,9 @@
         }
 
         // Color stops for gradient (in degrees from start at 6 o'clock)
-        // Navy: 0-60°, transition 45-75°
-        // Purple: 60-240°, transition 225-255°
-        // Red: 240-300°
+        // Navy: 0-60° (6-8 o'clock), transition 45-75°
+        // Purple: 60-180° (8-12 o'clock), transition 165-195°
+        // Red: 180-300° (12-4 o'clock)
         const GRAD_TRANSITION = 15;  // degrees for color transition
 
         // Build conic gradient string up to a given angle
@@ -378,10 +378,10 @@
             }
 
             // Color zones (in degrees from 6 o'clock)
-            const navyEnd = 60;
+            const navyEnd = 60;      // 8 o'clock
             const purpleStart = 60;
-            const purpleEnd = 240;
-            const redStart = 240;
+            const purpleEnd = 180;   // 12 o'clock
+            const redStart = 180;
 
             let stops = [];
             stops.push(`${COLOR_NAVY} 0deg`);
