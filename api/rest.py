@@ -227,9 +227,10 @@ async def websocket_state(websocket: WebSocket):
             await websocket.receive_text()
     except WebSocketDisconnect:
         pass
-    except OSError as e:
-        # Windows semaphore timeout or other connection errors
-        logger.debug(f"WebSocket connection error: {e}")
+    except (OSError, asyncio.CancelledError, ConnectionResetError, Exception) as e:
+        # Windows semaphore timeout, connection reset, or other connection errors
+        # These are expected when client disconnects abruptly (close tab, network drop)
+        logger.debug(f"WebSocket connection closed: {type(e).__name__}")
     finally:
         with _ws_lock:
             _websocket_clients.discard(websocket)
@@ -251,6 +252,11 @@ def start_api_server(action_queue, glm_controller, host: str = "0.0.0.0", port: 
     """
     import uvicorn
     global _api_event_loop
+
+    # Suppress websockets library's verbose error logging for expected disconnects
+    # (Windows semaphore timeout, connection reset, etc.)
+    logging.getLogger("websockets.legacy.protocol").setLevel(logging.CRITICAL)
+    logging.getLogger("websockets.protocol").setLevel(logging.CRITICAL)
 
     app = create_app(action_queue, glm_controller)
 
