@@ -522,12 +522,10 @@
 
                     // Reject if update goes opposite to button direction
                     if ((wantDown && goingUp) || (wantUp && goingDown)) {
-                        console.log('updateUI REJECTED:', state.volume, 'current:', currentVolume, 'wantDown:', wantDown);
                         return; // Skip this stale update
                     }
                 }
 
-                console.log('updateUI accepted:', state.volume);
                 currentVolume = state.volume;
                 updateKnobVisual(state.volume);
             }
@@ -607,7 +605,6 @@
 
         async function endDrag(e) {
             if (!isDragging) return;
-            console.log('endDrag called, currentVolume:', currentVolume);
             clearTimeout(dragTimeout);
             isDragging = false;
             volumeKnob.classList.remove('dragging');
@@ -678,7 +675,6 @@
 
         // API calls
         async function setVolume(value) {
-            console.log('setVolume called:', value, 'from:', new Error().stack);
             try {
                 await fetch(`${API_BASE}/api/volume`, {
                     method: 'POST',
@@ -724,8 +720,6 @@
             volumeAccel.lastDirection = direction;
 
             const delta = direction > 0 ? volumeAccel.step : -volumeAccel.step;
-
-            console.log('adjustVolume:', delta, 'step:', volumeAccel.step);
 
             // Fire and forget - don't await, let WebSocket update the UI
             fetch(`${API_BASE}/api/volume/adjust`, {
