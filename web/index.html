@@ -510,6 +510,22 @@
         // Update UI with state
         function updateUI(state) {
             if (!isDragging) {
+                const now = Date.now();
+                const recentlyAdjusted = (now - volumeAccel.lastTime) < volumeAccel.adjustWindow;
+
+                // During rapid button presses, reject updates that go opposite direction
+                if (recentlyAdjusted && volumeAccel.lastDirection !== 0) {
+                    const goingUp = state.volume > currentVolume;
+                    const goingDown = state.volume < currentVolume;
+                    const wantUp = volumeAccel.lastDirection > 0;
+                    const wantDown = volumeAccel.lastDirection < 0;
+
+                    // Reject if update goes opposite to button direction
+                    if ((wantDown && goingUp) || (wantUp && goingDown)) {
+                        return; // Skip this stale update
+                    }
+                }
+
                 currentVolume = state.volume;
                 updateKnobVisual(state.volume);
             }
@@ -669,7 +685,8 @@
             lastDirection: 0,  // -1 or +1
             step: 1,
             maxStep: 3,
-            tapWindow: 250  // ms - time window for rapid taps
+            tapWindow: 250,   // ms - time window for rapid taps
+            adjustWindow: 500 // ms - reject opposite-direction updates after button press
         };
 
         function adjustVolume(direction) {
