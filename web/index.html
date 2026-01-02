@@ -509,9 +509,7 @@
 
         // Update UI with state
         function updateUI(state) {
-            // Skip volume updates during rapid button presses or knob drag
-            const isVolumeBusy = isDragging || Date.now() < volumeAccel.busyUntil;
-            if (!isVolumeBusy) {
+            if (!isDragging) {
                 currentVolume = state.volume;
                 updateKnobVisual(state.volume);
             }
@@ -671,11 +669,10 @@
             lastDirection: 0,  // -1 or +1
             step: 1,
             maxStep: 3,
-            tapWindow: 250,  // ms - time window for rapid taps
-            busyUntil: 0     // ignore WebSocket updates until this time
+            tapWindow: 250  // ms - time window for rapid taps
         };
 
-        async function adjustVolume(direction) {
+        function adjustVolume(direction) {
             const now = Date.now();
             const timeSinceLast = now - volumeAccel.lastTime;
             const sameDirection = (direction > 0) === (volumeAccel.lastDirection > 0);
@@ -690,24 +687,15 @@
 
             volumeAccel.lastTime = now;
             volumeAccel.lastDirection = direction;
-            // Ignore WebSocket volume updates for 400ms after last button press
-            volumeAccel.busyUntil = now + 400;
 
             const delta = direction > 0 ? volumeAccel.step : -volumeAccel.step;
 
-            // Optimistic UI update
-            currentVolume = Math.max(0, Math.min(127, currentVolume + delta));
-            updateKnobVisual(currentVolume);
-
-            try {
-                await fetch(`${API_BASE}/api/volume/adjust`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ delta: delta })
-                });
-            } catch (e) {
-                console.error('Failed to adjust volume:', e);
-            }
+            // Fire and forget - don't await, let WebSocket update the UI
+            fetch(`${API_BASE}/api/volume/adjust`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ delta: delta })
+            }).catch(e => console.error('Failed to adjust volume:', e));
         }
 
         async function toggleMute() {
