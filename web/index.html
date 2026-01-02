@@ -305,7 +305,7 @@
 
         <div class="knob-container disabled">
             <div class="knob-row">
-                <button class="volume-step-btn" onclick="adjustVolume(-5)" aria-label="Volume down">
+                <button class="volume-step-btn" onclick="adjustVolume(-1)" aria-label="Volume down">
                     <svg viewBox="0 0 24 24"><path d="M19 13H5v-2h14v2z"/></svg>
                 </button>
                 <div class="knob" id="volumeKnob">
@@ -319,7 +319,7 @@
                     <span class="knob-min">0</span>
                     <span class="knob-max">127</span>
                 </div>
-                <button class="volume-step-btn" onclick="adjustVolume(5)" aria-label="Volume up">
+                <button class="volume-step-btn" onclick="adjustVolume(1)" aria-label="Volume up">
                     <svg viewBox="0 0 24 24"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
                 </button>
             </div>
@@ -662,7 +662,33 @@
             }
         }
 
-        async function adjustVolume(delta) {
+        // Volume button acceleration state
+        const volumeAccel = {
+            lastTime: 0,
+            lastDirection: 0,  // -1 or +1
+            step: 1,
+            maxStep: 3,
+            tapWindow: 250  // ms - time window for rapid taps
+        };
+
+        async function adjustVolume(direction) {
+            const now = Date.now();
+            const timeSinceLast = now - volumeAccel.lastTime;
+            const sameDirection = (direction > 0) === (volumeAccel.lastDirection > 0);
+
+            if (timeSinceLast < volumeAccel.tapWindow && sameDirection) {
+                // Rapid tap in same direction - accelerate
+                volumeAccel.step = Math.min(volumeAccel.step + 1, volumeAccel.maxStep);
+            } else {
+                // Slow tap or direction change - reset
+                volumeAccel.step = 1;
+            }
+
+            volumeAccel.lastTime = now;
+            volumeAccel.lastDirection = direction;
+
+            const delta = direction > 0 ? volumeAccel.step : -volumeAccel.step;
+
             try {
                 await fetch(`${API_BASE}/api/volume/adjust`, {
                     method: 'POST',
