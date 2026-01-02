@@ -229,6 +229,10 @@
             transition: none;
         }
 
+        .knob.locked {
+            pointer-events: none;
+        }
+
         /* Control Buttons */
         .controls {
             display: grid;
@@ -693,7 +697,8 @@
             step: 1,
             maxStep: 3,
             tapWindow: 250,   // ms - time window for rapid taps
-            adjustWindow: 500 // ms - reject opposite-direction updates after button press
+            adjustWindow: 500, // ms - lock knob and reject opposite-direction updates
+            lockTimeout: null
         };
 
         function adjustVolume(direction) {
@@ -703,6 +708,13 @@
                 clearTimeout(dragTimeout);
                 volumeKnob.classList.remove('dragging');
             }
+
+            // Lock knob to prevent accidental clicks during rapid button presses
+            volumeKnob.classList.add('locked');
+            clearTimeout(volumeAccel.lockTimeout);
+            volumeAccel.lockTimeout = setTimeout(() => {
+                volumeKnob.classList.remove('locked');
+            }, volumeAccel.adjustWindow);
 
             const now = Date.now();
             const timeSinceLast = now - volumeAccel.lastTime;
