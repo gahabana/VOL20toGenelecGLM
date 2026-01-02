@@ -557,6 +557,13 @@
         let dragTimeout = null;
 
         function startDrag(e) {
+            // Ignore accidental knob touch during rapid button presses
+            const now = Date.now();
+            const recentlyAdjusted = (now - volumeAccel.lastTime) < volumeAccel.adjustWindow;
+            if (recentlyAdjusted) {
+                return;
+            }
+
             e.preventDefault();
             isDragging = true;
             volumeKnob.classList.add('dragging');
