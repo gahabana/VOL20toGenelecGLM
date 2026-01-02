@@ -89,9 +89,9 @@
             width: 48px;
             height: 48px;
             border-radius: 50%;
-            border: none;
-            background: #00897b;
-            color: #e0e0e0;
+            border: 1px solid #404040;
+            background: #2a2a2a;
+            color: #b0b0b0;
             cursor: pointer;
             display: flex;
             align-items: center;
@@ -102,13 +102,14 @@
         }
 
         .volume-step-btn:hover {
-            background: var(--success);
-            color: #000;
+            background: #3a3a3a;
+            border-color: #505050;
+            color: #e0e0e0;
         }
 
         .volume-step-btn:active {
             transform: scale(0.95);
-            background: var(--success);
+            background: #454545;
         }
 
         .volume-step-btn svg {
