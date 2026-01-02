@@ -556,7 +556,34 @@
         // Knob drag handlers
         let dragTimeout = null;
 
+        // Check if click is within the interactive ring area of the knob
+        function isInKnobRing(e) {
+            const rect = volumeKnob.getBoundingClientRect();
+            const centerX = rect.left + rect.width / 2;
+            const centerY = rect.top + rect.height / 2;
+            const radius = rect.width / 2;  // 100px for 200px knob
+
+            const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+            const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+
+            const dx = clientX - centerX;
+            const dy = clientY - centerY;
+            const distance = Math.sqrt(dx * dx + dy * dy);
+
+            // Ring is between 52% and 78% of radius (as defined in CSS mask)
+            // Add small buffer: accept 48% to 82% to be forgiving
+            const innerRadius = radius * 0.48;
+            const outerRadius = radius * 0.82;
+
+            return distance >= innerRadius && distance <= outerRadius;
+        }
+
         function startDrag(e) {
+            // Only start drag if click is within the ring area
+            if (!isInKnobRing(e)) {
+                return;
+            }
+
             // Ignore accidental knob touch during rapid button presses
             const now = Date.now();
             const recentlyAdjusted = (now - volumeAccel.lastTime) < volumeAccel.adjustWindow;
@@ -693,7 +720,7 @@
             step: 1,
             maxStep: 3,
             tapWindow: 250,   // ms - time window for rapid taps
-            adjustWindow: 500 // ms - reject opposite-direction updates after button press
+            adjustWindow: 500  // ms - block knob interaction after button press
         };
 
         function adjustVolume(direction) {
