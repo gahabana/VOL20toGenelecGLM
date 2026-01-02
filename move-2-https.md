@@ -13,15 +13,25 @@ Best for local network use. Browser will show a warning once.
 ### Generate Certificate
 
 ```bash
-# Run from project directory
+# Create ssl directory
+mkdir -p ssl
+
+# Generate cert with multiple hostnames/IPs (adjust to your setup)
 openssl req -x509 -newkey rsa:4096 \
     -keyout ssl/key.pem \
     -out ssl/cert.pem \
     -days 365 -nodes \
-    -subj '/CN=glm-control'
+    -subj '/CN=glm' \
+    -addext 'subjectAltName=DNS:glm,DNS:glm.lan,DNS:localhost,IP:192.168.1.50,IP:127.0.0.1'
 ```
 
-Create the `ssl/` directory first: `mkdir -p ssl`
+Replace `192.168.1.50` with your actual LAN IP. Add/remove DNS and IP entries as needed.
+
+This allows access via any of:
+- `https://glm/`
+- `https://glm.lan/`
+- `https://localhost/`
+- `https://192.168.1.50/`
 
 ### Backend Code Changes
 
