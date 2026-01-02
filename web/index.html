@@ -701,6 +701,13 @@
         };
 
         function adjustVolume(direction) {
+            // Cancel any ongoing knob drag to prevent stale value being sent
+            if (isDragging) {
+                isDragging = false;
+                clearTimeout(dragTimeout);
+                volumeKnob.classList.remove('dragging');
+            }
+
             const now = Date.now();
             const timeSinceLast = now - volumeAccel.lastTime;
             const sameDirection = (direction > 0) === (volumeAccel.lastDirection > 0);
