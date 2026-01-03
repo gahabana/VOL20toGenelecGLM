@@ -1185,22 +1185,29 @@ class HIDToMIDIDaemon:
 
         # Start power transition (blocks all commands)
         glm_controller.start_power_transition(target_state)
+        transition_start = time.time()
 
+        success = False
         try:
             # Execute via UI automation
             self._power_controller.set_state(desired, verify=True)
-            glm_controller.end_power_transition(success=True, actual_state=target_state)
+            success = True
         except Exception as e:
             logger.error(f"Power control failed: {e}")
-            glm_controller.end_power_transition(success=False)
 
-        # Ensure settling time is respected (UI automation may return early)
-        # The blocking in consumer will prevent new commands until settling completes
-        elapsed = time.time() - glm_controller._power_transition_start
+        # Wait for full settling time before ending transition
+        # This ensures UI shows transitioning state for the full 2 seconds
+        elapsed = time.time() - transition_start
         if elapsed < POWER_SETTLING_TIME:
             remaining = POWER_SETTLING_TIME - elapsed
             logger.debug(f"Waiting {remaining:.1f}s for power settling")
             time.sleep(remaining)
+
+        # Now end transition (UI will stop showing transitioning state)
+        if success:
+            glm_controller.end_power_transition(success=True, actual_state=target_state)
+        else:
+            glm_controller.end_power_transition(success=False)
 
     def _handle_adjust_volume(self, delta: int):
         """
