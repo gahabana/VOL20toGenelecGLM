@@ -34,8 +34,23 @@ class SetDim:
 
 @dataclass(frozen=True)
 class SetPower:
-    """Toggle power. GLM only supports toggle, not explicit on/off."""
-    pass
+    """
+    Set or toggle power state.
+
+    Attributes:
+        state: Target power state.
+            - None: Toggle (MIDI only - sends CC 28)
+            - True: Ensure ON (requires UI automation fallback)
+            - False: Ensure OFF (requires UI automation fallback)
+
+    Note:
+        MIDI CC 28 only supports toggle. Explicit on/off requires the
+        GlmPowerController UI automation. The consumer should:
+        1. For state=None: Send MIDI CC 28 (toggle)
+        2. For state=True/False: Use GlmPowerController.set_state() if available,
+           otherwise log a warning and fall back to toggle behavior.
+    """
+    state: Optional[bool] = None
 
 
 # Union type for type hints
