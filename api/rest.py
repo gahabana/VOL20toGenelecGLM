@@ -335,10 +335,13 @@ def start_api_server(action_queue, glm_controller, host: str = "0.0.0.0", port: 
     import uvicorn
     global _api_event_loop
 
-    # Suppress websockets library's verbose error logging for expected disconnects
+    # Suppress verbose error logging for expected WebSocket disconnects
     # (Windows semaphore timeout, connection reset, etc.)
     logging.getLogger("websockets.legacy.protocol").setLevel(logging.CRITICAL)
     logging.getLogger("websockets.protocol").setLevel(logging.CRITICAL)
+    logging.getLogger("websockets.legacy.server").setLevel(logging.CRITICAL)
+    # Suppress uvicorn's error logger which also catches and prints these exceptions
+    logging.getLogger("uvicorn.error").setLevel(logging.CRITICAL)
 
     app = create_app(action_queue, glm_controller)
 
