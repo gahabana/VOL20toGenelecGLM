@@ -34,6 +34,8 @@
             flex-direction: column;
             align-items: center;
             padding: 24px 16px;
+            /* Prevent pull-to-refresh gesture on mobile */
+            overscroll-behavior: none;
         }
 
         .container {
@@ -51,6 +53,21 @@
             font-weight: 400;
             letter-spacing: 0.5px;
             color: var(--text-secondary);
+            cursor: pointer;
+            touch-action: manipulation;
+            -webkit-user-select: none;
+            user-select: none;
+            padding: 8px 16px;
+            border-radius: 8px;
+            transition: background 0.2s;
+        }
+
+        header h1:hover {
+            background: var(--bg-elevated);
+        }
+
+        header h1:active {
+            background: var(--bg-card);
         }
 
         .status-dot {
@@ -99,6 +116,8 @@
             transition: all 0.2s;
             flex-shrink: 0;
             box-shadow: var(--shadow);
+            /* Prevent double-tap zoom on mobile */
+            touch-action: manipulation;
         }
 
         .volume-step-btn:hover {
@@ -259,6 +278,8 @@
             flex-direction: column;
             align-items: center;
             gap: 12px;
+            /* Prevent double-tap zoom on mobile */
+            touch-action: manipulation;
         }
 
         .control-btn:hover {
@@ -382,7 +403,7 @@
 <body>
     <div class="container">
         <header>
-            <h1><span class="status-dot" id="statusDot"></span>GLM Control</h1>
+            <h1 onclick="refreshState()" title="Tap to refresh"><span class="status-dot" id="statusDot"></span>GLM Control</h1>
         </header>
 
         <div class="knob-container disabled" id="knobContainer">
@@ -891,13 +912,6 @@
                 console.error('Failed to toggle power:', e);
             }
         }
-
-        // Prevent double-tap zoom on mobile
-        document.addEventListener('touchend', (e) => {
-            if (e.target.tagName === 'BUTTON') {
-                e.preventDefault();
-            }
-        }, { passive: false });
 
         // Initialize knob at 0
         updateKnobVisual(0);
