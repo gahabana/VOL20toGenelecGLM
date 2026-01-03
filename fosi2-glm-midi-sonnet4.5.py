@@ -1046,11 +1046,17 @@ class HIDToMIDIDaemon:
                                         glm_controller._notify_state_change()
                                         self._last_pattern_time = None
                                     else:
-                                        # Single burst = real power toggle
-                                        glm_controller.power = not glm_controller.power
-                                        logger.info(f"Power toggle detected (now {'ON' if glm_controller.power else 'OFF'})")
-                                        glm_controller._notify_state_change()
-                                        self._last_pattern_time = now
+                                        # Skip toggle detection during power cooldown
+                                        # UI automation verified state is authoritative
+                                        allowed, wait_time, _ = glm_controller.can_accept_power_command()
+                                        if not allowed:
+                                            logger.debug(f"MIDI power pattern ignored during cooldown ({wait_time:.1f}s remaining)")
+                                        else:
+                                            # Single burst = real power toggle
+                                            glm_controller.power = not glm_controller.power
+                                            logger.info(f"Power toggle detected (now {'ON' if glm_controller.power else 'OFF'})")
+                                            glm_controller._notify_state_change()
+                                            self._last_pattern_time = now
                                     self._rx_seq = []  # Clear after detection
                                 else:
                                     # Burst with extra messages (len > 5) - likely first burst of startup
