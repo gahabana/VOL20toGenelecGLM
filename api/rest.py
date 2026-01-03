@@ -46,6 +46,10 @@ class StateRequest(BaseModel):
     state: Optional[bool] = None  # None = toggle
 
 
+class PowerRequest(BaseModel):
+    state: Optional[bool] = None  # None = toggle, True = ON, False = OFF
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Manage startup and shutdown."""
@@ -86,7 +90,7 @@ def create_app(action_queue, glm_controller) -> FastAPI:
     app.post("/api/volume/adjust")(adjust_volume)
     app.post("/api/mute")(set_mute)
     app.post("/api/dim")(set_dim)
-    app.post("/api/power")(toggle_power)
+    app.post("/api/power")(set_power)
     app.get("/api/health")(health_check)
     app.websocket("/ws/state")(websocket_state)
 
@@ -107,9 +111,25 @@ def _submit_action(action):
     """Submit an action to the queue."""
     if _action_queue is None:
         logger.error("Action queue not initialized")
-        return False
+        return False, "not_initialized"
     _action_queue.put(QueuedAction(action=action, timestamp=time.time()))
-    return True
+    return True, None
+
+
+def _check_settling():
+    """Check if system is settling (power transition in progress)."""
+    if _glm_controller is None:
+        return False, 0
+    allowed, wait_time, reason = _glm_controller.can_accept_command()
+    return not allowed, wait_time
+
+
+def _check_power_cooldown():
+    """Check if power command is in cooldown."""
+    if _glm_controller is None:
+        return False, 0, None
+    allowed, wait_time, reason = _glm_controller.can_accept_power_command()
+    return not allowed, wait_time, reason
 
 
 def _broadcast_state_sync(state: dict):
@@ -163,22 +183,52 @@ async def get_state():
 
 async def set_volume(request: VolumeRequest):
     """Set absolute volume (0-127)."""
+    # Check if settling
+    settling, wait_time = _check_settling()
+    if settling:
+        return JSONResponse(
+            {"error": "Power settling in progress", "retry_after": round(wait_time, 1)},
+            status_code=503,
+            headers={"Retry-After": str(int(wait_time) + 1)}
+        )
+
     value = max(0, min(127, request.value))
-    if _submit_action(SetVolume(target=value)):
+    success, err = _submit_action(SetVolume(target=value))
+    if success:
         return {"status": "ok", "action": "set_volume", "value": value}
     return JSONResponse({"error": "Failed to submit action"}, status_code=500)
 
 
 async def adjust_volume(request: VolumeAdjustRequest):
     """Adjust volume by delta (positive = up, negative = down)."""
-    if _submit_action(AdjustVolume(delta=request.delta)):
+    # Check if settling
+    settling, wait_time = _check_settling()
+    if settling:
+        return JSONResponse(
+            {"error": "Power settling in progress", "retry_after": round(wait_time, 1)},
+            status_code=503,
+            headers={"Retry-After": str(int(wait_time) + 1)}
+        )
+
+    success, err = _submit_action(AdjustVolume(delta=request.delta))
+    if success:
         return {"status": "ok", "action": "adjust_volume", "delta": request.delta}
     return JSONResponse({"error": "Failed to submit action"}, status_code=500)
 
 
 async def set_mute(request: StateRequest = StateRequest()):
     """Set or toggle mute. Send {"state": true/false} or {} for toggle."""
-    if _submit_action(SetMute(state=request.state)):
+    # Check if settling
+    settling, wait_time = _check_settling()
+    if settling:
+        return JSONResponse(
+            {"error": "Power settling in progress", "retry_after": round(wait_time, 1)},
+            status_code=503,
+            headers={"Retry-After": str(int(wait_time) + 1)}
+        )
+
+    success, err = _submit_action(SetMute(state=request.state))
+    if success:
         action_desc = f"set to {request.state}" if request.state is not None else "toggle"
         return {"status": "ok", "action": "mute", "mode": action_desc}
     return JSONResponse({"error": "Failed to submit action"}, status_code=500)
@@ -186,16 +236,48 @@ async def set_mute(request: StateRequest = StateRequest()):
 
 async def set_dim(request: StateRequest = StateRequest()):
     """Set or toggle dim. Send {"state": true/false} or {} for toggle."""
-    if _submit_action(SetDim(state=request.state)):
+    # Check if settling
+    settling, wait_time = _check_settling()
+    if settling:
+        return JSONResponse(
+            {"error": "Power settling in progress", "retry_after": round(wait_time, 1)},
+            status_code=503,
+            headers={"Retry-After": str(int(wait_time) + 1)}
+        )
+
+    success, err = _submit_action(SetDim(state=request.state))
+    if success:
         action_desc = f"set to {request.state}" if request.state is not None else "toggle"
         return {"status": "ok", "action": "dim", "mode": action_desc}
     return JSONResponse({"error": "Failed to submit action"}, status_code=500)
 
 
-async def toggle_power():
-    """Toggle power."""
-    if _submit_action(SetPower()):
-        return {"status": "ok", "action": "power", "mode": "toggle"}
+async def set_power(request: PowerRequest = PowerRequest()):
+    """
+    Set or toggle power.
+
+    Send {} for toggle, {"state": true} for ON, {"state": false} for OFF.
+    """
+    # Check power cooldown (longer than settling)
+    blocked, wait_time, reason = _check_power_cooldown()
+    if blocked:
+        if reason == "power_settling":
+            msg = "Power settling in progress"
+        else:
+            msg = "Power cooldown active"
+        return JSONResponse(
+            {"error": msg, "retry_after": round(wait_time, 1)},
+            status_code=503,
+            headers={"Retry-After": str(int(wait_time) + 1)}
+        )
+
+    success, err = _submit_action(SetPower(state=request.state))
+    if success:
+        if request.state is None:
+            mode = "toggle"
+        else:
+            mode = "on" if request.state else "off"
+        return {"status": "ok", "action": "power", "mode": mode}
     return JSONResponse({"error": "Failed to submit action"}, status_code=500)
 
 

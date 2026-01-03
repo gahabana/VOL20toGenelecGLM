@@ -129,8 +129,9 @@ class MqttClient:
                 self._submit_action(SetDim(state=state))
 
             elif topic == self._cmd_power_topic:
-                # Power: only toggle supported
-                self._submit_action(SetPower())
+                # Power: accept ON/OFF/true/false/1/0/TOGGLE
+                state = self._parse_bool_or_toggle(payload)
+                self._submit_action(SetPower(state=state))
 
         except (ValueError, TypeError) as e:
             logger.warning(f"Invalid MQTT command on {topic}: {payload} ({e})")
@@ -156,12 +157,22 @@ class MqttClient:
         if not self._connected or self._client is None:
             return
 
+        # Determine power state for HA
+        # During transition, show the transitioning state
+        power_transitioning = state.get("power_transitioning", False)
+        if power_transitioning:
+            power_state = "TRANSITIONING"
+        else:
+            power_state = "ON" if state["power"] else "OFF"
+
         # Convert to HA-friendly format
         payload = json.dumps({
             "volume": state["volume"],
             "mute": "ON" if state["mute"] else "OFF",
             "dim": "ON" if state["dim"] else "OFF",
-            "power": "ON" if state["power"] else "OFF",
+            "power": power_state,
+            "power_transitioning": power_transitioning,
+            "power_settling_remaining": state.get("power_settling_remaining", 0),
         })
 
         self._client.publish(self._state_topic, payload, retain=True)

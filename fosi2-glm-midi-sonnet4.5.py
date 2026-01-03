@@ -12,6 +12,13 @@ import hid
 
 from glm_core import SetVolume, AdjustVolume, SetMute, SetDim, SetPower, QueuedAction
 from mido import Message, open_output, open_input
+
+# Power control via UI automation (Windows only)
+try:
+    from PowerOnOff import GlmPowerController, POWER_CONTROL_AVAILABLE
+except ImportError:
+    POWER_CONTROL_AVAILABLE = False
+    GlmPowerController = None
 import psutil
 import argparse
 
@@ -44,9 +51,13 @@ else:
 MAX_EVENT_AGE = 2.0  # seconds
 SEND_DELAY = 0  # seconds for non-volume commands
 RETRY_DELAY = 2.0  # seconds
-POWER_COOLDOWN = 8.0  # seconds - minimum time between power commands
 HID_READ_TIMEOUT_MS = 200  # milliseconds - responsive shutdown
 QUEUE_MAX_SIZE = 100  # Maximum queued events before backpressure
+
+# Power control timing (UI automation based)
+POWER_SETTLING_TIME = 2.0   # Block ALL commands during power settling
+POWER_COOLDOWN_TIME = 5.0   # Block power commands after settling ends
+POWER_TOTAL_LOCKOUT = POWER_SETTLING_TIME + POWER_COOLDOWN_TIME  # 7s total
 
 # Smart retry logging intervals (absolute milestones from first event)
 # Format: list of seconds. If value > prev_log_time, it's an absolute milestone.
@@ -356,7 +367,10 @@ class GlmController:
         self._lock = threading.Lock()
         self._state_callbacks: List[Callable[[dict], None]] = []
         self._last_notified_state: Optional[dict] = None  # Debounce duplicate notifications
-        self._last_power_time: float = 0  # Rate limit power commands
+        # Power transition state
+        self._power_transition_start: float = 0  # When power transition started
+        self._power_settling: bool = False       # True during power settling period
+        self._power_target: Optional[bool] = None  # Target state during transition
 
     def add_state_callback(self, callback: Callable[[dict], None]):
         """Register a callback to be called when state changes."""
@@ -366,6 +380,92 @@ class GlmController:
         """Unregister a state change callback."""
         if callback in self._state_callbacks:
             self._state_callbacks.remove(callback)
+
+    # =========================================================================
+    # Power transition management
+    # =========================================================================
+
+    def start_power_transition(self, target_state: bool):
+        """
+        Mark the start of a power transition.
+
+        Called when power command is initiated. Blocks all commands during settling.
+        """
+        with self._lock:
+            self._power_transition_start = time.time()
+            self._power_settling = True
+            self._power_target = target_state
+        self._notify_state_change(force=True)  # Notify UI of transitioning state
+        logger.info(f"Power transition started: target={'ON' if target_state else 'OFF'}")
+
+    def end_power_transition(self, success: bool, actual_state: Optional[bool] = None):
+        """
+        Mark the end of a power transition.
+
+        Called when UI automation confirms state change (or fails).
+        """
+        with self._lock:
+            self._power_settling = False
+            if success and actual_state is not None:
+                self.power = actual_state
+            elif success and self._power_target is not None:
+                self.power = self._power_target
+            self._power_target = None
+        self._notify_state_change(force=True)
+        logger.info(f"Power transition ended: success={success}, power={'ON' if self.power else 'OFF'}")
+
+    def is_power_settling(self) -> bool:
+        """Check if power is currently settling (2s window)."""
+        with self._lock:
+            if not self._power_settling:
+                return False
+            elapsed = time.time() - self._power_transition_start
+            if elapsed >= POWER_SETTLING_TIME:
+                # Auto-end settling if timeout (shouldn't happen normally)
+                self._power_settling = False
+                return False
+            return True
+
+    def can_accept_command(self) -> tuple:
+        """
+        Check if any command can be accepted.
+
+        Returns (allowed, wait_time, reason).
+        During power settling, ALL commands are blocked.
+        """
+        with self._lock:
+            if not self._power_settling:
+                return True, 0, None
+
+            elapsed = time.time() - self._power_transition_start
+            if elapsed < POWER_SETTLING_TIME:
+                wait = POWER_SETTLING_TIME - elapsed
+                return False, wait, "power_settling"
+
+            # Settling done, commands allowed
+            self._power_settling = False
+            return True, 0, None
+
+    def can_accept_power_command(self) -> tuple:
+        """
+        Check if a power command can be accepted.
+
+        Returns (allowed, wait_time, reason).
+        Power commands are blocked for POWER_TOTAL_LOCKOUT after a power transition.
+        """
+        with self._lock:
+            if self._power_transition_start == 0:
+                return True, 0, None
+
+            elapsed = time.time() - self._power_transition_start
+            if elapsed < POWER_TOTAL_LOCKOUT:
+                wait = POWER_TOTAL_LOCKOUT - elapsed
+                if elapsed < POWER_SETTLING_TIME:
+                    return False, wait, "power_settling"
+                else:
+                    return False, wait, "power_cooldown"
+
+            return True, 0, None
 
     def _notify_state_change(self, force: bool = False):
         """Call all registered callbacks with current state (if changed or forced)."""
@@ -456,13 +556,22 @@ class GlmController:
         return changed
 
     def get_state(self) -> dict:
-        """Get current state as a dictionary (for future REST API)."""
+        """Get current state as a dictionary (for REST API and WebSocket)."""
         with self._lock:
+            # Calculate remaining settling/cooldown time
+            settling_remaining = 0
+            if self._power_transition_start > 0:
+                elapsed = time.time() - self._power_transition_start
+                if elapsed < POWER_SETTLING_TIME:
+                    settling_remaining = POWER_SETTLING_TIME - elapsed
+
             return {
                 "volume": self.volume,
                 "mute": self.mute,
                 "dim": self.dim,
                 "power": self.power,
+                "power_transitioning": self._power_settling,
+                "power_settling_remaining": round(settling_remaining, 1),
             }
 
     def send_volume_absolute(self, target: int, midi_output) -> bool:
@@ -488,24 +597,16 @@ class GlmController:
           - If explicit_state is None, toggle based on current state
           - If explicit_state is True/False, set that state explicitly
 
-        For momentary actions (Vol+, Vol-, Power):
+        For momentary actions (Vol+, Vol-):
           - Always send 127
+
+        Note: Power is now handled via UI automation, not MIDI.
 
         Returns True if message was sent.
         """
         glm_ctrl = ACTION_TO_GLM.get(action)
         if not glm_ctrl:
             return False  # Action doesn't map to GLM
-
-        # Rate limit power commands
-        if action == Action.POWER:
-            now = time.time()
-            time_since_last = now - self._last_power_time
-            if time_since_last < POWER_COOLDOWN:
-                remaining = POWER_COOLDOWN - time_since_last
-                logger.warning(f"Power cooldown active, ignoring command ({remaining:.1f}s remaining)")
-                return False
-            self._last_power_time = now
 
         with self._lock:
             if glm_ctrl.mode == ControlMode.TOGGLE:
@@ -803,9 +904,17 @@ class HIDToMIDIDaemon:
         self.mqtt_topic = mqtt_topic
         self.mqtt_ha_discovery = mqtt_ha_discovery
         self.mqtt_client = None  # MQTT client instance
-        # Power pattern detection state
+        # Power pattern detection state (legacy, kept for MIDI state sync)
         self._rx_seq = []  # List of (timestamp, cc) for pattern detection
         self._last_pattern_time = None  # For startup detection (double-burst)
+        # Power control via UI automation
+        self._power_controller = None
+        if POWER_CONTROL_AVAILABLE:
+            try:
+                self._power_controller = GlmPowerController(steal_focus=True)
+                logger.info("GlmPowerController initialized for UI-based power control")
+            except Exception as e:
+                logger.warning(f"GlmPowerController not available: {e}")
 
     def _get_midi_output(self):
         """Get connected MIDI output, reconnecting if necessary. Thread-safe."""
@@ -996,6 +1105,23 @@ class HIDToMIDIDaemon:
 
             action = queued.action
 
+            # Check if commands are blocked during power settling
+            if isinstance(action, SetPower):
+                # Power commands have extended cooldown
+                allowed, wait_time, reason = glm_controller.can_accept_power_command()
+                if not allowed:
+                    if reason == "power_settling":
+                        logger.warning(f"Power command blocked: settling ({wait_time:.1f}s remaining)")
+                    else:
+                        logger.warning(f"Power command blocked: cooldown ({wait_time:.1f}s remaining)")
+                    continue
+            else:
+                # All other commands blocked only during settling
+                allowed, wait_time, reason = glm_controller.can_accept_command()
+                if not allowed:
+                    logger.warning(f"Command blocked: power settling ({wait_time:.1f}s remaining)")
+                    continue
+
             # Dispatch based on action type
             try:
                 if isinstance(action, SetVolume):
@@ -1011,9 +1137,7 @@ class HIDToMIDIDaemon:
                     self._send_action(Action.DIM)
                     time.sleep(SEND_DELAY)
                 elif isinstance(action, SetPower):
-                    logger.debug(f"Sending Power (CC {GLM_POWER_CC})")
-                    self._send_action(Action.POWER)
-                    time.sleep(SEND_DELAY)
+                    self._handle_power_action(action)
                 else:
                     logger.debug(f"Unknown action type: {type(action).__name__}")
             except Exception as e:
@@ -1031,6 +1155,46 @@ class HIDToMIDIDaemon:
         except (OSError, IOError) as e:
             logger.error(f"Error sending MIDI message: {e}")
             self._reset_midi_output()
+
+    def _handle_power_action(self, action: SetPower):
+        """
+        Handle power control via UI automation.
+
+        This uses GlmPowerController to click the power button in GLM,
+        providing deterministic state control with verification.
+        """
+        if self._power_controller is None:
+            logger.error("Power control unavailable: GlmPowerController not initialized")
+            return
+
+        # Determine target state
+        if action.state is None:
+            # Toggle: invert current state
+            target_state = not glm_controller.power
+        else:
+            target_state = action.state
+
+        desired = "on" if target_state else "off"
+        logger.info(f"Power command: setting to {desired.upper()} via UI automation")
+
+        # Start power transition (blocks all commands)
+        glm_controller.start_power_transition(target_state)
+
+        try:
+            # Execute via UI automation
+            self._power_controller.set_state(desired, verify=True)
+            glm_controller.end_power_transition(success=True, actual_state=target_state)
+        except Exception as e:
+            logger.error(f"Power control failed: {e}")
+            glm_controller.end_power_transition(success=False)
+
+        # Ensure settling time is respected (UI automation may return early)
+        # The blocking in consumer will prevent new commands until settling completes
+        elapsed = time.time() - glm_controller._power_transition_start
+        if elapsed < POWER_SETTLING_TIME:
+            remaining = POWER_SETTLING_TIME - elapsed
+            logger.debug(f"Waiting {remaining:.1f}s for power settling")
+            time.sleep(remaining)
 
     def _handle_adjust_volume(self, delta: int):
         """
@@ -1139,8 +1303,21 @@ class HIDToMIDIDaemon:
         """Starts all threads."""
         # Register state change callback for logging (proof of concept)
         def log_state_change(state: dict):
-            logger.info(f"State changed: vol={state['volume']}, mute={state['mute']}, dim={state['dim']}, pwr={state['power']}")
+            transitioning = " [TRANSITIONING]" if state.get('power_transitioning') else ""
+            logger.info(f"State changed: vol={state['volume']}, mute={state['mute']}, dim={state['dim']}, pwr={state['power']}{transitioning}")
         glm_controller.add_state_callback(log_state_change)
+
+        # Sync power state from GLM UI (before starting threads)
+        if self._power_controller:
+            try:
+                state = self._power_controller.get_state()
+                if state in ("on", "off"):
+                    glm_controller.power = (state == "on")
+                    logger.info(f"Power state synced from GLM UI: {state.upper()}")
+                else:
+                    logger.warning(f"Could not determine GLM power state: {state}")
+            except Exception as e:
+                logger.warning(f"Failed to sync power state: {e}")
 
         # Start MIDI reader first so we can receive GLM responses
         self.midi_reader_thread.start()

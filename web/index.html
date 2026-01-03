@@ -301,6 +301,82 @@
             opacity: 0.5;
             pointer-events: none;
         }
+
+        /* Power transitioning state */
+        .power-transitioning {
+            position: relative;
+        }
+
+        .power-transitioning::after {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.6);
+            border-radius: inherit;
+            z-index: 10;
+        }
+
+        .power-transitioning .settling-overlay {
+            display: flex !important;
+        }
+
+        .settling-overlay {
+            display: none;
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.7);
+            border-radius: inherit;
+            z-index: 11;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            color: var(--text-primary);
+        }
+
+        .settling-spinner {
+            width: 40px;
+            height: 40px;
+            border: 3px solid var(--bg-elevated);
+            border-top-color: var(--accent);
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin-bottom: 12px;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        .settling-text {
+            font-size: 0.875rem;
+            color: var(--text-secondary);
+            text-align: center;
+        }
+
+        .settling-countdown {
+            font-size: 1.5rem;
+            font-weight: 300;
+            color: var(--accent);
+            margin-top: 4px;
+        }
+
+        /* Power button transitioning state */
+        .control-btn.power.transitioning {
+            background: var(--accent-dim);
+            color: #fff;
+            animation: pulse 1s ease-in-out infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.6; }
+        }
     </style>
 </head>
 <body>
@@ -309,7 +385,12 @@
             <h1><span class="status-dot" id="statusDot"></span>GLM Control</h1>
         </header>
 
-        <div class="knob-container disabled">
+        <div class="knob-container disabled" id="knobContainer">
+            <div class="settling-overlay">
+                <div class="settling-spinner"></div>
+                <div class="settling-text">Power settling...</div>
+                <div class="settling-countdown" id="settlingCountdown">2.0s</div>
+            </div>
             <div class="knob-row">
                 <button class="volume-step-btn" onclick="adjustVolume(-1)" aria-label="Volume down">
                     <svg viewBox="0 0 24 24"><path d="M19 13H5v-2h14v2z"/></svg>
@@ -396,10 +477,15 @@
         const volumeKnob = document.getElementById('volumeKnob');
         const knobPointer = document.getElementById('knobPointer');
         const knobFill = document.getElementById('knobFill');
+        const knobContainer = document.getElementById('knobContainer');
+        const settlingCountdown = document.getElementById('settlingCountdown');
         const muteBtn = document.getElementById('muteBtn');
         const dimBtn = document.getElementById('dimBtn');
         const powerBtn = document.getElementById('powerBtn');
         const footer = document.getElementById('footer');
+
+        // Power transitioning state
+        let isPowerTransitioning = false;
 
         // Convert volume (0-127) to angle using piecewise linear mapping
         function volumeToAngle(volume) {
@@ -514,7 +600,18 @@
 
         // Update UI with state
         function updateUI(state) {
-            if (!isDragging) {
+            // Handle power transitioning state
+            isPowerTransitioning = state.power_transitioning || false;
+            knobContainer.classList.toggle('power-transitioning', isPowerTransitioning);
+            powerBtn.classList.toggle('transitioning', isPowerTransitioning);
+
+            if (isPowerTransitioning) {
+                // Update countdown
+                const remaining = state.power_settling_remaining || 0;
+                settlingCountdown.textContent = `${remaining.toFixed(1)}s`;
+            }
+
+            if (!isDragging && !isPowerTransitioning) {
                 const now = Date.now();
                 const recentlyAdjusted = (now - volumeAccel.lastTime) < volumeAccel.adjustWindow;
 
@@ -537,7 +634,8 @@
 
             muteBtn.classList.toggle('active', state.mute);
             dimBtn.classList.toggle('active', state.dim);
-            powerBtn.classList.toggle('active', state.power);
+            // Don't show power as active during transitioning
+            powerBtn.classList.toggle('active', state.power && !isPowerTransitioning);
         }
 
         // Get angle from pointer position relative to knob center
@@ -703,6 +801,12 @@
         };
 
         function adjustVolume(direction) {
+            // Block during power transitioning
+            if (isPowerTransitioning) {
+                console.log('Blocked: power transitioning');
+                return;
+            }
+
             // Cancel any ongoing knob drag to prevent stale value being sent
             if (isDragging) {
                 isDragging = false;
@@ -743,24 +847,46 @@
         }
 
         async function toggleMute() {
+            if (isPowerTransitioning) {
+                console.log('Blocked: power transitioning');
+                return;
+            }
             try {
-                await fetch(`${API_BASE}/api/mute`, { method: 'POST' });
+                const response = await fetch(`${API_BASE}/api/mute`, { method: 'POST' });
+                if (response.status === 503) {
+                    console.log('Server busy: power settling');
+                }
             } catch (e) {
                 console.error('Failed to toggle mute:', e);
             }
         }
 
         async function toggleDim() {
+            if (isPowerTransitioning) {
+                console.log('Blocked: power transitioning');
+                return;
+            }
             try {
-                await fetch(`${API_BASE}/api/dim`, { method: 'POST' });
+                const response = await fetch(`${API_BASE}/api/dim`, { method: 'POST' });
+                if (response.status === 503) {
+                    console.log('Server busy: power settling');
+                }
             } catch (e) {
                 console.error('Failed to toggle dim:', e);
             }
         }
 
         async function togglePower() {
+            if (isPowerTransitioning) {
+                console.log('Blocked: power already transitioning');
+                return;
+            }
             try {
-                await fetch(`${API_BASE}/api/power`, { method: 'POST' });
+                const response = await fetch(`${API_BASE}/api/power`, { method: 'POST' });
+                if (response.status === 503) {
+                    const data = await response.json();
+                    console.log(`Power blocked: ${data.error} (${data.retry_after}s)`);
+                }
             } catch (e) {
                 console.error('Failed to toggle power:', e);
             }
