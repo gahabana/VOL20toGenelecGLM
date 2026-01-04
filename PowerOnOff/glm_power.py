@@ -51,6 +51,29 @@ except ImportError:
     HAS_WIN32_DEPS = False
 
 
+def is_console_session() -> bool:
+    """
+    Check if the current process is running in the console session.
+
+    When started from RDP, the script runs in the RDP session and cannot
+    access the console display after RDP disconnects. This function returns
+    True only if current_session == console_session.
+
+    Returns:
+        True if running in console session (UI automation will work),
+        False if running in a different session (UI automation may fail).
+    """
+    if not HAS_WIN32_DEPS:
+        return False
+
+    import os
+    current_session = wintypes.DWORD()
+    ctypes.windll.kernel32.ProcessIdToSessionId(os.getpid(), ctypes.byref(current_session))
+    console_session = ctypes.windll.kernel32.WTSGetActiveConsoleSessionId()
+
+    return current_session.value == console_session
+
+
 def get_display_diagnostics() -> dict:
     """
     Get diagnostic information about displays, sessions, and windows.
@@ -59,6 +82,7 @@ def get_display_diagnostics() -> dict:
         - is_rdp_session: bool
         - current_session_id: int
         - console_session_id: int
+        - is_console_session: bool (True if current == console)
         - monitors: list of monitor info
         - glm_windows: list of GLM window info
     """
@@ -79,6 +103,9 @@ def get_display_diagnostics() -> dict:
 
     # Get console session ID
     result["console_session_id"] = ctypes.windll.kernel32.WTSGetActiveConsoleSessionId()
+
+    # Check if we're in the console session
+    result["is_console_session"] = result["current_session_id"] == result["console_session_id"]
 
     # Enumerate monitors
     monitors = []

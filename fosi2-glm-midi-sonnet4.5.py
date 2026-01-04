@@ -15,10 +15,11 @@ from mido import Message, open_output, open_input
 
 # Power control via UI automation (Windows only)
 try:
-    from PowerOnOff import GlmPowerController, POWER_CONTROL_AVAILABLE, get_display_diagnostics
+    from PowerOnOff import GlmPowerController, POWER_CONTROL_AVAILABLE, get_display_diagnostics, is_console_session
 except ImportError:
     POWER_CONTROL_AVAILABLE = False
     get_display_diagnostics = None
+    is_console_session = None
     GlmPowerController = None
 import psutil
 import argparse
@@ -919,13 +920,19 @@ class HIDToMIDIDaemon:
                     logger.info(f"Display diagnostics: session={diag.get('current_session_id')}, "
                                f"console={diag.get('console_session_id')}, "
                                f"rdp={diag.get('is_rdp_session')}, "
+                               f"console_match={diag.get('is_console_session')}, "
                                f"monitors={diag.get('monitor_count')}, "
                                f"glm_windows={len(diag.get('glm_windows', []))}")
-                    if diag.get('is_rdp_session'):
-                        logger.warning("Running in RDP session! UI automation may fail when RDP disconnects.")
 
-                self._power_controller = GlmPowerController(steal_focus=True)
-                logger.info("GlmPowerController initialized for UI-based power control")
+                # Check if we're in the console session
+                if is_console_session and not is_console_session():
+                    logger.warning(
+                        "Not running in console session! UI automation disabled. "
+                        "To enable power control, start the script from the physical console or via Task Scheduler."
+                    )
+                else:
+                    self._power_controller = GlmPowerController(steal_focus=True)
+                    logger.info("GlmPowerController initialized for UI-based power control")
             except Exception as e:
                 logger.warning(f"GlmPowerController not available: {e}")
 
