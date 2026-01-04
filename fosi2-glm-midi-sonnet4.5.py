@@ -914,25 +914,18 @@ class HIDToMIDIDaemon:
         self._power_controller = None
         if POWER_CONTROL_AVAILABLE:
             try:
-                # Log display/session diagnostics
+                # Log display/session diagnostics (for debugging)
                 if get_display_diagnostics:
                     diag = get_display_diagnostics()
                     logger.info(f"Display diagnostics: session={diag.get('current_session_id')}, "
                                f"console={diag.get('console_session_id')}, "
                                f"rdp={diag.get('is_rdp_session')}, "
-                               f"console_match={diag.get('is_console_session')}, "
                                f"monitors={diag.get('monitor_count')}, "
                                f"glm_windows={len(diag.get('glm_windows', []))}")
 
-                # Check if we're in the console session
-                if is_console_session and not is_console_session():
-                    logger.warning(
-                        "Not running in console session! UI automation disabled. "
-                        "To enable power control, start the script from the physical console or via Task Scheduler."
-                    )
-                else:
-                    self._power_controller = GlmPowerController(steal_focus=True)
-                    logger.info("GlmPowerController initialized for UI-based power control")
+                # Always try to initialize - let it fail naturally if display inaccessible
+                self._power_controller = GlmPowerController(steal_focus=True)
+                logger.info("GlmPowerController initialized for UI-based power control")
             except Exception as e:
                 logger.warning(f"GlmPowerController not available: {e}")
 
