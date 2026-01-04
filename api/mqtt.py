@@ -114,8 +114,13 @@ class MqttClient:
 
         try:
             if topic == self._cmd_volume_topic:
-                # Volume: accept integer 0-127
+                # Volume: accept dB value (-127 to 0) or raw value (0-127)
                 value = int(payload)
+                if value <= 0:
+                    # dB value: convert to 0-127 range
+                    value = value + 127
+                # Clamp to valid range
+                value = max(0, min(127, value))
                 self._submit_action(SetVolume(target=value))
 
             elif topic == self._cmd_mute_topic:
@@ -168,6 +173,7 @@ class MqttClient:
         # Convert to HA-friendly format
         payload = json.dumps({
             "volume": state["volume"],
+            "volume_db": state.get("volume_db", state["volume"] - 127),
             "mute": "ON" if state["mute"] else "OFF",
             "dim": "ON" if state["dim"] else "OFF",
             "power": power_state,
@@ -189,16 +195,17 @@ class MqttClient:
             "model": "GLM Controller",
         }
 
-        # Volume as number entity
+        # Volume as number entity (in dB: -127 to 0)
         volume_config = {
             "name": "GLM Volume",
             "unique_id": "glm_volume",
             "command_topic": self._cmd_volume_topic,
             "state_topic": self._state_topic,
-            "value_template": "{{ value_json.volume }}",
-            "min": 0,
-            "max": 127,
+            "value_template": "{{ value_json.volume_db }}",
+            "min": -127,
+            "max": 0,
             "step": 1,
+            "unit_of_measurement": "dB",
             "icon": "mdi:volume-high",
             "availability_topic": self._availability_topic,
             "device": device_info,

@@ -567,6 +567,7 @@ class GlmController:
 
             return {
                 "volume": self.volume,
+                "volume_db": self.volume - 127,  # 0-127 → -127 to 0 dB
                 "mute": self.mute,
                 "dim": self.dim,
                 "power": self.power,
