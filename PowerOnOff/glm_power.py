@@ -355,14 +355,12 @@ class GlmPowerController:
             self._ensure_foreground(win)
             t2 = time.time()
 
-            # Check current state with initial poll (allows GLM to settle)
-            state, rgb, pt = self._wait_for_state(
-                win, desired, timeout=0.6
-            )
+            # Read current state (single read, no polling)
+            state, rgb, pt = self._read_state_internal(win)
             t3 = time.time()
             self.logger.debug(
                 f"Power set_state({desired}): current={state}, rgb={rgb} "
-                f"[find={t1-t0:.3f}s, focus={t2-t1:.3f}s, poll={t3-t2:.3f}s]"
+                f"[find={t1-t0:.3f}s, focus={t2-t1:.3f}s, read={t3-t2:.3f}s]"
             )
 
             if state == desired:
