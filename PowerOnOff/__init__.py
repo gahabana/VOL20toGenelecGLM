@@ -38,6 +38,7 @@ try:
         PowerState,
         get_power_state,
         set_power_state,
+        get_display_diagnostics,
     )
     POWER_CONTROL_AVAILABLE = True
 except ImportError:
@@ -47,6 +48,7 @@ except ImportError:
     PowerState = None
     get_power_state = None
     set_power_state = None
+    get_display_diagnostics = None
 
 
 __all__ = [
@@ -61,6 +63,7 @@ __all__ = [
     'PowerState',
     'get_power_state',
     'set_power_state',
+    'get_display_diagnostics',
     # Availability flag
     'POWER_CONTROL_AVAILABLE',
 ]

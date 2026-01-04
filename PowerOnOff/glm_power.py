@@ -42,11 +42,97 @@ from .exceptions import (
 try:
     import win32api
     import win32con
+    import ctypes
+    from ctypes import wintypes
     from PIL import ImageGrab
     from pywinauto import Desktop
     HAS_WIN32_DEPS = True
 except ImportError:
     HAS_WIN32_DEPS = False
+
+
+def get_display_diagnostics() -> dict:
+    """
+    Get diagnostic information about displays, sessions, and windows.
+
+    Returns dict with:
+        - is_rdp_session: bool
+        - current_session_id: int
+        - console_session_id: int
+        - monitors: list of monitor info
+        - glm_windows: list of GLM window info
+    """
+    if not HAS_WIN32_DEPS:
+        return {"error": "Windows dependencies not available"}
+
+    result = {}
+
+    # Check if in RDP session
+    SM_REMOTESESSION = 0x1000
+    result["is_rdp_session"] = ctypes.windll.user32.GetSystemMetrics(SM_REMOTESESSION) != 0
+
+    # Get current process session ID
+    import os
+    current_session = wintypes.DWORD()
+    ctypes.windll.kernel32.ProcessIdToSessionId(os.getpid(), ctypes.byref(current_session))
+    result["current_session_id"] = current_session.value
+
+    # Get console session ID
+    result["console_session_id"] = ctypes.windll.kernel32.WTSGetActiveConsoleSessionId()
+
+    # Enumerate monitors
+    monitors = []
+    def monitor_callback(hMonitor, hdcMonitor, lprcMonitor, dwData):
+        info = win32api.GetMonitorInfo(hMonitor)
+        monitors.append({
+            "device": info.get("Device", "unknown"),
+            "work_area": info.get("Work", ()),
+            "monitor_area": info.get("Monitor", ()),
+            "is_primary": info.get("Flags", 0) == 1,
+        })
+        return True
+
+    # EnumDisplayMonitors callback type
+    MonitorEnumProc = ctypes.WINFUNCTYPE(
+        ctypes.c_bool,
+        ctypes.c_ulong,  # hMonitor
+        ctypes.c_ulong,  # hdcMonitor
+        ctypes.POINTER(ctypes.c_long * 4),  # lprcMonitor
+        ctypes.c_double  # dwData
+    )
+
+    try:
+        ctypes.windll.user32.EnumDisplayMonitors(
+            None, None, MonitorEnumProc(monitor_callback), 0
+        )
+    except Exception as e:
+        monitors.append({"error": str(e)})
+
+    result["monitors"] = monitors
+    result["monitor_count"] = len(monitors)
+
+    # Find GLM windows
+    glm_windows = []
+    try:
+        wins = Desktop(backend="win32").windows(class_name_re=r"JUCE_.*")
+        for w in wins:
+            try:
+                title = w.window_text() or ""
+                if "GLM" in title:
+                    rect = w.rectangle()
+                    glm_windows.append({
+                        "title": title,
+                        "rect": (rect.left, rect.top, rect.right, rect.bottom),
+                        "visible": w.is_visible(),
+                    })
+            except Exception:
+                pass
+    except Exception as e:
+        glm_windows.append({"error": str(e)})
+
+    result["glm_windows"] = glm_windows
+
+    return result
 
 
 # Type alias for power state

@@ -15,9 +15,10 @@ from mido import Message, open_output, open_input
 
 # Power control via UI automation (Windows only)
 try:
-    from PowerOnOff import GlmPowerController, POWER_CONTROL_AVAILABLE
+    from PowerOnOff import GlmPowerController, POWER_CONTROL_AVAILABLE, get_display_diagnostics
 except ImportError:
     POWER_CONTROL_AVAILABLE = False
+    get_display_diagnostics = None
     GlmPowerController = None
 import psutil
 import argparse
@@ -912,6 +913,17 @@ class HIDToMIDIDaemon:
         self._power_controller = None
         if POWER_CONTROL_AVAILABLE:
             try:
+                # Log display/session diagnostics
+                if get_display_diagnostics:
+                    diag = get_display_diagnostics()
+                    logger.info(f"Display diagnostics: session={diag.get('current_session_id')}, "
+                               f"console={diag.get('console_session_id')}, "
+                               f"rdp={diag.get('is_rdp_session')}, "
+                               f"monitors={diag.get('monitor_count')}, "
+                               f"glm_windows={len(diag.get('glm_windows', []))}")
+                    if diag.get('is_rdp_session'):
+                        logger.warning("Running in RDP session! UI automation may fail when RDP disconnects.")
+
                 self._power_controller = GlmPowerController(steal_focus=True)
                 logger.info("GlmPowerController initialized for UI-based power control")
             except Exception as e:
