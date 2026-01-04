@@ -349,15 +349,20 @@ class GlmPowerController:
             raise ValueError("desired must be 'on' or 'off'")
 
         with self._lock:
+            t0 = time.time()
             win = self._find_window(use_cache=False)  # Fresh lookup for state changes
+            t1 = time.time()
             self._ensure_foreground(win)
+            t2 = time.time()
 
             # Check current state with initial poll (allows GLM to settle)
             state, rgb, pt = self._wait_for_state(
                 win, desired, timeout=0.6
             )
+            t3 = time.time()
             self.logger.debug(
-                f"Power set_state({desired}): current={state}, rgb={rgb}"
+                f"Power set_state({desired}): current={state}, rgb={rgb} "
+                f"[find={t1-t0:.3f}s, focus={t2-t1:.3f}s, poll={t3-t2:.3f}s]"
             )
 
             if state == desired:
