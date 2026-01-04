@@ -337,20 +337,54 @@ def start_api_server(action_queue, glm_controller, host: str = "0.0.0.0", port: 
 
     # Suppress verbose error logging for expected WebSocket disconnects
     # (Windows semaphore timeout, connection reset, etc.)
-    logging.getLogger("websockets.legacy.protocol").setLevel(logging.CRITICAL)
-    logging.getLogger("websockets.protocol").setLevel(logging.CRITICAL)
-    logging.getLogger("websockets.legacy.server").setLevel(logging.CRITICAL)
+    # Suppress root websockets logger and all children
+    for logger_name in [
+        "websockets",
+        "websockets.legacy.protocol",
+        "websockets.protocol",
+        "websockets.legacy.server",
+        "websockets.server",
+    ]:
+        ws_logger = logging.getLogger(logger_name)
+        ws_logger.setLevel(logging.CRITICAL)
+        ws_logger.propagate = False  # Don't propagate to root logger
+        # Remove any existing handlers
+        ws_logger.handlers = []
+
     # Suppress uvicorn's error logger which also catches and prints these exceptions
-    logging.getLogger("uvicorn.error").setLevel(logging.CRITICAL)
+    uv_error_logger = logging.getLogger("uvicorn.error")
+    uv_error_logger.setLevel(logging.CRITICAL)
 
     app = create_app(action_queue, glm_controller)
+
+    # Custom log config that suppresses websocket errors
+    log_config = {
+        "version": 1,
+        "disable_existing_loggers": False,
+        "formatters": {
+            "default": {
+                "format": "%(levelname)s: %(message)s",
+            },
+        },
+        "handlers": {
+            "default": {
+                "class": "logging.NullHandler",  # Suppress all uvicorn output
+            },
+        },
+        "loggers": {
+            "uvicorn": {"handlers": ["default"], "level": "WARNING"},
+            "uvicorn.error": {"handlers": ["default"], "level": "CRITICAL"},
+            "uvicorn.access": {"handlers": ["default"], "level": "CRITICAL"},
+        },
+    }
 
     config = uvicorn.Config(
         app,
         host=host,
         port=port,
-        log_level="warning",  # Reduce uvicorn noise
+        log_level="warning",
         access_log=False,
+        log_config=log_config,
     )
     server = uvicorn.Server(config)
 
