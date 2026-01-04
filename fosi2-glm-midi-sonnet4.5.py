@@ -1424,6 +1424,17 @@ if __name__ == "__main__":
         logger.info(f"     MQTT: disabled")
     logger.info(f"<--- End configuration")
 
+    # Check if another instance is already running (by checking if API port is in use)
+    if args.api_port > 0:
+        import socket
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(1)
+        result = sock.connect_ex(('127.0.0.1', args.api_port))
+        sock.close()
+        if result == 0:
+            logger.error(f"Another instance is already running (port {args.api_port} in use). Exiting.")
+            sys.exit(1)
+
     set_higher_priority()
     time.sleep(2.0)
 
