@@ -380,6 +380,14 @@ class GlmPowerController:
         if not self.steal_focus:
             return
 
+        # First, dismiss any overlays (Start menu, etc.) by pressing Escape
+        try:
+            win32api.keybd_event(0x1B, 0, 0, 0)  # VK_ESCAPE key down
+            win32api.keybd_event(0x1B, 0, 2, 0)  # VK_ESCAPE key up
+            time.sleep(0.05)  # Brief pause for overlay to dismiss
+        except Exception:
+            pass
+
         try:
             win.restore()
         except Exception:
