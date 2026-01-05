@@ -384,7 +384,15 @@ class GlmPowerController:
             win.restore()
         except Exception:
             pass
-        win.set_focus()
+
+        try:
+            win.set_focus()
+        except Exception as e:
+            # SetForegroundWindow can fail due to Windows focus rules
+            # (e.g., when connected via VNC). Log but continue - the window
+            # may still be visible enough for pixel sampling and clicking.
+            self.logger.debug(f"Could not set focus (continuing anyway): {e}")
+
         time.sleep(self.config.focus_delay)
 
     def _get_power_point(self, win) -> Point:
