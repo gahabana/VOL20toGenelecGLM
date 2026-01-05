@@ -380,6 +380,8 @@ class GlmPowerController:
         if not self.steal_focus:
             return
 
+        hwnd = win.handle
+
         # First, dismiss any overlays (Start menu, etc.) by pressing Escape
         try:
             win32api.keybd_event(0x1B, 0, 0, 0)  # VK_ESCAPE key down
@@ -389,17 +391,32 @@ class GlmPowerController:
             pass
 
         try:
+            # Restore if minimized
             win.restore()
         except Exception:
             pass
 
+        # Use Alt key trick to allow SetForegroundWindow to work
+        # Pressing Alt temporarily allows any process to set foreground window
         try:
-            win.set_focus()
+            VK_MENU = 0x12  # Alt key
+            KEYEVENTF_EXTENDEDKEY = 0x0001
+            KEYEVENTF_KEYUP = 0x0002
+
+            # Press and release Alt
+            win32api.keybd_event(VK_MENU, 0, KEYEVENTF_EXTENDEDKEY, 0)
+            win32api.keybd_event(VK_MENU, 0, KEYEVENTF_EXTENDEDKEY | KEYEVENTF_KEYUP, 0)
+
+            # Now SetForegroundWindow should work
+            ctypes.windll.user32.SetForegroundWindow(hwnd)
         except Exception as e:
-            # SetForegroundWindow can fail due to Windows focus rules
-            # (e.g., when connected via VNC). Log but continue - the window
-            # may still be visible enough for pixel sampling and clicking.
-            self.logger.debug(f"Could not set focus (continuing anyway): {e}")
+            self.logger.debug(f"Alt+SetForegroundWindow failed: {e}")
+
+            # Fallback: try pywinauto's set_focus
+            try:
+                win.set_focus()
+            except Exception as e2:
+                self.logger.debug(f"Could not set focus (continuing anyway): {e2}")
 
         time.sleep(self.config.focus_delay)
 
