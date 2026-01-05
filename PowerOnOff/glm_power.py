@@ -98,8 +98,8 @@ def reconnect_to_console(logger=None) -> bool:
     active desktop. Running tscon moves the session to the console (QXL/VNC)
     display, reactivating the desktop for UI automation.
 
-    Uses a scheduled task running as SYSTEM to get the required privileges,
-    avoiding the need to run the main script as Administrator.
+    Requires the script to be run as Administrator, or psexec to be available
+    in PATH for elevation to SYSTEM privileges.
 
     Args:
         logger: Optional logger for debug output.
@@ -108,6 +108,7 @@ def reconnect_to_console(logger=None) -> bool:
         True if reconnection succeeded, False otherwise.
     """
     import subprocess
+    import shutil
 
     session_id = get_current_session_id()
     if session_id < 0:
@@ -115,64 +116,54 @@ def reconnect_to_console(logger=None) -> bool:
             logger.warning("Cannot reconnect: unable to get session ID")
         return False
 
-    task_name = "GLM_ReconnectConsole"
-    tscon_cmd = f"tscon {session_id} /dest:console"
-
     try:
         if logger:
             logger.info(f"Reconnecting session {session_id} to console via tscon...")
 
-        # Create/update scheduled task with current session ID, running as SYSTEM
-        create_result = subprocess.run(
-            [
-                "schtasks", "/create",
-                "/tn", task_name,
-                "/tr", tscon_cmd,
-                "/sc", "once",
-                "/st", "00:00",
-                "/ru", "SYSTEM",
-                "/rl", "HIGHEST",
-                "/f"  # Force overwrite if exists
-            ],
+        # First try direct tscon (works if script is running as Admin)
+        result = subprocess.run(
+            ["tscon", str(session_id), "/dest:console"],
             capture_output=True,
             timeout=10,
             creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, 'CREATE_NO_WINDOW') else 0,
         )
 
-        if create_result.returncode != 0:
+        if result.returncode == 0:
             if logger:
-                stderr = create_result.stderr.decode('utf-8', errors='ignore').strip()
-                logger.warning(f"Failed to create scheduled task: {stderr}")
-            return False
-
-        # Run the scheduled task
-        run_result = subprocess.run(
-            ["schtasks", "/run", "/tn", task_name],
-            capture_output=True,
-            timeout=10,
-            creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, 'CREATE_NO_WINDOW') else 0,
-        )
-
-        if run_result.returncode == 0:
-            if logger:
-                logger.info("Successfully triggered reconnect to console")
-            # Give tscon a moment to complete
-            import time
-            time.sleep(0.5)
+                logger.info("Successfully reconnected session to console")
             return True
-        else:
+
+        # If direct tscon failed, try with psexec for SYSTEM privileges
+        psexec_path = shutil.which("psexec") or shutil.which("psexec64")
+        if psexec_path:
             if logger:
-                stderr = run_result.stderr.decode('utf-8', errors='ignore').strip()
-                logger.warning(f"Failed to run scheduled task: {stderr}")
-            return False
+                logger.debug("Direct tscon failed, trying with psexec...")
+            result = subprocess.run(
+                [psexec_path, "-s", "-accepteula", "tscon", str(session_id), "/dest:console"],
+                capture_output=True,
+                timeout=10,
+                creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, 'CREATE_NO_WINDOW') else 0,
+            )
+
+            if result.returncode == 0:
+                if logger:
+                    logger.info("Successfully reconnected session to console via psexec")
+                return True
+
+        # Both methods failed
+        if logger:
+            stderr = result.stderr.decode('utf-8', errors='ignore').strip()
+            logger.warning(f"tscon failed (code {result.returncode}): {stderr}")
+            logger.warning("To use session recovery, run the script as Administrator")
+        return False
 
     except subprocess.TimeoutExpired:
         if logger:
-            logger.warning("Scheduled task operation timed out")
+            logger.warning("tscon timed out after 10 seconds")
         return False
     except Exception as e:
         if logger:
-            logger.warning(f"Failed to reconnect to console: {e}")
+            logger.warning(f"Failed to run tscon: {e}")
         return False
 
 
