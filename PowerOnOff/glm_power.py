@@ -90,6 +90,98 @@ def get_current_session_id() -> int:
     return current_session.value
 
 
+# WTS session states
+WTS_CURRENT_SERVER_HANDLE = 0
+WTSActive = 0
+WTSConnected = 1
+WTSConnectQuery = 2
+WTSShadow = 3
+WTSDisconnected = 4
+WTSIdle = 5
+WTSListen = 6
+WTSReset = 7
+WTSDown = 8
+WTSInit = 9
+
+
+def is_session_disconnected(session_id: int = None) -> bool:
+    """
+    Check if a session is in disconnected state using WTSEnumerateSessionsW.
+
+    When RDP disconnects, the session enters 'Disconnected' state (4).
+    This function detects that state so we can reconnect to console.
+
+    Args:
+        session_id: Session ID to check. If None, checks current process's session.
+
+    Returns:
+        True if the session is disconnected, False otherwise.
+    """
+    if not HAS_WIN32_DEPS:
+        return False
+
+    if session_id is None:
+        session_id = get_current_session_id()
+        if session_id < 0:
+            return False
+
+    try:
+        # Define WTS_SESSION_INFO structure
+        class WTS_SESSION_INFO(ctypes.Structure):
+            _fields_ = [
+                ("SessionId", wintypes.DWORD),
+                ("pWinStationName", wintypes.LPWSTR),
+                ("State", ctypes.c_int),
+            ]
+
+        ppSessionInfo = ctypes.POINTER(WTS_SESSION_INFO)()
+        count = wintypes.DWORD()
+
+        # Enumerate all sessions
+        if ctypes.windll.wtsapi32.WTSEnumerateSessionsW(
+            WTS_CURRENT_SERVER_HANDLE, 0, 1, ctypes.byref(ppSessionInfo), ctypes.byref(count)
+        ):
+            try:
+                for i in range(count.value):
+                    info = ppSessionInfo[i]
+                    if info.SessionId == session_id:
+                        return info.State == WTSDisconnected
+            finally:
+                ctypes.windll.wtsapi32.WTSFreeMemory(ppSessionInfo)
+
+        return False
+
+    except Exception:
+        return False
+
+
+def ensure_session_connected(logger=None) -> bool:
+    """
+    Check if current session is disconnected and reconnect to console if needed.
+
+    This should be called before UI automation to ensure the display is available.
+
+    Args:
+        logger: Optional logger for debug output.
+
+    Returns:
+        True if session is connected (or was successfully reconnected),
+        False if session is disconnected and reconnection failed.
+    """
+    session_id = get_current_session_id()
+    if session_id < 0:
+        return True  # Can't check, assume OK
+
+    if not is_session_disconnected(session_id):
+        return True  # Already connected
+
+    # Session is disconnected, try to reconnect
+    if logger:
+        logger.info(f"Session {session_id} is disconnected, reconnecting to console...")
+
+    return reconnect_to_console(logger=logger)
+
+
 def reconnect_to_console(logger=None) -> bool:
     """
     Reconnect the current session to the console display using tscon.

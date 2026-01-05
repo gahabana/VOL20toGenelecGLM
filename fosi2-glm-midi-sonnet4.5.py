@@ -15,12 +15,11 @@ from mido import Message, open_output, open_input
 
 # Power control via UI automation (Windows only)
 try:
-    from PowerOnOff import GlmPowerController, POWER_CONTROL_AVAILABLE, get_display_diagnostics, is_console_session, reconnect_to_console
+    from PowerOnOff import GlmPowerController, POWER_CONTROL_AVAILABLE, get_display_diagnostics, ensure_session_connected
 except ImportError:
     POWER_CONTROL_AVAILABLE = False
     get_display_diagnostics = None
-    is_console_session = None
-    reconnect_to_console = None
+    ensure_session_connected = None
     GlmPowerController = None
 import psutil
 import argparse
@@ -1201,36 +1200,22 @@ class HIDToMIDIDaemon:
         glm_controller.start_power_transition(target_state)
         transition_start = time.time()
 
+        # Ensure session is connected to console before UI automation
+        # This uses WTSEnumerateSessionsW to detect disconnected RDP sessions
+        # and reconnects via tscon if needed
+        if ensure_session_connected:
+            if not ensure_session_connected(logger=logger):
+                logger.error("Power control failed: could not ensure session is connected to console")
+                glm_controller.end_power_transition(success=False)
+                return
+
         success = False
         try:
             # Execute via UI automation
             self._power_controller.set_state(desired, verify=True)
             success = True
         except Exception as e:
-            error_msg = str(e).lower()
-            # Check if this is a display/desktop error that can be recovered via tscon
-            recoverable_errors = [
-                "no active desktop",
-                "active desktop",
-                "screen grab failed",
-                "imagegrab",
-            ]
-            if any(err in error_msg for err in recoverable_errors):
-                logger.warning(f"Display unavailable ({e}) - attempting to reconnect session to console...")
-                if reconnect_to_console and reconnect_to_console(logger=logger):
-                    # Wait a moment for display to initialize
-                    time.sleep(0.5)
-                    # Retry the power command
-                    try:
-                        logger.info(f"Retrying power command after reconnect...")
-                        self._power_controller.set_state(desired, verify=True)
-                        success = True
-                    except Exception as retry_e:
-                        logger.error(f"Power control failed after reconnect: {retry_e}")
-                else:
-                    logger.error(f"Power control failed: {e} (reconnect to console failed)")
-            else:
-                logger.error(f"Power control failed: {e}")
+            logger.error(f"Power control failed: {e}")
 
         # Wait for full settling time before ending transition
         # This ensures UI shows transitioning state for the full 2 seconds

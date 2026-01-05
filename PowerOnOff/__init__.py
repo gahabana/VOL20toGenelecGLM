@@ -41,6 +41,8 @@ try:
         get_display_diagnostics,
         is_console_session,
         get_current_session_id,
+        is_session_disconnected,
+        ensure_session_connected,
         reconnect_to_console,
     )
     POWER_CONTROL_AVAILABLE = True
@@ -54,6 +56,8 @@ except ImportError:
     get_display_diagnostics = None
     is_console_session = None
     get_current_session_id = None
+    is_session_disconnected = None
+    ensure_session_connected = None
     reconnect_to_console = None
 
 
@@ -72,6 +76,8 @@ __all__ = [
     'get_display_diagnostics',
     'is_console_session',
     'get_current_session_id',
+    'is_session_disconnected',
+    'ensure_session_connected',
     'reconnect_to_console',
     # Availability flag
     'POWER_CONTROL_AVAILABLE',
