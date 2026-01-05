@@ -74,6 +74,87 @@ def is_console_session() -> bool:
     return current_session.value == console_session
 
 
+def get_current_session_id() -> int:
+    """
+    Get the current process's Windows session ID.
+
+    Returns:
+        The session ID as an integer, or -1 if unavailable.
+    """
+    if not HAS_WIN32_DEPS:
+        return -1
+
+    import os
+    current_session = wintypes.DWORD()
+    ctypes.windll.kernel32.ProcessIdToSessionId(os.getpid(), ctypes.byref(current_session))
+    return current_session.value
+
+
+def reconnect_to_console(logger=None) -> bool:
+    """
+    Reconnect the current session to the console display using tscon.
+
+    This is useful when RDP disconnects and leaves the session without an
+    active desktop. Running tscon moves the session to the console (QXL/VNC)
+    display, reactivating the desktop for UI automation.
+
+    Requires psexec to be available in PATH and runs with SYSTEM privileges.
+
+    Args:
+        logger: Optional logger for debug output.
+
+    Returns:
+        True if reconnection succeeded, False otherwise.
+    """
+    import subprocess
+    import shutil
+
+    session_id = get_current_session_id()
+    if session_id < 0:
+        if logger:
+            logger.warning("Cannot reconnect: unable to get session ID")
+        return False
+
+    # Check if psexec is available
+    psexec_path = shutil.which("psexec") or shutil.which("psexec64")
+    if not psexec_path:
+        if logger:
+            logger.warning("Cannot reconnect: psexec not found in PATH")
+        return False
+
+    try:
+        if logger:
+            logger.info(f"Reconnecting session {session_id} to console via tscon...")
+
+        # Run tscon as SYSTEM to have required privileges
+        # -accepteula suppresses the EULA dialog on first run
+        result = subprocess.run(
+            [psexec_path, "-s", "-accepteula", "tscon", str(session_id), "/dest:console"],
+            capture_output=True,
+            timeout=10,
+            creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, 'CREATE_NO_WINDOW') else 0,
+        )
+
+        if result.returncode == 0:
+            if logger:
+                logger.info("Successfully reconnected session to console")
+            return True
+        else:
+            if logger:
+                stderr = result.stderr.decode('utf-8', errors='ignore').strip()
+                logger.warning(f"tscon failed with code {result.returncode}: {stderr}")
+            return False
+
+    except subprocess.TimeoutExpired:
+        if logger:
+            logger.warning("tscon timed out after 10 seconds")
+        return False
+    except Exception as e:
+        if logger:
+            logger.warning(f"Failed to run tscon: {e}")
+        return False
+
+
 def get_display_diagnostics() -> dict:
     """
     Get diagnostic information about displays, sessions, and windows.

@@ -40,6 +40,8 @@ try:
         set_power_state,
         get_display_diagnostics,
         is_console_session,
+        get_current_session_id,
+        reconnect_to_console,
     )
     POWER_CONTROL_AVAILABLE = True
 except ImportError:
@@ -51,6 +53,8 @@ except ImportError:
     set_power_state = None
     get_display_diagnostics = None
     is_console_session = None
+    get_current_session_id = None
+    reconnect_to_console = None
 
 
 __all__ = [
@@ -67,6 +71,8 @@ __all__ = [
     'set_power_state',
     'get_display_diagnostics',
     'is_console_session',
+    'get_current_session_id',
+    'reconnect_to_console',
     # Availability flag
     'POWER_CONTROL_AVAILABLE',
 ]

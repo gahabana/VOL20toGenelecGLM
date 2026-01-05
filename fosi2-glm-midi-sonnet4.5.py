@@ -15,11 +15,12 @@ from mido import Message, open_output, open_input
 
 # Power control via UI automation (Windows only)
 try:
-    from PowerOnOff import GlmPowerController, POWER_CONTROL_AVAILABLE, get_display_diagnostics, is_console_session
+    from PowerOnOff import GlmPowerController, POWER_CONTROL_AVAILABLE, get_display_diagnostics, is_console_session, reconnect_to_console
 except ImportError:
     POWER_CONTROL_AVAILABLE = False
     get_display_diagnostics = None
     is_console_session = None
+    reconnect_to_console = None
     GlmPowerController = None
 import psutil
 import argparse
@@ -1206,7 +1207,24 @@ class HIDToMIDIDaemon:
             self._power_controller.set_state(desired, verify=True)
             success = True
         except Exception as e:
-            logger.error(f"Power control failed: {e}")
+            error_msg = str(e).lower()
+            # Check if this is a "no active desktop" error that can be recovered
+            if "no active desktop" in error_msg or "active desktop" in error_msg:
+                logger.warning(f"No active desktop - attempting to reconnect session to console...")
+                if reconnect_to_console and reconnect_to_console(logger=logger):
+                    # Wait a moment for display to initialize
+                    time.sleep(0.5)
+                    # Retry the power command
+                    try:
+                        logger.info(f"Retrying power command after reconnect...")
+                        self._power_controller.set_state(desired, verify=True)
+                        success = True
+                    except Exception as retry_e:
+                        logger.error(f"Power control failed after reconnect: {retry_e}")
+                else:
+                    logger.error(f"Power control failed: {e} (reconnect to console failed)")
+            else:
+                logger.error(f"Power control failed: {e}")
 
         # Wait for full settling time before ending transition
         # This ensures UI shows transitioning state for the full 2 seconds
