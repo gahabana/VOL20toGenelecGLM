@@ -1208,9 +1208,15 @@ class HIDToMIDIDaemon:
             success = True
         except Exception as e:
             error_msg = str(e).lower()
-            # Check if this is a "no active desktop" error that can be recovered
-            if "no active desktop" in error_msg or "active desktop" in error_msg:
-                logger.warning(f"No active desktop - attempting to reconnect session to console...")
+            # Check if this is a display/desktop error that can be recovered via tscon
+            recoverable_errors = [
+                "no active desktop",
+                "active desktop",
+                "screen grab failed",
+                "imagegrab",
+            ]
+            if any(err in error_msg for err in recoverable_errors):
+                logger.warning(f"Display unavailable ({e}) - attempting to reconnect session to console...")
                 if reconnect_to_console and reconnect_to_console(logger=logger):
                     # Wait a moment for display to initialize
                     time.sleep(0.5)
