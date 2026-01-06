@@ -785,15 +785,21 @@ def setup_logging(log_level, log_file_name, max_bytes=4*1024*1024, backup_count=
 
     log_queue = Queue()
 
+    # Import WebSocket error filter to suppress disconnect errors in logs
+    from api.rest import WebSocketErrorFilter
+    ws_filter = WebSocketErrorFilter()
+
     # File Handler
     file_handler = RotatingFileHandler(log_file_path, maxBytes=max_bytes, backupCount=backup_count)
     file_handler.setLevel(logging.DEBUG if log_level != "NONE" else logging.CRITICAL)
     file_handler.setFormatter(logging.Formatter('%(asctime)s [%(levelname)s] %(message)s'))
+    file_handler.addFilter(ws_filter)  # Filter WebSocket disconnect errors
 
     # Console Handler
     console_handler = logging.StreamHandler()
     console_handler.setLevel(logging.INFO if log_level in ["INFO", "DEBUG"] else logging.CRITICAL)
     console_handler.setFormatter(logging.Formatter('%(asctime)s [%(levelname)s] %(message)s'))
+    console_handler.addFilter(ws_filter)  # Filter WebSocket disconnect errors
 
     # QueueHandler
     queue_handler = QueueHandler(log_queue)

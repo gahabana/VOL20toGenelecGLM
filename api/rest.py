@@ -45,6 +45,39 @@ class WebSocketErrorFilter(logging.Filter):
                 return False
         return True
 
+
+# Apply websockets suppression at module load time (before any logging happens)
+# This is critical because the main script sets up logging before start_api_server() is called
+_ws_error_filter = WebSocketErrorFilter()
+
+def _apply_websocket_suppression():
+    """Apply websocket error suppression to all loggers and handlers."""
+    # Suppress websockets library loggers
+    for logger_name in [
+        "websockets",
+        "websockets.legacy",
+        "websockets.legacy.protocol",
+        "websockets.legacy.server",
+        "websockets.legacy.framing",
+        "websockets.protocol",
+        "websockets.server",
+    ]:
+        ws_logger = logging.getLogger(logger_name)
+        ws_logger.setLevel(logging.CRITICAL + 10)  # Beyond CRITICAL
+        ws_logger.propagate = False
+        ws_logger.handlers = []
+        ws_logger.addHandler(logging.NullHandler())
+        ws_logger.addFilter(_ws_error_filter)
+
+    # Add filter to root logger and all its handlers
+    root_logger = logging.getLogger()
+    root_logger.addFilter(_ws_error_filter)
+    for handler in root_logger.handlers:
+        handler.addFilter(_ws_error_filter)
+
+# Apply immediately at import time
+_apply_websocket_suppression()
+
 # Will be set by create_app()
 _action_queue = None
 _glm_controller = None
@@ -359,35 +392,10 @@ def start_api_server(action_queue, glm_controller, host: str = "0.0.0.0", port: 
     import uvicorn
     global _api_event_loop
 
-    # Suppress verbose error logging for expected WebSocket disconnects
-    # (Windows semaphore timeout, connection reset, etc.)
+    # Re-apply websocket suppression (catches handlers added after import)
+    _apply_websocket_suppression()
 
-    # Add filter to root logger to catch any WebSocket errors that slip through
-    root_logger = logging.getLogger()
-    ws_filter = WebSocketErrorFilter()
-    root_logger.addFilter(ws_filter)
-    # Also add to all existing handlers
-    for handler in root_logger.handlers:
-        handler.addFilter(ws_filter)
-
-    # Suppress root websockets logger and all children
-    for logger_name in [
-        "websockets",
-        "websockets.legacy",
-        "websockets.legacy.protocol",
-        "websockets.legacy.framing",
-        "websockets.protocol",
-        "websockets.legacy.server",
-        "websockets.server",
-    ]:
-        ws_logger = logging.getLogger(logger_name)
-        ws_logger.setLevel(logging.CRITICAL + 10)  # Beyond CRITICAL
-        ws_logger.propagate = False  # Don't propagate to root logger
-        ws_logger.handlers = []
-        ws_logger.addHandler(logging.NullHandler())
-        ws_logger.addFilter(ws_filter)
-
-    # Suppress uvicorn's error logger which also catches and prints these exceptions
+    # Suppress uvicorn's error logger
     uv_error_logger = logging.getLogger("uvicorn.error")
     uv_error_logger.setLevel(logging.CRITICAL)
 
@@ -439,30 +447,8 @@ def start_api_server(action_queue, glm_controller, host: str = "0.0.0.0", port: 
         asyncio.set_event_loop(loop)
         _api_event_loop = loop  # Store for cross-thread WebSocket broadcasts
 
-        # Re-apply websocket logger suppression after uvicorn initializes
-        # This catches loggers created during server startup
-        ws_filter = WebSocketErrorFilter()
-        for logger_name in [
-            "websockets",
-            "websockets.legacy",
-            "websockets.legacy.protocol",
-            "websockets.legacy.server",
-            "websockets.legacy.framing",
-            "websockets.protocol",
-            "websockets.server",
-        ]:
-            ws_logger = logging.getLogger(logger_name)
-            ws_logger.setLevel(logging.CRITICAL + 10)  # Beyond CRITICAL
-            ws_logger.propagate = False
-            ws_logger.handlers = []
-            ws_logger.addHandler(logging.NullHandler())
-            ws_logger.addFilter(ws_filter)
-
-        # Also re-apply filter to root logger handlers in this thread
-        root_logger = logging.getLogger()
-        root_logger.addFilter(ws_filter)
-        for handler in root_logger.handlers:
-            handler.addFilter(ws_filter)
+        # Re-apply websocket suppression after uvicorn initializes
+        _apply_websocket_suppression()
 
         loop.run_until_complete(server.serve())
 
