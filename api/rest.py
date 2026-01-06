@@ -21,6 +21,30 @@ from glm_core import SetVolume, AdjustVolume, SetMute, SetDim, SetPower, QueuedA
 
 logger = logging.getLogger(__name__)
 
+
+class WebSocketErrorFilter(logging.Filter):
+    """Filter out expected WebSocket disconnect errors."""
+
+    SUPPRESSED_MESSAGES = [
+        "data transfer failed",
+        "connection handler failed",
+        "semaphore timeout",
+        "connection reset",
+        "forcibly closed",
+        "keepalive ping timeout",
+    ]
+
+    def filter(self, record):
+        # Filter out messages from websockets library
+        if record.name and record.name.startswith("websockets"):
+            return False
+        # Filter out specific error messages
+        msg = record.getMessage().lower()
+        for suppressed in self.SUPPRESSED_MESSAGES:
+            if suppressed in msg:
+                return False
+        return True
+
 # Will be set by create_app()
 _action_queue = None
 _glm_controller = None
@@ -337,19 +361,31 @@ def start_api_server(action_queue, glm_controller, host: str = "0.0.0.0", port: 
 
     # Suppress verbose error logging for expected WebSocket disconnects
     # (Windows semaphore timeout, connection reset, etc.)
+
+    # Add filter to root logger to catch any WebSocket errors that slip through
+    root_logger = logging.getLogger()
+    ws_filter = WebSocketErrorFilter()
+    root_logger.addFilter(ws_filter)
+    # Also add to all existing handlers
+    for handler in root_logger.handlers:
+        handler.addFilter(ws_filter)
+
     # Suppress root websockets logger and all children
     for logger_name in [
         "websockets",
+        "websockets.legacy",
         "websockets.legacy.protocol",
+        "websockets.legacy.framing",
         "websockets.protocol",
         "websockets.legacy.server",
         "websockets.server",
     ]:
         ws_logger = logging.getLogger(logger_name)
-        ws_logger.setLevel(logging.CRITICAL)
+        ws_logger.setLevel(logging.CRITICAL + 10)  # Beyond CRITICAL
         ws_logger.propagate = False  # Don't propagate to root logger
-        # Remove any existing handlers
         ws_logger.handlers = []
+        ws_logger.addHandler(logging.NullHandler())
+        ws_logger.addFilter(ws_filter)
 
     # Suppress uvicorn's error logger which also catches and prints these exceptions
     uv_error_logger = logging.getLogger("uvicorn.error")
@@ -360,21 +396,29 @@ def start_api_server(action_queue, glm_controller, host: str = "0.0.0.0", port: 
     # Custom log config that suppresses websocket errors
     log_config = {
         "version": 1,
-        "disable_existing_loggers": False,
+        "disable_existing_loggers": True,  # Disable existing loggers to prevent leakage
         "formatters": {
             "default": {
                 "format": "%(levelname)s: %(message)s",
             },
         },
         "handlers": {
-            "default": {
-                "class": "logging.NullHandler",  # Suppress all uvicorn output
+            "null": {
+                "class": "logging.NullHandler",  # Suppress all output
             },
         },
         "loggers": {
-            "uvicorn": {"handlers": ["default"], "level": "WARNING"},
-            "uvicorn.error": {"handlers": ["default"], "level": "CRITICAL"},
-            "uvicorn.access": {"handlers": ["default"], "level": "CRITICAL"},
+            "uvicorn": {"handlers": ["null"], "level": "WARNING"},
+            "uvicorn.error": {"handlers": ["null"], "level": "CRITICAL"},
+            "uvicorn.access": {"handlers": ["null"], "level": "CRITICAL"},
+            # Suppress websockets library loggers
+            "websockets": {"handlers": ["null"], "level": "CRITICAL", "propagate": False},
+            "websockets.legacy": {"handlers": ["null"], "level": "CRITICAL", "propagate": False},
+            "websockets.legacy.protocol": {"handlers": ["null"], "level": "CRITICAL", "propagate": False},
+            "websockets.legacy.server": {"handlers": ["null"], "level": "CRITICAL", "propagate": False},
+            "websockets.legacy.framing": {"handlers": ["null"], "level": "CRITICAL", "propagate": False},
+            "websockets.protocol": {"handlers": ["null"], "level": "CRITICAL", "propagate": False},
+            "websockets.server": {"handlers": ["null"], "level": "CRITICAL", "propagate": False},
         },
     }
 
@@ -394,6 +438,32 @@ def start_api_server(action_queue, glm_controller, host: str = "0.0.0.0", port: 
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         _api_event_loop = loop  # Store for cross-thread WebSocket broadcasts
+
+        # Re-apply websocket logger suppression after uvicorn initializes
+        # This catches loggers created during server startup
+        ws_filter = WebSocketErrorFilter()
+        for logger_name in [
+            "websockets",
+            "websockets.legacy",
+            "websockets.legacy.protocol",
+            "websockets.legacy.server",
+            "websockets.legacy.framing",
+            "websockets.protocol",
+            "websockets.server",
+        ]:
+            ws_logger = logging.getLogger(logger_name)
+            ws_logger.setLevel(logging.CRITICAL + 10)  # Beyond CRITICAL
+            ws_logger.propagate = False
+            ws_logger.handlers = []
+            ws_logger.addHandler(logging.NullHandler())
+            ws_logger.addFilter(ws_filter)
+
+        # Also re-apply filter to root logger handlers in this thread
+        root_logger = logging.getLogger()
+        root_logger.addFilter(ws_filter)
+        for handler in root_logger.handlers:
+            handler.addFilter(ws_filter)
+
         loop.run_until_complete(server.serve())
 
     thread = threading.Thread(target=run_server, name="APIServerThread", daemon=True)
