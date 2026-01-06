@@ -404,7 +404,7 @@ def start_api_server(action_queue, glm_controller, host: str = "0.0.0.0", port: 
     # Custom log config that suppresses websocket errors
     log_config = {
         "version": 1,
-        "disable_existing_loggers": True,  # Disable existing loggers to prevent leakage
+        "disable_existing_loggers": False,  # Must be False to preserve main app's loggers
         "formatters": {
             "default": {
                 "format": "%(levelname)s: %(message)s",
