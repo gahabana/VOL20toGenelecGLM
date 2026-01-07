@@ -107,6 +107,7 @@ class GlmManager:
         self.reinit_callback = reinit_callback
 
         self._process: Optional[psutil.Process] = None
+        self._hwnd: int = 0  # Cached window handle
         self._running = False
         self._watchdog_thread: Optional[threading.Thread] = None
         self._non_responsive_count = 0
@@ -197,8 +198,9 @@ class GlmManager:
                     return True
             except (psutil.NoSuchProcess, psutil.AccessDenied):
                 pass
-            # Cached process is dead, clear it
+            # Cached process is dead, clear caches
             self._process = None
+            self._hwnd = 0
 
         # Fallback: search for process (only if cache miss)
         proc = self._find_glm_process()
@@ -212,6 +214,7 @@ class GlmManager:
         Check if GLM GUI is responding (not hung).
 
         Uses Windows' IsHungAppWindow API for accurate detection.
+        Uses cached window handle to avoid expensive EnumWindows call.
         """
         if not HAS_DEPS:
             return False
@@ -221,8 +224,16 @@ class GlmManager:
             return False
 
         try:
-            # Get main window handle
-            hwnd = self._get_main_window_handle(self._process.pid)
+            # Use cached window handle if valid
+            hwnd = self._hwnd
+            if hwnd and ctypes.windll.user32.IsWindow(hwnd):
+                # Cached handle is still valid
+                pass
+            else:
+                # Need to find window handle (cache miss or invalid)
+                hwnd = self._get_main_window_handle(self._process.pid)
+                self._hwnd = hwnd
+
             if hwnd == 0:
                 # No window yet, consider it responding
                 return True
@@ -336,6 +347,7 @@ class GlmManager:
 
         # Wait for window to stabilize (always needed for watchdog to work)
         hwnd = self._wait_for_window_stable()
+        self._hwnd = hwnd  # Cache for watchdog
 
         # Minimize if enabled
         if self.config.minimize_on_start and hwnd:
