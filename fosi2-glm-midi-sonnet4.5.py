@@ -61,7 +61,7 @@ else:
 MAX_EVENT_AGE = 2.0  # seconds
 SEND_DELAY = 0  # seconds for non-volume commands
 RETRY_DELAY = 2.0  # seconds
-HID_READ_TIMEOUT_MS = 200  # milliseconds - responsive shutdown
+HID_READ_TIMEOUT_MS = 1000  # milliseconds - balance between CPU usage and shutdown responsiveness
 QUEUE_MAX_SIZE = 100  # Maximum queued events before backpressure
 
 # Power control timing (UI automation based)
