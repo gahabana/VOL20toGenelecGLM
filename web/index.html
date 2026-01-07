@@ -394,16 +394,28 @@
             margin-top: 4px;
         }
 
-        /* Power button transitioning state (pulsing cyan) */
+        /* Power button transitioning state - turning ON (pulsing purple) */
         .control-btn.power.transitioning {
-            background: #018786;
+            background: var(--accent-dim);
             color: #fff;
             animation: pulse 1s ease-in-out infinite;
+        }
+
+        /* Power button transitioning state - turning OFF (pulsing dark with red tint) */
+        .control-btn.power.transitioning:not(.active) {
+            background: #4a3333;
+            color: rgba(255, 255, 255, 0.8);
+            animation: pulse-off 1s ease-in-out infinite;
         }
 
         @keyframes pulse {
             0%, 100% { opacity: 1; }
             50% { opacity: 0.6; }
+        }
+
+        @keyframes pulse-off {
+            0%, 100% { opacity: 1; background: #4a3333; }
+            50% { opacity: 0.7; background: #3a2828; }
         }
 
         /* Power button cooldown state */
@@ -420,11 +432,11 @@
         }
 
         .control-btn.power.cooldown:not(.active) {
-            /* Dimmed grey with subtle indicator */
-            background: #3d3d3d;
-            color: rgba(255, 255, 255, 0.5);
-            opacity: 0.7;
-            box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.1);
+            /* More visible OFF cooldown - darker with red-ish border */
+            background: #2a2a2a;
+            color: rgba(255, 255, 255, 0.4);
+            opacity: 0.8;
+            box-shadow: inset 0 0 0 2px rgba(207, 102, 121, 0.4);
         }
     </style>
 </head>
