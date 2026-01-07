@@ -226,7 +226,7 @@
         }
 
         .knob-label {
-            font-size: 0.7rem;
+            font-size: 0.85rem;
             color: var(--text-secondary);
             letter-spacing: 1px;
             margin-top: 4px;
@@ -394,9 +394,9 @@
             margin-top: 4px;
         }
 
-        /* Power button transitioning state */
+        /* Power button transitioning state (pulsing cyan) */
         .control-btn.power.transitioning {
-            background: var(--accent-dim);
+            background: #018786;
             color: #fff;
             animation: pulse 1s ease-in-out infinite;
         }
@@ -406,23 +406,25 @@
             50% { opacity: 0.6; }
         }
 
-        /* Power button cooldown state (Material Design 3 disabled style) */
+        /* Power button cooldown state */
         .control-btn.power.cooldown {
-            opacity: 0.38;
             pointer-events: none;
             cursor: not-allowed;
         }
 
         .control-btn.power.cooldown.active {
-            /* Muted success color when ON + cooldown */
-            background: #014d40;
-            color: rgba(255, 255, 255, 0.6);
+            /* Dimmed cyan - slightly darker than ON state */
+            background: #029e91;
+            color: rgba(0, 0, 0, 0.6);
+            opacity: 0.7;
         }
 
         .control-btn.power.cooldown:not(.active) {
-            /* Muted grey when OFF + cooldown */
-            background: var(--bg-elevated);
-            color: rgba(255, 255, 255, 0.38);
+            /* Dimmed grey with subtle indicator */
+            background: #3d3d3d;
+            color: rgba(255, 255, 255, 0.5);
+            opacity: 0.7;
+            box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.1);
         }
     </style>
 </head>
@@ -534,6 +536,7 @@
         // Power transitioning and cooldown state
         let isPowerTransitioning = false;
         let isPowerCooldown = false;
+        let cooldownRefreshTimer = null;
 
         // Convert volume (0-127) to angle using piecewise linear mapping
         function volumeToAngle(volume) {
@@ -660,9 +663,20 @@
             knobContainer.classList.toggle('power-transitioning', isPowerTransitioning);
             powerBtn.classList.toggle('transitioning', isPowerTransitioning);
 
-            // Handle power cooldown state (after settling - button greyed out)
+            // Handle power cooldown state (after settling - button dimmed)
+            const wasCooldown = isPowerCooldown;
             isPowerCooldown = state.power_cooldown || false;
             powerBtn.classList.toggle('cooldown', isPowerCooldown);
+
+            // Schedule periodic refresh during cooldown to detect when it ends
+            if (isPowerCooldown && !cooldownRefreshTimer) {
+                cooldownRefreshTimer = setInterval(() => {
+                    refreshState();
+                }, 500);  // Check every 500ms
+            } else if (!isPowerCooldown && cooldownRefreshTimer) {
+                clearInterval(cooldownRefreshTimer);
+                cooldownRefreshTimer = null;
+            }
 
             if (isPowerTransitioning) {
                 // Update countdown
