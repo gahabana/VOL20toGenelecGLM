@@ -355,6 +355,137 @@ for name in [
 
 ---
 
+## 6. GLM Manager Module (Replace PowerShell Script)
+
+### Goal
+Eliminate `minimize-glm.newer.ps1` by integrating its functionality into the Python agent as an imported module (`glm_manager.py`).
+
+### Current PowerShell Script Functionality
+
+The script `minimize-glm.newer.ps1` performs:
+
+1. **CPU Gating** - Wait for CPU < 2% before starting GLM (avoids competing with Windows startup)
+2. **Start GLM** - Launch `GLMv5.exe` if not running
+3. **Priority Boost** - Set process priority to AboveNormal
+4. **Window Handle Stabilization** - Poll until MainWindowHandle stops changing
+5. **Non-blocking Minimize** - Use `PostMessage(WM_SYSCOMMAND, SC_MINIMIZE)` to minimize without blocking
+6. **Watchdog Loop** - Monitor `Responding` property, kill and restart if hung for ~30s
+
+### Proposed Architecture
+
+```
+glm_manager.py (new module)
+├── GlmManager class
+│   ├── start_glm() - Start GLM with CPU gating, priority, minimize
+│   ├── stop_glm() - Graceful shutdown
+│   ├── restart_glm() - Kill + start
+│   ├── is_alive() - Check process exists
+│   ├── is_responding() - Check GUI not hung
+│   └── _watchdog_thread() - Background monitoring
+└── Imported by main script, runs watchdog in background thread
+```
+
+### Key Design Decisions
+
+1. **Imported Module, Not Separate Process** - `glm_manager.py` is imported by the main script and runs a watchdog thread, not a separate Python process.
+
+2. **Integration with Power Controller** - When GLM restarts, the power controller must reinitialize its window handle cache.
+
+3. **Watchdog Responsibilities** - Only monitors GLM health and restarts when needed. Does NOT handle MIDI health (that remains separate).
+
+### Watchdog Pseudo-code
+
+```python
+class GlmManager:
+    def __init__(self, power_controller_reinit_callback):
+        self.reinit_callback = power_controller_reinit_callback
+        self.non_responsive_count = 0
+        self._running = False
+        self._watchdog_thread = None
+
+    def start_watchdog(self):
+        self._running = True
+        self._watchdog_thread = threading.Thread(target=self._watchdog_loop, daemon=True)
+        self._watchdog_thread.start()
+
+    def _watchdog_loop(self):
+        """Watchdog thread - runs every 5 seconds."""
+        while self._running:
+            if not self.is_alive():
+                # GLM not running - start it
+                self.start_glm()
+                self.reinit_callback()  # Reinitialize power controller
+                self.non_responsive_count = 0
+            elif not self.is_responding():
+                # GLM hung
+                self.non_responsive_count += 1
+                if self.non_responsive_count >= 6:  # ~30 seconds
+                    self.kill_glm()
+                    self.start_glm()
+                    self.reinit_callback()
+                    self.non_responsive_count = 0
+            else:
+                # Healthy
+                self.non_responsive_count = 0
+
+            # TODO: MIDI health check placeholder for future
+
+            time.sleep(5)
+```
+
+### Configuration Options
+
+```python
+GLM_MANAGER_CONFIG = {
+    "glm_path": r"C:\Program Files (x86)\Genelec\GLMv5\GLMv5.exe",
+    "process_name": "GLMv5",
+
+    # CPU gating (only at initial script start)
+    "cpu_threshold": 2,          # % CPU considered "idle enough"
+    "cpu_check_interval": 5,     # seconds between checks
+    "cpu_max_checks": 60,        # 60 * 5s = 5 minutes max wait
+
+    # Window stabilization
+    "post_start_sleep": 5,       # seconds after start before minimize
+    "stable_handle_count": 2,    # handle must be same N times
+    "minimize_attempts": 1,      # minimize at least N times
+    "stabilize_timeout": 60,     # max seconds for stabilization
+
+    # Watchdog
+    "watchdog_interval": 5,      # seconds between checks
+    "max_non_responsive": 6,     # checks before kill (6*5=30s)
+    "restart_delay": 5,          # seconds to wait before restart
+}
+```
+
+### Implementation Steps
+
+1. **Create `glm_manager.py`** with GlmManager class
+2. **Port CPU gating** from PowerShell (use `psutil` for CPU monitoring)
+3. **Port process management** (start, kill, priority) using `subprocess` and `psutil`
+4. **Port window stabilization** using `pywinauto` or `ctypes` for Win32 calls
+5. **Port non-blocking minimize** using `ctypes` PostMessage
+6. **Implement watchdog thread** with callback for power controller reinitialization
+7. **Integrate into main script** - instantiate GlmManager early, pass reinit callback
+8. **Test thoroughly** - startup, crash recovery, hang detection, minimize behavior
+9. **Remove PowerShell dependency** - delete `minimize-glm.newer.ps1` after validation
+
+### Dependencies
+
+- `psutil` - CPU monitoring, process management (already used in project)
+- `pywinauto` - Window handle management (already used in project)
+- `ctypes` - Win32 API calls for PostMessage minimize
+
+### Migration Strategy
+
+1. Implement Python version alongside PowerShell script
+2. Add command-line flag to choose which manager to use
+3. Test Python version extensively
+4. Make Python version the default
+5. Remove PowerShell script after validation period
+
+---
+
 ## Notes for Future Implementation
 
 ### When Implementing Logging Changes
