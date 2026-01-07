@@ -562,10 +562,16 @@ class GlmController:
         with self._lock:
             # Calculate remaining settling/cooldown time
             settling_remaining = 0
+            cooldown_remaining = 0
+            in_cooldown = False
+
             if self._power_transition_start > 0:
                 elapsed = time.time() - self._power_transition_start
                 if elapsed < POWER_SETTLING_TIME:
                     settling_remaining = POWER_SETTLING_TIME - elapsed
+                elif elapsed < POWER_TOTAL_LOCKOUT:
+                    in_cooldown = True
+                    cooldown_remaining = POWER_TOTAL_LOCKOUT - elapsed
 
             return {
                 "volume": self.volume,
@@ -575,6 +581,8 @@ class GlmController:
                 "power": self.power,
                 "power_transitioning": self._power_settling,
                 "power_settling_remaining": round(settling_remaining, 1),
+                "power_cooldown": in_cooldown,
+                "power_cooldown_remaining": round(cooldown_remaining, 1),
             }
 
     def send_volume_absolute(self, target: int, midi_output) -> bool:

@@ -228,9 +228,9 @@
         .knob-label {
             font-size: 0.7rem;
             color: var(--text-secondary);
-            text-transform: uppercase;
             letter-spacing: 1px;
             margin-top: 4px;
+            margin-left: 4px;
         }
 
         .knob-min, .knob-max {
@@ -405,6 +405,25 @@
             0%, 100% { opacity: 1; }
             50% { opacity: 0.6; }
         }
+
+        /* Power button cooldown state (Material Design 3 disabled style) */
+        .control-btn.power.cooldown {
+            opacity: 0.38;
+            pointer-events: none;
+            cursor: not-allowed;
+        }
+
+        .control-btn.power.cooldown.active {
+            /* Muted success color when ON + cooldown */
+            background: #014d40;
+            color: rgba(255, 255, 255, 0.6);
+        }
+
+        .control-btn.power.cooldown:not(.active) {
+            /* Muted grey when OFF + cooldown */
+            background: var(--bg-elevated);
+            color: rgba(255, 255, 255, 0.38);
+        }
     </style>
 </head>
 <body>
@@ -512,8 +531,9 @@
         const powerBtn = document.getElementById('powerBtn');
         const footer = document.getElementById('footer');
 
-        // Power transitioning state
+        // Power transitioning and cooldown state
         let isPowerTransitioning = false;
+        let isPowerCooldown = false;
 
         // Convert volume (0-127) to angle using piecewise linear mapping
         function volumeToAngle(volume) {
@@ -635,10 +655,14 @@
 
         // Update UI with state
         function updateUI(state) {
-            // Handle power transitioning state
+            // Handle power transitioning state (settling period - spinner visible)
             isPowerTransitioning = state.power_transitioning || false;
             knobContainer.classList.toggle('power-transitioning', isPowerTransitioning);
             powerBtn.classList.toggle('transitioning', isPowerTransitioning);
+
+            // Handle power cooldown state (after settling - button greyed out)
+            isPowerCooldown = state.power_cooldown || false;
+            powerBtn.classList.toggle('cooldown', isPowerCooldown);
 
             if (isPowerTransitioning) {
                 // Update countdown
@@ -669,7 +693,7 @@
 
             muteBtn.classList.toggle('active', state.mute);
             dimBtn.classList.toggle('active', state.dim);
-            // Don't show power as active during transitioning
+            // Show power as active when ON (but not during transitioning)
             powerBtn.classList.toggle('active', state.power && !isPowerTransitioning);
         }
 
@@ -914,6 +938,10 @@
         async function togglePower() {
             if (isPowerTransitioning) {
                 console.log('Blocked: power already transitioning');
+                return;
+            }
+            if (isPowerCooldown) {
+                console.log('Blocked: power cooldown active');
                 return;
             }
             try {
