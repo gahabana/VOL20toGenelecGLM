@@ -945,26 +945,9 @@ class HIDToMIDIDaemon:
         # Power pattern detection state (legacy, kept for MIDI state sync)
         self._rx_seq = []  # List of (timestamp, cc) for pattern detection
         self._last_pattern_time = None  # For startup detection (double-burst)
-        # Power control via UI automation
-        self._power_controller = None
-        if POWER_CONTROL_AVAILABLE:
-            try:
-                # Log display/session diagnostics (for debugging)
-                if get_display_diagnostics:
-                    diag = get_display_diagnostics()
-                    logger.info(f"Display diagnostics: session={diag.get('current_session_id')}, "
-                               f"console={diag.get('console_session_id')}, "
-                               f"rdp={diag.get('is_rdp_session')}, "
-                               f"monitors={diag.get('monitor_count')}, "
-                               f"glm_windows={len(diag.get('glm_windows', []))}")
-
-                # Always try to initialize - let it fail naturally if display inaccessible
-                self._power_controller = GlmPowerController(steal_focus=True)
-                logger.info("GlmPowerController initialized for UI-based power control")
-            except Exception as e:
-                logger.warning(f"GlmPowerController not available: {e}")
 
         # GLM Manager (process lifecycle and watchdog)
+        # Initialize this BEFORE power controller, since it may need to start GLM first
         self._glm_manager = None
         if glm_manager_enabled and GLM_MANAGER_AVAILABLE:
             try:
@@ -982,6 +965,26 @@ class HIDToMIDIDaemon:
                 logger.warning(f"GlmManager not available: {e}")
         elif glm_manager_enabled and not GLM_MANAGER_AVAILABLE:
             logger.warning("--glm_manager requested but GlmManager not available (missing dependencies)")
+
+        # Power control via UI automation
+        # Skip init if GLM Manager is enabled - it will init after starting GLM
+        self._power_controller = None
+        if POWER_CONTROL_AVAILABLE and not self._glm_manager:
+            try:
+                # Log display/session diagnostics (for debugging)
+                if get_display_diagnostics:
+                    diag = get_display_diagnostics()
+                    logger.info(f"Display diagnostics: session={diag.get('current_session_id')}, "
+                               f"console={diag.get('console_session_id')}, "
+                               f"rdp={diag.get('is_rdp_session')}, "
+                               f"monitors={diag.get('monitor_count')}, "
+                               f"glm_windows={len(diag.get('glm_windows', []))}")
+
+                # Always try to initialize - let it fail naturally if display inaccessible
+                self._power_controller = GlmPowerController(steal_focus=True)
+                logger.info("GlmPowerController initialized for UI-based power control")
+            except Exception as e:
+                logger.warning(f"GlmPowerController not available: {e}")
 
     def _reinit_power_controller(self):
         """Reinitialize power controller after GLM restart and sync power state."""
