@@ -1123,35 +1123,57 @@ class HIDToMIDIDaemon:
                         if len(seq) >= 5 and seq[-5:] == POWER_PATTERN:
                             time_span = self._rx_seq[-1][0] - self._rx_seq[-5][0]
                             if time_span >= POWER_PATTERN_MIN_SPAN:  # Not a buffer dump
-                                if len(seq) == 5:
-                                    # Clean 5-message burst
-                                    if (self._last_pattern_time and
-                                        (now - self._last_pattern_time) < POWER_STARTUP_WINDOW):
-                                        # Second pattern within window = GLM startup
-                                        old_power = glm_controller.power
-                                        glm_controller.power = True  # Sync to ON
-                                        logger.info(f"GLM startup detected - power synced to ON (was {'ON' if old_power else 'OFF'})")
-                                        glm_controller._notify_state_change()
-                                        self._last_pattern_time = None
-                                    else:
-                                        # Skip toggle detection during power cooldown
-                                        # UI automation verified state is authoritative
-                                        allowed, wait_time, _ = glm_controller.can_accept_power_command()
-                                        if not allowed:
-                                            logger.debug(f"MIDI power pattern ignored during cooldown ({wait_time:.1f}s remaining)")
-                                        else:
-                                            # Single burst = real power toggle
-                                            glm_controller.power = not glm_controller.power
-                                            logger.info(f"Power toggle detected (now {'ON' if glm_controller.power else 'OFF'})")
-                                            glm_controller._notify_state_change()
-                                            self._last_pattern_time = now
-                                    self._rx_seq = []  # Clear after detection
-                                else:
-                                    # Burst with extra messages (len > 5) - likely first burst of startup
-                                    # Record time but don't toggle - wait for second burst
-                                    logger.debug(f"Power pattern with {len(seq)} msgs - recording for startup detection")
-                                    self._last_pattern_time = now
+                                # Skip pattern processing during power cooldown
+                                # (UI automation already verified state)
+                                allowed, wait_time, _ = glm_controller.can_accept_power_command()
+                                if not allowed:
+                                    logger.debug(f"MIDI power pattern ignored during cooldown ({wait_time:.1f}s remaining)")
                                     self._rx_seq = []
+                                    continue
+
+                                # Power pattern detected - use it as trigger to read UI state
+                                # This is more reliable than inferring state from pattern heuristics
+                                old_power = glm_controller.power
+                                state_updated = False
+
+                                if self._power_controller:
+                                    try:
+                                        actual_state = self._power_controller.get_state()
+                                        if actual_state in ("on", "off"):
+                                            glm_controller.power = (actual_state == "on")
+                                            state_updated = True
+                                            if glm_controller.power != old_power:
+                                                logger.info(f"Power state read from UI: {actual_state.upper()} (was {'ON' if old_power else 'OFF'})")
+                                            else:
+                                                logger.debug(f"Power state confirmed from UI: {actual_state.upper()}")
+                                        else:
+                                            logger.warning(f"UI returned unknown power state: {actual_state}")
+                                    except Exception as e:
+                                        logger.warning(f"Failed to read power state from UI: {e}")
+
+                                # Fallback: if UI unavailable, use toggle heuristic
+                                if not state_updated:
+                                    if len(seq) == 5:
+                                        # Clean 5-message burst - toggle
+                                        if (self._last_pattern_time and
+                                            (now - self._last_pattern_time) < POWER_STARTUP_WINDOW):
+                                            # Second pattern within window = GLM startup
+                                            glm_controller.power = True
+                                            logger.info(f"GLM startup detected (fallback) - power synced to ON")
+                                            self._last_pattern_time = None
+                                        else:
+                                            glm_controller.power = not glm_controller.power
+                                            logger.info(f"Power toggle detected (fallback, now {'ON' if glm_controller.power else 'OFF'})")
+                                            self._last_pattern_time = now
+                                    else:
+                                        # Burst with extra messages - record for startup detection
+                                        logger.debug(f"Power pattern with {len(seq)} msgs (fallback) - recording for startup detection")
+                                        self._last_pattern_time = now
+
+                                if glm_controller.power != old_power:
+                                    glm_controller._notify_state_change()
+
+                                self._rx_seq = []  # Clear after detection
 
                         # Process state update
                         changed = glm_controller.update_from_midi(msg.control, msg.value)
