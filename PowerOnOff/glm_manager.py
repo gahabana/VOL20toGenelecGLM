@@ -65,12 +65,13 @@ class GlmManagerConfig:
     cpu_max_checks: int = 60  # 60 * 5s = 5 minutes max wait
     cpu_gating_enabled: bool = True  # Set False to skip CPU check
 
-    # Window stabilization
+    # Window stabilization and minimize
     post_start_sleep: float = 5.0  # seconds after start before minimize
     enforce_poll_interval: float = 1.0  # seconds between stabilization polls
     enforce_max_seconds: float = 60.0  # max time for stabilization
     stable_handle_count: int = 2  # handle must be same N times
     minimize_attempts_needed: int = 1  # minimize at least N times
+    minimize_on_start: bool = False  # Set True to minimize GLM window on start
 
     # Watchdog
     watchdog_interval: float = 5.0  # seconds between checks
@@ -308,7 +309,7 @@ class GlmManager:
                 return False
 
         # Post-start delay
-        logger.info(f"Sleeping {self.config.post_start_sleep}s after start before priority/minimize.")
+        logger.info(f"Sleeping {self.config.post_start_sleep}s after start before priority.")
         time.sleep(self.config.post_start_sleep)
 
         # Set priority to AboveNormal
@@ -319,8 +320,11 @@ class GlmManager:
         except Exception as e:
             logger.warning(f"Failed to set priority: {e}")
 
-        # Best-effort window stabilization and minimize
-        self._stabilize_and_minimize()
+        # Best-effort window stabilization and minimize (if enabled)
+        if self.config.minimize_on_start:
+            self._stabilize_and_minimize()
+        else:
+            logger.debug("Skipping minimize (minimize_on_start=False)")
 
         # Check if still alive
         if self._process and self._process.is_running():
