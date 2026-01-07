@@ -320,11 +320,12 @@ class GlmManager:
         except Exception as e:
             logger.warning(f"Failed to set priority: {e}")
 
-        # Best-effort window stabilization and minimize (if enabled)
-        if self.config.minimize_on_start:
-            self._stabilize_and_minimize()
-        else:
-            logger.debug("Skipping minimize (minimize_on_start=False)")
+        # Wait for window to stabilize (always needed for watchdog to work)
+        hwnd = self._wait_for_window_stable()
+
+        # Minimize if enabled
+        if self.config.minimize_on_start and hwnd:
+            self._minimize_window(hwnd)
 
         # Check if still alive
         if self._process and self._process.is_running():
@@ -396,23 +397,25 @@ class GlmManager:
             logger.debug(f"PostMessage failed: {e}")
             return False
 
-    def _stabilize_and_minimize(self):
+    def _wait_for_window_stable(self) -> int:
         """
-        Wait for window handle to stabilize and minimize the window.
+        Wait for GLM main window handle to stabilize.
 
-        GLM's window handle can change during startup. This method polls
-        until the handle is stable, then minimizes using PostMessage.
+        GLM's window handle can change during startup (splash screen → main window).
+        This method polls until the handle is stable, confirming GLM has fully started.
+
+        Returns:
+            The stable window handle, or 0 if stabilization failed/timed out.
         """
         if not self._process:
-            return
+            return 0
 
         deadline = time.time() + self.config.enforce_max_seconds
         last_handle = 0
         stable_count = 0
-        minimize_count = 0
 
         logger.info(
-            f"Entering enforce-minimized loop: poll every {self.config.enforce_poll_interval}s, "
+            f"Waiting for GLM window to stabilize: poll every {self.config.enforce_poll_interval}s, "
             f"for up to {self.config.enforce_max_seconds}s."
         )
 
@@ -420,7 +423,7 @@ class GlmManager:
             try:
                 if not self._process.is_running():
                     logger.warning(f"{self.config.process_name} exited during stabilization.")
-                    return
+                    return 0
 
                 hwnd = self._get_main_window_handle(self._process.pid)
 
@@ -428,7 +431,6 @@ class GlmManager:
                     logger.debug(f"Current main window: PID={self._process.pid} Handle=0")
                     last_handle = 0
                     stable_count = 0
-                    minimize_count = 0
                     time.sleep(self.config.enforce_poll_interval)
                     continue
 
@@ -440,32 +442,41 @@ class GlmManager:
                 else:
                     last_handle = hwnd
                     stable_count = 1
-                    minimize_count = 0
                     logger.debug(f"New window handle detected. Resetting counters. Handle={hwnd}")
 
-                logger.debug(f"StableCount={stable_count} MinimizeCount={minimize_count} Handle={hwnd}")
+                logger.debug(f"StableCount={stable_count} Handle={hwnd}")
 
-                # Check stop condition
-                if (stable_count >= self.config.stable_handle_count and
-                        minimize_count >= self.config.minimize_attempts_needed):
+                # Check if stable enough
+                if stable_count >= self.config.stable_handle_count:
                     logger.info(
-                        f"Handle {hwnd} considered stable "
-                        f"(StableCount={stable_count}, MinimizeCount={minimize_count}). "
-                        f"Stopping enforce-minimized loop."
+                        f"Window handle {hwnd} is stable (StableCount={stable_count})."
                     )
-                    break
-
-                # Non-blocking minimize attempt
-                ok = self._post_minimize(hwnd)
-                minimize_count += 1
-                logger.debug(f"Minimize posted (non-blocking). ok={ok} Handle={hwnd} MinimizeCount={minimize_count}")
+                    return hwnd
 
             except Exception as e:
-                logger.warning(f"Error in enforce-minimized loop: {e}")
+                logger.warning(f"Error in stabilization loop: {e}")
 
             time.sleep(self.config.enforce_poll_interval)
 
-        logger.info("Leaving enforce-minimized loop.")
+        logger.warning("Window stabilization timed out.")
+        return last_handle  # Return whatever we have
+
+    def _minimize_window(self, hwnd: int):
+        """
+        Minimize the GLM window using non-blocking PostMessage.
+
+        Args:
+            hwnd: Window handle to minimize
+        """
+        if hwnd == 0:
+            return
+
+        logger.info(f"Minimizing window Handle={hwnd}")
+        for attempt in range(self.config.minimize_attempts_needed):
+            ok = self._post_minimize(hwnd)
+            logger.debug(f"Minimize posted (non-blocking). ok={ok} Handle={hwnd} attempt={attempt + 1}")
+            if attempt < self.config.minimize_attempts_needed - 1:
+                time.sleep(self.config.enforce_poll_interval)
 
     def _kill_glm(self):
         """Kill the GLM process."""
