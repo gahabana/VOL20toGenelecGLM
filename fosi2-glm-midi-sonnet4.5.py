@@ -1424,7 +1424,8 @@ class HIDToMIDIDaemon:
         glm_controller.add_state_callback(log_state_change)
 
         # Sync power state from GLM UI (before starting threads)
-        if self._power_controller:
+        # Skip if GLM Manager already did this in _reinit_power_controller
+        if self._power_controller and not self._glm_manager:
             try:
                 state = self._power_controller.get_state()
                 if state in ("on", "off"):
