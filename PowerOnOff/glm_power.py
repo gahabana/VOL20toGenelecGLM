@@ -512,6 +512,15 @@ class GlmPowerController:
 
         time.sleep(self.config.focus_delay)
 
+        # Wait for window to have valid coordinates (may take time after restore)
+        # Invalid coordinates like negative values indicate window isn't fully restored
+        for _ in range(10):  # Max 10 retries = ~1 second
+            r = win.rectangle()
+            if r.left >= 0 and r.top >= 0 and r.right > r.left and r.bottom > r.top:
+                break  # Valid rectangle
+            self.logger.debug(f"Waiting for window restore (rect={r.left},{r.top},{r.right},{r.bottom})")
+            time.sleep(0.1)
+
     def _get_power_point(self, win) -> Point:
         """Get screen coordinates of power button center."""
         r = win.rectangle()
