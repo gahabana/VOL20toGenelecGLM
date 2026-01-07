@@ -983,12 +983,20 @@ class HIDToMIDIDaemon:
             logger.warning("--glm_manager requested but GlmManager not available (missing dependencies)")
 
     def _reinit_power_controller(self):
-        """Reinitialize power controller after GLM restart."""
-        if self._power_controller:
+        """Reinitialize power controller after GLM restart and sync power state."""
+        if POWER_CONTROL_AVAILABLE:
             try:
                 # Recreate power controller to pick up new GLM window
                 self._power_controller = GlmPowerController(steal_focus=True)
                 logger.info("Power controller reinitialized after GLM restart")
+
+                # Sync power state from UI (overrides any MIDI-based detection)
+                state = self._power_controller.get_state()
+                if state in ("on", "off"):
+                    glm_controller.power = (state == "on")
+                    logger.info(f"Power state synced from GLM UI after restart: {state.upper()}")
+                else:
+                    logger.warning(f"Could not determine GLM power state after restart: {state}")
             except Exception as e:
                 logger.warning(f"Failed to reinitialize power controller: {e}")
 
