@@ -759,13 +759,14 @@ def parse_arguments():
                         help="Disable Home Assistant MQTT Discovery.")
 
     # GLM Manager options
-    parser.add_argument("--glm_manager", action="store_true", default=False,
-                        help="Enable GLM process manager (start GLM, watchdog, auto-restart). "
-                             "Replaces minimize-glm.newer.ps1 PowerShell script.")
+    parser.add_argument("--glm_manager", action="store_true", default=True,
+                        help="Enable GLM process manager (start GLM, watchdog, auto-restart). Default is True.")
+    parser.add_argument("--no_glm_manager", action="store_false", dest="glm_manager",
+                        help="Disable GLM process manager (use external script or manual GLM start).")
     parser.add_argument("--glm_path", type=str, default=r"C:\Program Files (x86)\Genelec\GLMv5\GLMv5.exe",
-                        help="Path to GLM executable (used with --glm_manager).")
+                        help="Path to GLM executable.")
     parser.add_argument("--glm_cpu_gating", action="store_true", default=True,
-                        help="Wait for CPU idle before starting GLM (used with --glm_manager).")
+                        help="Wait for CPU idle before starting GLM. Default is True.")
     parser.add_argument("--no_glm_cpu_gating", action="store_false", dest="glm_cpu_gating",
                         help="Disable CPU gating for GLM startup.")
 
