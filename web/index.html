@@ -394,28 +394,16 @@
             margin-top: 4px;
         }
 
-        /* Power button transitioning state - turning ON (pulsing purple) */
+        /* Power button transitioning state (pulsing purple - same as commit 9921ecb) */
         .control-btn.power.transitioning {
             background: var(--accent-dim);
             color: #fff;
             animation: pulse 1s ease-in-out infinite;
         }
 
-        /* Power button transitioning state - turning OFF (pulsing dark with red tint) */
-        .control-btn.power.transitioning:not(.active) {
-            background: #4a3333;
-            color: rgba(255, 255, 255, 0.8);
-            animation: pulse-off 1s ease-in-out infinite;
-        }
-
         @keyframes pulse {
             0%, 100% { opacity: 1; }
             50% { opacity: 0.6; }
-        }
-
-        @keyframes pulse-off {
-            0%, 100% { opacity: 1; background: #4a3333; }
-            50% { opacity: 0.7; background: #3a2828; }
         }
 
         /* Power button cooldown state */
