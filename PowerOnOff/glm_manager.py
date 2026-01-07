@@ -190,8 +190,22 @@ class GlmManager:
 
     def is_alive(self) -> bool:
         """Check if GLM process is running."""
+        # Use cached process first
+        if self._process:
+            try:
+                if self._process.is_running():
+                    return True
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                pass
+            # Cached process is dead, clear it
+            self._process = None
+
+        # Fallback: search for process (only if cache miss)
         proc = self._find_glm_process()
-        return proc is not None and proc.is_running()
+        if proc:
+            self._process = proc
+            return True
+        return False
 
     def is_responding(self) -> bool:
         """
@@ -202,13 +216,13 @@ class GlmManager:
         if not HAS_DEPS:
             return False
 
-        proc = self._find_glm_process()
-        if proc is None:
+        # Use cached process - don't re-search
+        if not self._process:
             return False
 
         try:
             # Get main window handle
-            hwnd = self._get_main_window_handle(proc.pid)
+            hwnd = self._get_main_window_handle(self._process.pid)
             if hwnd == 0:
                 # No window yet, consider it responding
                 return True
