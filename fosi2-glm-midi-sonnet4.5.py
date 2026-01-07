@@ -21,6 +21,14 @@ except ImportError:
     get_display_diagnostics = None
     ensure_session_connected = None
     GlmPowerController = None
+
+# GLM process manager (Windows only) - replaces PowerShell script
+try:
+    from PowerOnOff import GlmManager, GlmManagerConfig, GLM_MANAGER_AVAILABLE
+except ImportError:
+    GLM_MANAGER_AVAILABLE = False
+    GlmManager = None
+    GlmManagerConfig = None
 import psutil
 import argparse
 
@@ -750,6 +758,17 @@ def parse_arguments():
     parser.add_argument("--no_mqtt_ha_discovery", action="store_false", dest="mqtt_ha_discovery",
                         help="Disable Home Assistant MQTT Discovery.")
 
+    # GLM Manager options
+    parser.add_argument("--glm_manager", action="store_true", default=False,
+                        help="Enable GLM process manager (start GLM, watchdog, auto-restart). "
+                             "Replaces minimize-glm.newer.ps1 PowerShell script.")
+    parser.add_argument("--glm_path", type=str, default=r"C:\Program Files (x86)\Genelec\GLMv5\GLMv5.exe",
+                        help="Path to GLM executable (used with --glm_manager).")
+    parser.add_argument("--glm_cpu_gating", action="store_true", default=True,
+                        help="Wait for CPU idle before starting GLM (used with --glm_manager).")
+    parser.add_argument("--no_glm_cpu_gating", action="store_false", dest="glm_cpu_gating",
+                        help="Disable CPU gating for GLM startup.")
+
     # Parse arguments
     args = parser.parse_args()
 
@@ -894,7 +913,8 @@ class HIDToMIDIDaemon:
     def __init__(self, min_click_time, max_avg_click_time, volume_increases_list,
                  VID, PID, midi_in_channel, midi_out_channel, startup_volume=None, api_port=8080,
                  mqtt_broker=None, mqtt_port=1883, mqtt_user=None, mqtt_pass=None,
-                 mqtt_topic="glm", mqtt_ha_discovery=True):
+                 mqtt_topic="glm", mqtt_ha_discovery=True,
+                 glm_manager_enabled=False, glm_path=None, glm_cpu_gating=True):
         self.queue = queue.Queue(maxsize=QUEUE_MAX_SIZE)
         self._stop_event = threading.Event()
         self.hid_reader_thread = threading.Thread(target=self.hid_reader, daemon=True, name="HIDReaderThread")
@@ -942,6 +962,35 @@ class HIDToMIDIDaemon:
                 logger.info("GlmPowerController initialized for UI-based power control")
             except Exception as e:
                 logger.warning(f"GlmPowerController not available: {e}")
+
+        # GLM Manager (process lifecycle and watchdog)
+        self._glm_manager = None
+        if glm_manager_enabled and GLM_MANAGER_AVAILABLE:
+            try:
+                config = GlmManagerConfig(
+                    glm_path=glm_path or r"C:\Program Files (x86)\Genelec\GLMv5\GLMv5.exe",
+                    cpu_gating_enabled=glm_cpu_gating,
+                )
+                # Callback to reinitialize power controller after GLM restart
+                self._glm_manager = GlmManager(
+                    config=config,
+                    reinit_callback=self._reinit_power_controller,
+                )
+                logger.info("GlmManager initialized (will start GLM and watchdog)")
+            except Exception as e:
+                logger.warning(f"GlmManager not available: {e}")
+        elif glm_manager_enabled and not GLM_MANAGER_AVAILABLE:
+            logger.warning("--glm_manager requested but GlmManager not available (missing dependencies)")
+
+    def _reinit_power_controller(self):
+        """Reinitialize power controller after GLM restart."""
+        if self._power_controller:
+            try:
+                # Recreate power controller to pick up new GLM window
+                self._power_controller = GlmPowerController(steal_focus=True)
+                logger.info("Power controller reinitialized after GLM restart")
+            except Exception as e:
+                logger.warning(f"Failed to reinitialize power controller: {e}")
 
     def _get_midi_output(self):
         """Get connected MIDI output, reconnecting if necessary. Thread-safe."""
@@ -1350,6 +1399,16 @@ class HIDToMIDIDaemon:
 
     def start(self):
         """Starts all threads."""
+        # Start GLM Manager first (ensures GLM is running before we try to sync state)
+        if self._glm_manager:
+            logger.info("Starting GLM Manager (will start GLM and watchdog)...")
+            if self._glm_manager.start():
+                logger.info("GLM Manager started successfully")
+                # Reinitialize power controller now that GLM is running
+                self._reinit_power_controller()
+            else:
+                logger.error("GLM Manager failed to start")
+
         # Register state change callback for logging (proof of concept)
         def log_state_change(state: dict):
             transitioning = " [TRANSITIONING]" if state.get('power_transitioning') else ""
@@ -1402,6 +1461,10 @@ class HIDToMIDIDaemon:
         logger.info("Stopping daemon...")
         self._stop_event.set()
         self.queue.put(None)  # Sentinel to unblock the consumer
+
+        # Stop GLM Manager watchdog (but don't kill GLM - let it keep running)
+        if self._glm_manager:
+            self._glm_manager.stop(kill_glm=False)
 
         # Stop MQTT client
         if self.mqtt_client:
@@ -1489,6 +1552,9 @@ if __name__ == "__main__":
         args.mqtt_pass,
         args.mqtt_topic,
         args.mqtt_ha_discovery,
+        args.glm_manager,
+        args.glm_path,
+        args.glm_cpu_gating,
     )
     signal.signal(signal.SIGINT, lambda sig, frame: signal_handler(sig, frame, daemon, stop_logging))
     daemon.start()
