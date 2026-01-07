@@ -779,7 +779,7 @@ class GlmPowerController:
         desired: Literal["on", "off"],
         verify: bool = True,
         retries: int = 2,
-        restore_window: bool = False,
+        restore_window: bool = True,
     ) -> bool:
         """
         Set power to desired state. Only clicks if state differs.
@@ -788,9 +788,8 @@ class GlmPowerController:
             desired: Target state ("on" or "off").
             verify: If True, poll to verify state changed.
             retries: Number of click retries if verification fails.
-            restore_window: If True, restore GLM to its previous state
-                           (minimized/focus) after setting. Default False
-                           since users typically want to see the result.
+            restore_window: If True (default), restore GLM to its previous state
+                           (minimized/focus) after setting.
 
         Returns:
             True if state is now as desired, False otherwise.
@@ -901,13 +900,13 @@ class GlmPowerController:
         """
         return self.set_state("off", verify=verify)
 
-    def toggle(self, verify: bool = True, restore_window: bool = False) -> PowerState:
+    def toggle(self, verify: bool = True, restore_window: bool = True) -> PowerState:
         """
         Toggle power state.
 
         Args:
             verify: If True, poll to verify state changed.
-            restore_window: If True, restore GLM to its previous state after toggling.
+            restore_window: If True (default), restore GLM to its previous state after toggling.
 
         Returns the new state after toggling.
 
