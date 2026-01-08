@@ -606,11 +606,10 @@ class GlmManager:
         if success and self.reinit_callback and self._process:
             logger.info(f"Calling reinit callback after GLM restart (PID={self._process.pid})...")
             try:
+                # Callback handles power controller reinit AND minimize
                 self.reinit_callback(self._process.pid)
             except Exception as e:
                 logger.error(f"Reinit callback failed: {e}")
-            # Minimize after callback (so power controller finds window first)
-            self.minimize()
 
         self._non_responsive_count = 0
 

@@ -950,6 +950,42 @@ class GlmPowerController:
         with self._lock:
             return self._last_known_state
 
+    def minimize(self) -> bool:
+        """
+        Minimize the GLM window.
+
+        Uses pywinauto to find and minimize the window, ensuring we use
+        the same window handle as all other power controller operations.
+
+        Returns:
+            True if window was minimized, False if window not found or error.
+        """
+        try:
+            win = self._find_window(use_cache=False)
+            hwnd = win.handle
+
+            # Check if already minimized
+            is_iconic = bool(ctypes.windll.user32.IsIconic(hwnd))
+            if is_iconic:
+                self.logger.debug(f"Window already minimized (Handle={hwnd})")
+                return True
+
+            # Use pywinauto's minimize
+            win.minimize()
+
+            # Verify it worked
+            time.sleep(0.2)
+            is_iconic = bool(ctypes.windll.user32.IsIconic(hwnd))
+            self.logger.info(f"Minimize GLM window: Handle={hwnd} IsIconic={is_iconic}")
+
+            return is_iconic
+        except GlmWindowNotFoundError:
+            self.logger.warning("Cannot minimize: GLM window not found")
+            return False
+        except Exception as e:
+            self.logger.warning(f"Failed to minimize GLM window: {e}")
+            return False
+
     def is_available(self) -> bool:
         """
         Check if GLM window is available for power control.
