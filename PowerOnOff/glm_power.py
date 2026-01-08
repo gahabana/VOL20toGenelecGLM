@@ -602,11 +602,15 @@ class GlmPowerController:
         # If GLM was minimized before, minimize it again
         if state.was_minimized:
             try:
-                # Use PostMessage for non-blocking minimize
-                WM_SYSCOMMAND = 0x0112
-                SC_MINIMIZE = 0xF020
-                ctypes.windll.user32.PostMessageW(hwnd, WM_SYSCOMMAND, SC_MINIMIZE, 0)
-                self.logger.debug("Restored GLM to minimized state")
+                # Use pywinauto's minimize (more reliable for JUCE apps)
+                win.minimize()
+                time.sleep(0.1)  # Brief delay for minimize to complete
+                # Verify it worked
+                is_iconic = bool(ctypes.windll.user32.IsIconic(hwnd))
+                if is_iconic:
+                    self.logger.debug("Restored GLM to minimized state")
+                else:
+                    self.logger.warning(f"Failed to restore GLM to minimized state (IsIconic={is_iconic})")
             except Exception as e:
                 self.logger.debug(f"Failed to minimize GLM: {e}")
 
