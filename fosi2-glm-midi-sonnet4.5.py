@@ -1438,12 +1438,17 @@ class HIDToMIDIDaemon:
             # Set volume to specified value
             logger.info(f"Setting startup volume to {self.startup_volume}")
             glm_controller.send_volume_absolute(self.startup_volume, midi_out)
+            # Clear power pattern buffer to prevent false trigger
+            self._rx_seq = []
         else:
             # Query current volume by sending vol+1 then vol-1
             logger.info("Querying current GLM volume (sending vol+1, vol-1)...")
             glm_controller.send_action(Action.VOL_UP, midi_out)
             time.sleep(GLM_VOL_QUERY_DELAY)
             glm_controller.send_action(Action.VOL_DOWN, midi_out)
+            # Clear power pattern buffer - GLM's response (DIM, MUTE, VOL × 2)
+            # would otherwise trigger false power pattern detection
+            self._rx_seq = []
 
         # Wait for GLM to respond with volume state
         time.sleep(GLM_VOL_RESPONSE_WAIT)
