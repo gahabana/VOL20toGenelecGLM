@@ -349,9 +349,8 @@ class GlmManager:
         hwnd = self._wait_for_window_stable()
         self._hwnd = hwnd  # Cache for watchdog
 
-        # Minimize if enabled
-        if self.config.minimize_on_start and hwnd:
-            self._minimize_window(hwnd)
+        # NOTE: Don't minimize here - let caller do it after reinit_callback
+        # This ensures power controller can find the window before it's minimized
 
         # Check if still alive
         if self._process and self._process.is_running():
@@ -360,6 +359,16 @@ class GlmManager:
 
         logger.error("=== _start_glm END (failure: process not alive) ===")
         return False
+
+    def minimize(self):
+        """
+        Minimize the GLM window.
+
+        Call this after reinit_callback has completed to ensure
+        power controller can find the window first.
+        """
+        if self.config.minimize_on_start and self._hwnd:
+            self._minimize_window(self._hwnd)
 
     def _get_main_window_handle(self, pid: int) -> int:
         """
@@ -579,6 +588,8 @@ class GlmManager:
                 self.reinit_callback(self._process.pid)
             except Exception as e:
                 logger.error(f"Reinit callback failed: {e}")
+            # Minimize after callback (so power controller finds window first)
+            self.minimize()
 
         self._non_responsive_count = 0
 

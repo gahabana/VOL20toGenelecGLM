@@ -1459,8 +1459,10 @@ class HIDToMIDIDaemon:
             logger.info("Starting GLM Manager (will start GLM and watchdog)...")
             if self._glm_manager.start():
                 logger.info("GLM Manager started successfully")
-                # Reinitialize power controller now that GLM is running
+                # Reinitialize power controller now that GLM is running (window still visible)
                 self._reinit_power_controller(pid=self._glm_manager.pid)
+                # Now minimize GLM window (after power controller found it)
+                self._glm_manager.minimize()
             else:
                 logger.error("GLM Manager failed to start")
 
