@@ -513,6 +513,19 @@ class GlmManager:
             if attempt < self.config.minimize_attempts_needed - 1:
                 time.sleep(self.config.enforce_poll_interval)
 
+        # Give the window a moment to process the minimize message
+        time.sleep(0.2)
+
+        # Verify minimize actually happened
+        try:
+            is_iconic = bool(ctypes.windll.user32.IsIconic(hwnd))
+            is_visible = bool(ctypes.windll.user32.IsWindowVisible(hwnd))
+            logger.info(f"After minimize: Handle={hwnd} IsIconic={is_iconic} IsVisible={is_visible}")
+            if not is_iconic:
+                logger.warning(f"Window Handle={hwnd} did NOT minimize (IsIconic=False)")
+        except Exception as e:
+            logger.debug(f"Could not verify minimize state: {e}")
+
     def _kill_glm(self):
         """Kill the GLM process."""
         proc = self._find_glm_process()

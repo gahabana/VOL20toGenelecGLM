@@ -961,6 +961,7 @@ class HIDToMIDIDaemon:
         # Power pattern detection state (legacy, kept for MIDI state sync)
         self._rx_seq = []  # List of (timestamp, cc) for pattern detection
         self._last_pattern_time = None  # For startup detection (double-burst)
+        self._suppress_power_pattern = False  # Temporarily suppress pattern detection
 
         # GLM Manager (process lifecycle and watchdog)
         # Initialize this BEFORE power controller, since it may need to start GLM first
@@ -1139,6 +1140,12 @@ class HIDToMIDIDaemon:
                         if len(seq) >= 5 and seq[-5:] == POWER_PATTERN:
                             time_span = self._rx_seq[-1][0] - self._rx_seq[-5][0]
                             if time_span >= POWER_PATTERN_MIN_SPAN:  # Not a buffer dump
+                                # Skip pattern processing during startup/volume init
+                                if self._suppress_power_pattern:
+                                    logger.debug("MIDI power pattern ignored (suppressed during init)")
+                                    self._rx_seq = []
+                                    continue
+
                                 # Skip pattern processing during power cooldown
                                 # (UI automation already verified state)
                                 allowed, wait_time, _ = glm_controller.can_accept_power_command()
@@ -1434,24 +1441,29 @@ class HIDToMIDIDaemon:
         # Wait a moment for MIDI reader to connect and be ready
         time.sleep(GLM_INIT_WAIT)
 
-        if self.startup_volume is not None:
-            # Set volume to specified value
-            logger.info(f"Setting startup volume to {self.startup_volume}")
-            glm_controller.send_volume_absolute(self.startup_volume, midi_out)
-            # Clear power pattern buffer to prevent false trigger
-            self._rx_seq = []
-        else:
-            # Query current volume by sending vol+1 then vol-1
-            logger.info("Querying current GLM volume (sending vol+1, vol-1)...")
-            glm_controller.send_action(Action.VOL_UP, midi_out)
-            time.sleep(GLM_VOL_QUERY_DELAY)
-            glm_controller.send_action(Action.VOL_DOWN, midi_out)
-            # Clear power pattern buffer - GLM's response (DIM, MUTE, VOL × 2)
-            # would otherwise trigger false power pattern detection
-            self._rx_seq = []
+        # Suppress power pattern detection during volume init
+        # (GLM responses can form false power patterns)
+        self._suppress_power_pattern = True
 
-        # Wait for GLM to respond with volume state
-        time.sleep(GLM_VOL_RESPONSE_WAIT)
+        try:
+            if self.startup_volume is not None:
+                # Set volume to specified value
+                logger.info(f"Setting startup volume to {self.startup_volume}")
+                glm_controller.send_volume_absolute(self.startup_volume, midi_out)
+            else:
+                # Query current volume by sending vol+1 then vol-1
+                logger.info("Querying current GLM volume (sending vol+1, vol-1)...")
+                glm_controller.send_action(Action.VOL_UP, midi_out)
+                time.sleep(GLM_VOL_QUERY_DELAY)
+                glm_controller.send_action(Action.VOL_DOWN, midi_out)
+
+            # Wait for GLM to respond with volume state
+            time.sleep(GLM_VOL_RESPONSE_WAIT)
+        finally:
+            # Clear power pattern buffer and re-enable detection
+            self._rx_seq = []
+            self._suppress_power_pattern = False
+
         if glm_controller.has_valid_volume:
             logger.info(f"GLM volume initialized: {glm_controller.volume}")
         else:
