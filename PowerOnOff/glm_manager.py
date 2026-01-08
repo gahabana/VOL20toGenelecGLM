@@ -49,6 +49,7 @@ except ImportError:
 # Win32 constants for non-blocking minimize
 WM_SYSCOMMAND = 0x0112
 SC_MINIMIZE = 0xF020
+SW_MINIMIZE = 6  # ShowWindow command to minimize
 
 
 @dataclass
@@ -404,16 +405,13 @@ class GlmManager:
 
     def _post_minimize(self, hwnd: int) -> bool:
         """
-        Send non-blocking minimize message to window.
-
-        Uses PostMessage instead of SendMessage to avoid blocking
-        if the target window is hung.
+        Minimize window using ShowWindow (more reliable than PostMessage for JUCE apps).
 
         Args:
             hwnd: Window handle
 
         Returns:
-            True if message was posted, False on error
+            True if minimize succeeded, False on error
         """
         if hwnd == 0:
             return False
@@ -423,13 +421,23 @@ class GlmManager:
             if not ctypes.windll.user32.IsWindow(hwnd):
                 return False
 
-            # Post WM_SYSCOMMAND with SC_MINIMIZE (non-blocking)
+            # Use ShowWindow which is more reliable for JUCE-based applications
+            # SW_MINIMIZE (6) minimizes the window
+            result = ctypes.windll.user32.ShowWindow(hwnd, SW_MINIMIZE)
+            # ShowWindow returns previous visibility state, not success/failure
+            # Check if actually minimized
+            is_iconic = bool(ctypes.windll.user32.IsIconic(hwnd))
+            if is_iconic:
+                return True
+
+            # Fallback: try PostMessage approach
+            logger.debug(f"ShowWindow didn't minimize, trying PostMessage")
             result = ctypes.windll.user32.PostMessageW(
                 hwnd, WM_SYSCOMMAND, SC_MINIMIZE, 0
             )
             return bool(result)
         except Exception as e:
-            logger.debug(f"PostMessage failed: {e}")
+            logger.debug(f"Minimize failed: {e}")
             return False
 
     def _wait_for_window_stable(self) -> int:
