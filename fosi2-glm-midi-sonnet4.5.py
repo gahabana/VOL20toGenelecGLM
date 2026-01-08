@@ -1628,7 +1628,6 @@ if __name__ == "__main__":
 
     set_higher_priority()
     minimize_console_window()
-    time.sleep(2.0)
 
     daemon = HIDToMIDIDaemon(
         args.min_click_time,
