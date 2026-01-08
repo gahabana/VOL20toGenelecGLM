@@ -483,8 +483,9 @@ class GlmPowerController:
                         pid_filtered.append(w)
                 except Exception:
                     pass  # Skip windows we can't query
-            if pid_filtered:
-                candidates = pid_filtered
+            # When PID is specified, ONLY use PID-filtered results (don't fall back)
+            candidates = pid_filtered
+            if candidates:
                 self.logger.debug(f"Filtered to {len(candidates)} window(s) by PID {self._pid}")
 
         if not candidates:
