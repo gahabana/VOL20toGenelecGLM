@@ -787,6 +787,22 @@ def set_higher_priority():
     except Exception as e:
         logger.warning(f"Failed to set higher priority: {e}")
 
+
+def minimize_console_window():
+    """Minimize the script's console window (Windows only)."""
+    if not IS_WINDOWS:
+        return
+
+    try:
+        # Get console window handle
+        hwnd = ctypes.windll.kernel32.GetConsoleWindow()
+        if hwnd:
+            # SW_MINIMIZE = 6
+            ctypes.windll.user32.ShowWindow(hwnd, 6)
+            logger.debug("Console window minimized")
+    except Exception as e:
+        logger.debug(f"Failed to minimize console window: {e}")
+
 def set_current_thread_priority(priority_level):
     """Set the priority of the current thread (Windows only)."""
     if not HAS_WIN32:
@@ -1574,6 +1590,7 @@ if __name__ == "__main__":
             sys.exit(1)
 
     set_higher_priority()
+    minimize_console_window()
     time.sleep(2.0)
 
     daemon = HIDToMIDIDaemon(
