@@ -69,13 +69,13 @@ class GlmManagerConfig:
     process_name: str = "GLMv5"
 
     # CPU gating (only at initial start, not restarts)
-    cpu_threshold: float = 2.0  # % CPU considered "idle enough"
-    cpu_check_interval: float = 5.0  # seconds between checks
-    cpu_max_checks: int = 60  # 60 * 5s = 5 minutes max wait
+    cpu_threshold: float = 6.0  # % CPU considered "idle enough"
+    cpu_check_interval: float = 3.0  # seconds between checks
+    cpu_max_checks: int = 100  # 100 * 3s = 5 minutes max wait
     cpu_gating_enabled: bool = True  # Set False to skip CPU check
 
     # Window stabilization and minimize
-    post_start_sleep: float = 5.0  # seconds after start before minimize
+    post_start_sleep: float = 3.0  # seconds after start before priority/stabilization
     enforce_poll_interval: float = 1.0  # seconds between stabilization polls
     enforce_max_seconds: float = 60.0  # max time for stabilization
     stable_handle_count: int = 4  # handle must be same N times
