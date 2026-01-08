@@ -46,6 +46,14 @@ except ImportError:
     HAS_DEPS = False
     psutil = None
 
+# pywinauto for consistent window finding (same as glm_power.py)
+try:
+    from pywinauto import Desktop
+    HAS_PYWINAUTO = True
+except ImportError:
+    HAS_PYWINAUTO = False
+    Desktop = None
+
 # Win32 constants for non-blocking minimize
 WM_SYSCOMMAND = 0x0112
 SC_MINIMIZE = 0xF020
@@ -373,7 +381,10 @@ class GlmManager:
 
     def _get_main_window_handle(self, pid: int) -> int:
         """
-        Get the main window handle for a process.
+        Get the main GLM window handle using pywinauto.
+
+        Uses the same approach as glm_power.py: finds JUCE windows with "GLM" in title.
+        This ensures stabilization, watchdog, and power control all use the same window.
 
         Args:
             pid: Process ID
@@ -381,27 +392,34 @@ class GlmManager:
         Returns:
             Window handle (HWND) or 0 if not found
         """
-        if not HAS_DEPS:
+        if not HAS_PYWINAUTO:
+            logger.warning("pywinauto not available, cannot find GLM window")
             return 0
 
-        result = [0]
+        try:
+            # Find JUCE windows (same as glm_power.py)
+            wins = Desktop(backend="win32").windows(class_name_re=r"JUCE_.*")
 
-        def enum_callback(hwnd, _):
-            # Get the PID for this window
-            window_pid = wintypes.DWORD()
-            ctypes.windll.user32.GetWindowThreadProcessId(hwnd, ctypes.byref(window_pid))
+            # Filter for windows with "GLM" in title
+            candidates = [w for w in wins if "GLM" in (w.window_text() or "")]
 
-            if window_pid.value == pid:
-                # Check if this is a main window (visible, has title)
-                if ctypes.windll.user32.IsWindowVisible(hwnd):
-                    result[0] = hwnd
-                    return False  # Stop enumeration
-            return True  # Continue
+            # Filter by PID
+            for w in candidates:
+                try:
+                    if w.process_id() == pid:
+                        hwnd = w.handle
+                        title = w.window_text() or "(no title)"
+                        logger.debug(f"Found GLM window: Handle={hwnd} Title='{title}'")
+                        return hwnd
+                except Exception:
+                    pass
 
-        WNDENUMPROC = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
-        ctypes.windll.user32.EnumWindows(WNDENUMPROC(enum_callback), 0)
+            # No window with "GLM" title found yet - GLM might still be loading
+            return 0
 
-        return result[0]
+        except Exception as e:
+            logger.debug(f"Error finding GLM window: {e}")
+            return 0
 
     def _post_minimize(self, hwnd: int) -> bool:
         """
@@ -458,8 +476,8 @@ class GlmManager:
         stable_count = 0
 
         logger.info(
-            f"Waiting for GLM window to stabilize: poll every {self.config.enforce_poll_interval}s, "
-            f"for up to {self.config.enforce_max_seconds}s."
+            f"Waiting for GLM main window (JUCE with 'GLM' title) to stabilize: "
+            f"poll every {self.config.enforce_poll_interval}s, for up to {self.config.enforce_max_seconds}s."
         )
 
         while time.time() < deadline:
@@ -471,13 +489,13 @@ class GlmManager:
                 hwnd = self._get_main_window_handle(self._process.pid)
 
                 if hwnd == 0:
-                    logger.debug(f"Current main window: PID={self._process.pid} Handle=0")
+                    logger.debug(f"GLM main window not found yet (PID={self._process.pid}) - waiting for 'GLM' title")
                     last_handle = 0
                     stable_count = 0
                     time.sleep(self.config.enforce_poll_interval)
                     continue
 
-                logger.debug(f"Current main window: PID={self._process.pid} Handle={hwnd}")
+                logger.debug(f"Found GLM main window: PID={self._process.pid} Handle={hwnd}")
 
                 # Track handle stability
                 if hwnd == last_handle:
