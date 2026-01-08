@@ -1358,6 +1358,9 @@ class HIDToMIDIDaemon:
                     logger.debug(f"Volume: {current} -> {target} (delta={sign}{delta}, CC 20)")
                     glm_controller.set_pending_volume(target)
                     glm_controller.send_volume_absolute(target, midi_out)
+                    # Clear power pattern buffer - GLM's response (DIM, MUTE, VOL)
+                    # should not be mistaken for power toggle pattern
+                    self._rx_seq = []
                 else:
                     direction = "up" if delta > 0 else "down"
                     logger.debug(f"Volume already at limit ({current}), ignoring {direction}")
@@ -1387,6 +1390,8 @@ class HIDToMIDIDaemon:
             logger.debug(f"Setting volume to {target} (CC 20)")
             glm_controller.set_pending_volume(target)
             glm_controller.send_volume_absolute(target, midi_out)
+            # Clear power pattern buffer - GLM's response should not trigger pattern
+            self._rx_seq = []
         except (OSError, IOError) as e:
             logger.error(f"Error setting volume: {e}")
             self._reset_midi_output()
