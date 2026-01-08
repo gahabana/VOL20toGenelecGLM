@@ -69,7 +69,7 @@ class GlmManagerConfig:
     post_start_sleep: float = 5.0  # seconds after start before minimize
     enforce_poll_interval: float = 1.0  # seconds between stabilization polls
     enforce_max_seconds: float = 60.0  # max time for stabilization
-    stable_handle_count: int = 2  # handle must be same N times
+    stable_handle_count: int = 4  # handle must be same N times
     minimize_attempts_needed: int = 1  # minimize at least N times
     minimize_on_start: bool = True  # Minimize GLM window after startup
 
