@@ -1478,8 +1478,7 @@ class HIDToMIDIDaemon:
                 logger.info("GLM Manager started successfully")
                 # Reinitialize power controller now that GLM is running (window still visible)
                 self._reinit_power_controller(pid=self._glm_manager.pid)
-                # Now minimize GLM window (after power controller found it)
-                self._glm_manager.minimize()
+                # Note: minimize moved to end of start() to let GLM finish its startup
             else:
                 logger.error("GLM Manager failed to start")
 
@@ -1530,6 +1529,15 @@ class HIDToMIDIDaemon:
                 topic_prefix=self.mqtt_topic,
                 ha_discovery=self.mqtt_ha_discovery,
             )
+
+        # Minimize GLM window at the very end of startup
+        # GLM may restore itself during its startup animation, so we wait until
+        # all initialization is complete and GLM is fully loaded
+        if self._glm_manager:
+            # Give GLM a moment to finish any startup animation
+            time.sleep(1.0)
+            logger.info("Minimizing GLM window (post-startup)")
+            self._glm_manager.minimize()
 
     def stop(self):
         """Stops the daemon gracefully."""
