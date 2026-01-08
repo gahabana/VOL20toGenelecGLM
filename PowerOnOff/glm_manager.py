@@ -93,15 +93,15 @@ class GlmManager:
     def __init__(
         self,
         config: Optional[GlmManagerConfig] = None,
-        reinit_callback: Optional[Callable[[], None]] = None,
+        reinit_callback: Optional[Callable[[int], None]] = None,
     ):
         """
         Initialize GLM Manager.
 
         Args:
             config: Configuration options (uses defaults if None)
-            reinit_callback: Called after GLM restart to reinitialize dependent
-                           components (e.g., power controller window handles)
+            reinit_callback: Called after GLM restart with GLM's PID to reinitialize
+                           dependent components (e.g., power controller window handles)
         """
         self.config = config or GlmManagerConfig()
         self.reinit_callback = reinit_callback
@@ -573,14 +573,21 @@ class GlmManager:
         # Start GLM (skip CPU gating on restart)
         success = self._start_glm()
 
-        if success and self.reinit_callback:
-            logger.info("Calling reinit callback after GLM restart...")
+        if success and self.reinit_callback and self._process:
+            logger.info(f"Calling reinit callback after GLM restart (PID={self._process.pid})...")
             try:
-                self.reinit_callback()
+                self.reinit_callback(self._process.pid)
             except Exception as e:
                 logger.error(f"Reinit callback failed: {e}")
 
         self._non_responsive_count = 0
+
+    @property
+    def pid(self) -> Optional[int]:
+        """Return the GLM process ID, or None if not running."""
+        if self._process and self._process.is_running():
+            return self._process.pid
+        return None
 
     def reinitialize(self):
         """

@@ -417,6 +417,7 @@ class GlmPowerController:
         config: Optional[GlmPowerConfig] = None,
         logger: Optional[logging.Logger] = None,
         steal_focus: bool = True,
+        pid: Optional[int] = None,
     ):
         """
         Initialize the power controller.
@@ -426,6 +427,9 @@ class GlmPowerController:
             logger: Logger instance. Creates a default if None.
             steal_focus: If True, will focus GLM window before operations.
                         If False, operations may fail if window is not visible.
+            pid: Optional GLM process ID. If provided, only windows belonging to
+                this PID will be considered. This avoids finding wrong windows
+                during startup when multiple JUCE windows may exist.
         """
         if not HAS_WIN32_DEPS:
             raise ImportError(
@@ -436,6 +440,7 @@ class GlmPowerController:
         self.config = config or GlmPowerConfig()
         self.logger = logger or logging.getLogger(__name__)
         self.steal_focus = steal_focus
+        self._pid = pid
         self._lock = threading.Lock()
         self._last_known_state: PowerState = "unknown"
         self._window_cache = None
@@ -468,6 +473,19 @@ class GlmPowerController:
         # Find GLM window (JUCE app)
         wins = Desktop(backend="win32").windows(class_name_re=r"JUCE_.*")
         candidates = [w for w in wins if "GLM" in (w.window_text() or "")]
+
+        # Filter by PID if specified (avoids finding wrong window during startup)
+        if self._pid and candidates:
+            pid_filtered = []
+            for w in candidates:
+                try:
+                    if w.process_id() == self._pid:
+                        pid_filtered.append(w)
+                except Exception:
+                    pass  # Skip windows we can't query
+            if pid_filtered:
+                candidates = pid_filtered
+                self.logger.debug(f"Filtered to {len(candidates)} window(s) by PID {self._pid}")
 
         if not candidates:
             raise GlmWindowNotFoundError(
