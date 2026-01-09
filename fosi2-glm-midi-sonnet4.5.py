@@ -1624,6 +1624,7 @@ if __name__ == "__main__":
         sock.close()
         if result == 0:
             logger.error(f"Another instance is already running (port {args.api_port} in use). Exiting.")
+            stop_logging()  # Stop logging thread before exit
             sys.exit(1)
 
     set_higher_priority()
