@@ -28,6 +28,10 @@ except ImportError:
     HAS_PYWINAUTO = False
     print("WARNING: pywinauto not available, thread 2 will not run")
 
+# Centralized logging format with thread, module, function, and line number
+LOG_FORMAT = '%(asctime)s.%(msecs)03d [%(levelname)s] %(threadName)s %(module)s:%(funcName)s:%(lineno)d - %(message)s'
+LOG_FORMAT_CONSOLE = '%(asctime)s [%(levelname)s] %(threadName)s %(module)s:%(funcName)s:%(lineno)d - %(message)s'
+
 # Setup logging with thread-safe file handlers
 def setup_logging(log_dir: Path):
     """Setup separate log files for each thread."""
@@ -39,30 +43,26 @@ def setup_logging(log_dir: Path):
     logger1 = logging.getLogger("enumwindows")
     logger1.setLevel(logging.DEBUG)
     fh1 = logging.FileHandler(log_dir / f"enumwindows_{timestamp}.log")
-    fh1.setFormatter(logging.Formatter('%(asctime)s.%(msecs)03d [%(levelname)s] %(message)s',
-                                        datefmt='%H:%M:%S'))
+    fh1.setFormatter(logging.Formatter(LOG_FORMAT, datefmt='%H:%M:%S'))
     logger1.addHandler(fh1)
 
     # Thread 2 logger (pywinauto)
     logger2 = logging.getLogger("pywinauto")
     logger2.setLevel(logging.DEBUG)
     fh2 = logging.FileHandler(log_dir / f"pywinauto_{timestamp}.log")
-    fh2.setFormatter(logging.Formatter('%(asctime)s.%(msecs)03d [%(levelname)s] %(message)s',
-                                        datefmt='%H:%M:%S'))
+    fh2.setFormatter(logging.Formatter(LOG_FORMAT, datefmt='%H:%M:%S'))
     logger2.addHandler(fh2)
 
     # Combined logger for comparison (also to console)
     logger_combined = logging.getLogger("combined")
     logger_combined.setLevel(logging.DEBUG)
     fh_combined = logging.FileHandler(log_dir / f"combined_{timestamp}.log")
-    fh_combined.setFormatter(logging.Formatter('%(asctime)s.%(msecs)03d [%(levelname)s] %(message)s',
-                                                datefmt='%H:%M:%S'))
+    fh_combined.setFormatter(logging.Formatter(LOG_FORMAT, datefmt='%H:%M:%S'))
     logger_combined.addHandler(fh_combined)
 
     # Console handler for combined
     ch = logging.StreamHandler()
-    ch.setFormatter(logging.Formatter('%(asctime)s [%(levelname)s] %(message)s',
-                                       datefmt='%H:%M:%S'))
+    ch.setFormatter(logging.Formatter(LOG_FORMAT_CONSOLE, datefmt='%H:%M:%S'))
     logger_combined.addHandler(ch)
 
     return logger1, logger2, logger_combined, log_dir / f"combined_{timestamp}.log"

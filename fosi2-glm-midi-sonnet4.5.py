@@ -44,6 +44,9 @@ import argparse
 import logging
 from logging.handlers import RotatingFileHandler, QueueHandler, QueueListener
 
+# Centralized logging format with thread, module, function, and line number
+LOG_FORMAT = '%(asctime)s [%(levelname)s] %(threadName)s %(module)s:%(funcName)s:%(lineno)d - %(message)s'
+
 # Platform-specific imports (Windows thread priority)
 IS_WINDOWS = sys.platform == 'win32'
 if IS_WINDOWS:
@@ -845,13 +848,13 @@ def setup_logging(log_level, log_file_name, max_bytes=4*1024*1024, backup_count=
     # File Handler
     file_handler = RotatingFileHandler(log_file_path, maxBytes=max_bytes, backupCount=backup_count)
     file_handler.setLevel(logging.DEBUG if log_level != "NONE" else logging.CRITICAL)
-    file_handler.setFormatter(logging.Formatter('%(asctime)s [%(levelname)s] %(message)s'))
+    file_handler.setFormatter(logging.Formatter(LOG_FORMAT))
     file_handler.addFilter(ws_filter)  # Filter WebSocket disconnect errors
 
     # Console Handler
     console_handler = logging.StreamHandler()
     console_handler.setLevel(logging.INFO if log_level in ["INFO", "DEBUG"] else logging.CRITICAL)
-    console_handler.setFormatter(logging.Formatter('%(asctime)s [%(levelname)s] %(message)s'))
+    console_handler.setFormatter(logging.Formatter(LOG_FORMAT))
     console_handler.addFilter(ws_filter)  # Filter WebSocket disconnect errors
 
     # QueueHandler
