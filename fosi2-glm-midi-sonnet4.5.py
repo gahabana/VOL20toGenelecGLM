@@ -1,3 +1,12 @@
+"""
+VOL20 to Genelec GLM MIDI Bridge
+
+Bridges a Fosi Audio VOL20 USB volume knob to Genelec GLM software via MIDI.
+Supports volume control, mute, dim, and power management with UI automation.
+"""
+
+__version__ = "3.0.0"
+
 import time
 import signal
 import sys
@@ -864,7 +873,7 @@ def setup_logging(log_level, log_file_name, max_bytes=4*1024*1024, backup_count=
 
     # Listener Thread
     stop_event = threading.Event()
-    logger.info(f">----- Starting {os.path.basename(__file__)} agent. Logger setup complete. Initializing application...")
+    logger.info(f">----- Starting {os.path.basename(__file__)} v{__version__}. Initializing...")
 
     def log_listener_thread():
         listener = QueueListener(log_queue, file_handler, console_handler)
