@@ -60,6 +60,15 @@ except ImportError:
     ensure_session_connected = None
     reconnect_to_console = None
 
+# GLM Manager (process lifecycle and watchdog)
+try:
+    from .glm_manager import GlmManager, GlmManagerConfig
+    GLM_MANAGER_AVAILABLE = True
+except ImportError:
+    GLM_MANAGER_AVAILABLE = False
+    GlmManager = None
+    GlmManagerConfig = None
+
 
 __all__ = [
     # Exceptions (always available)
@@ -79,6 +88,10 @@ __all__ = [
     'is_session_disconnected',
     'ensure_session_connected',
     'reconnect_to_console',
-    # Availability flag
+    # GLM Manager (Windows only)
+    'GlmManager',
+    'GlmManagerConfig',
+    # Availability flags
     'POWER_CONTROL_AVAILABLE',
+    'GLM_MANAGER_AVAILABLE',
 ]

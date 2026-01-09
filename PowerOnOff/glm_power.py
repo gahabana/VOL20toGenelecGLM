@@ -359,6 +359,17 @@ class Point:
 
 
 @dataclass
+class WindowState:
+    """
+    Captured state of a window before UI automation.
+
+    Used to restore the window to its previous state after operations.
+    """
+    was_minimized: bool = False
+    previous_foreground_hwnd: int = 0
+
+
+@dataclass
 class GlmPowerConfig:
     """
     Configuration for GLM power button detection.
@@ -406,6 +417,7 @@ class GlmPowerController:
         config: Optional[GlmPowerConfig] = None,
         logger: Optional[logging.Logger] = None,
         steal_focus: bool = True,
+        pid: Optional[int] = None,
     ):
         """
         Initialize the power controller.
@@ -415,6 +427,9 @@ class GlmPowerController:
             logger: Logger instance. Creates a default if None.
             steal_focus: If True, will focus GLM window before operations.
                         If False, operations may fail if window is not visible.
+            pid: Optional GLM process ID. If provided, only windows belonging to
+                this PID will be considered. This avoids finding wrong windows
+                during startup when multiple JUCE windows may exist.
         """
         if not HAS_WIN32_DEPS:
             raise ImportError(
@@ -425,6 +440,7 @@ class GlmPowerController:
         self.config = config or GlmPowerConfig()
         self.logger = logger or logging.getLogger(__name__)
         self.steal_focus = steal_focus
+        self._pid = pid
         self._lock = threading.Lock()
         self._last_known_state: PowerState = "unknown"
         self._window_cache = None
@@ -457,6 +473,20 @@ class GlmPowerController:
         # Find GLM window (JUCE app)
         wins = Desktop(backend="win32").windows(class_name_re=r"JUCE_.*")
         candidates = [w for w in wins if "GLM" in (w.window_text() or "")]
+
+        # Filter by PID if specified (avoids finding wrong window during startup)
+        if self._pid and candidates:
+            pid_filtered = []
+            for w in candidates:
+                try:
+                    if w.process_id() == self._pid:
+                        pid_filtered.append(w)
+                except Exception:
+                    pass  # Skip windows we can't query
+            # When PID is specified, ONLY use PID-filtered results (don't fall back)
+            candidates = pid_filtered
+            if candidates:
+                self.logger.debug(f"Filtered to {len(candidates)} window(s) by PID {self._pid}")
 
         if not candidates:
             raise GlmWindowNotFoundError(
@@ -520,6 +550,80 @@ class GlmPowerController:
                 break  # Valid rectangle
             self.logger.debug(f"Waiting for window restore (rect={r.left},{r.top},{r.right},{r.bottom})")
             time.sleep(0.1)
+
+    def _capture_window_state(self, win) -> WindowState:
+        """
+        Capture window state before UI operations.
+
+        Call this BEFORE any focus/restore operations to record:
+        - Whether GLM was minimized
+        - Which window had foreground focus
+
+        Args:
+            win: The GLM window wrapper.
+
+        Returns:
+            WindowState with captured state.
+        """
+        state = WindowState()
+
+        try:
+            hwnd = win.handle
+            # Check if window is minimized (IsIconic returns non-zero if minimized)
+            state.was_minimized = bool(ctypes.windll.user32.IsIconic(hwnd))
+        except Exception as e:
+            self.logger.debug(f"Failed to check minimized state: {e}")
+
+        try:
+            # Record current foreground window so we can restore focus
+            state.previous_foreground_hwnd = ctypes.windll.user32.GetForegroundWindow()
+        except Exception as e:
+            self.logger.debug(f"Failed to get foreground window: {e}")
+
+        return state
+
+    def _restore_window_state(self, win, state: WindowState) -> None:
+        """
+        Restore window state after UI operations.
+
+        Call this AFTER operations complete to:
+        - Re-minimize GLM if it was minimized before
+        - Restore focus to the previous foreground window
+
+        Args:
+            win: The GLM window wrapper.
+            state: WindowState captured before operations.
+        """
+        if not self.steal_focus:
+            return  # Nothing was changed
+
+        hwnd = win.handle
+
+        # If GLM was minimized before, minimize it again
+        if state.was_minimized:
+            try:
+                # Use pywinauto's minimize (more reliable for JUCE apps)
+                win.minimize()
+                time.sleep(0.1)  # Brief delay for minimize to complete
+                # Verify it worked
+                is_iconic = bool(ctypes.windll.user32.IsIconic(hwnd))
+                if is_iconic:
+                    self.logger.debug("Restored GLM to minimized state")
+                else:
+                    self.logger.warning(f"Failed to restore GLM to minimized state (IsIconic={is_iconic})")
+            except Exception as e:
+                self.logger.debug(f"Failed to minimize GLM: {e}")
+
+        # Restore focus to previous foreground window
+        if state.previous_foreground_hwnd and state.previous_foreground_hwnd != hwnd:
+            try:
+                # Brief delay to let minimize complete if we're minimizing
+                if state.was_minimized:
+                    time.sleep(0.05)
+                ctypes.windll.user32.SetForegroundWindow(state.previous_foreground_hwnd)
+                self.logger.debug(f"Restored focus to previous window (hwnd={state.previous_foreground_hwnd})")
+            except Exception as e:
+                self.logger.debug(f"Failed to restore foreground window: {e}")
 
     def _get_power_point(self, win) -> Point:
         """Get screen coordinates of power button center."""
@@ -618,9 +722,14 @@ class GlmPowerController:
     # Public API
     # =========================================================================
 
-    def get_state(self) -> PowerState:
+    def get_state(self, restore_window: bool = True) -> PowerState:
         """
         Read current power state from GLM UI.
+
+        Args:
+            restore_window: If True (default), restore GLM to its previous state
+                           (minimized/focus) after reading. Set to False if you
+                           plan to interact with GLM immediately after.
 
         Returns:
             "on", "off", or "unknown"
@@ -630,20 +739,35 @@ class GlmPowerController:
         """
         with self._lock:
             win = self._find_window()
-            if self.steal_focus:
-                self._ensure_foreground(win)
 
-            state, rgb, pt = self._read_state_internal(win)
-            self.logger.debug(f"Power state: {state} (rgb={rgb}, pt=({pt.x},{pt.y}))")
+            # Capture state before any focus changes
+            saved_state = None
+            if self.steal_focus and restore_window:
+                saved_state = self._capture_window_state(win)
 
-            if state != "unknown":
-                self._last_known_state = state
+            try:
+                if self.steal_focus:
+                    self._ensure_foreground(win)
 
-            return state
+                state, rgb, pt = self._read_state_internal(win)
+                self.logger.debug(f"Power state: {state} (rgb={rgb}, pt=({pt.x},{pt.y}))")
 
-    def get_state_with_details(self) -> Tuple[PowerState, Tuple[int, int, int], Tuple[int, int]]:
+                if state != "unknown":
+                    self._last_known_state = state
+
+                return state
+            finally:
+                # Restore window state (runs even if exception occurred)
+                if saved_state:
+                    self._restore_window_state(win, saved_state)
+
+    def get_state_with_details(self, restore_window: bool = True) -> Tuple[PowerState, Tuple[int, int, int], Tuple[int, int]]:
         """
         Read current power state with diagnostic details.
+
+        Args:
+            restore_window: If True (default), restore GLM to its previous state
+                           after reading.
 
         Returns:
             Tuple of (state, rgb, (x, y))
@@ -653,21 +777,32 @@ class GlmPowerController:
         """
         with self._lock:
             win = self._find_window()
-            if self.steal_focus:
-                self._ensure_foreground(win)
 
-            state, rgb, pt = self._read_state_internal(win)
+            # Capture state before any focus changes
+            saved_state = None
+            if self.steal_focus and restore_window:
+                saved_state = self._capture_window_state(win)
 
-            if state != "unknown":
-                self._last_known_state = state
+            try:
+                if self.steal_focus:
+                    self._ensure_foreground(win)
 
-            return state, rgb, (pt.x, pt.y)
+                state, rgb, pt = self._read_state_internal(win)
+
+                if state != "unknown":
+                    self._last_known_state = state
+
+                return state, rgb, (pt.x, pt.y)
+            finally:
+                if saved_state:
+                    self._restore_window_state(win, saved_state)
 
     def set_state(
         self,
         desired: Literal["on", "off"],
         verify: bool = True,
         retries: int = 2,
+        restore_window: bool = True,
     ) -> bool:
         """
         Set power to desired state. Only clicks if state differs.
@@ -676,6 +811,8 @@ class GlmPowerController:
             desired: Target state ("on" or "off").
             verify: If True, poll to verify state changed.
             retries: Number of click retries if verification fails.
+            restore_window: If True (default), restore GLM to its previous state
+                           (minimized/focus) after setting.
 
         Returns:
             True if state is now as desired, False otherwise.
@@ -691,74 +828,84 @@ class GlmPowerController:
         with self._lock:
             t0 = time.time()
             win = self._find_window(use_cache=False)  # Fresh lookup for state changes
-            t1 = time.time()
-            self._ensure_foreground(win)
-            t2 = time.time()
 
-            # Read current state (single read, no polling)
-            state, rgb, pt = self._read_state_internal(win)
-            t3 = time.time()
-            self.logger.debug(
-                f"Power set_state({desired}): current={state}, rgb={rgb} "
-                f"[find={t1-t0:.3f}s, focus={t2-t1:.3f}s, read={t3-t2:.3f}s]"
-            )
+            # Capture state before any focus changes
+            saved_state = None
+            if self.steal_focus and restore_window:
+                saved_state = self._capture_window_state(win)
 
-            if state == desired:
-                self.logger.debug(f"Power already {desired}")
-                self._last_known_state = state
-                return True
+            try:
+                t1 = time.time()
+                self._ensure_foreground(win)
+                t2 = time.time()
 
-            if state == "unknown":
-                raise GlmStateUnknownError(
-                    f"Cannot determine initial power state",
-                    rgb=rgb,
-                    point=(pt.x, pt.y)
-                )
-
-            # Attempt clicks with retries
-            for attempt in range(retries + 1):
+                # Read current state (single read, no polling)
                 state, rgb, pt = self._read_state_internal(win)
+                t3 = time.time()
                 self.logger.debug(
-                    f"Power attempt {attempt}: state={state}, rgb={rgb}"
+                    f"Power set_state({desired}): current={state}, rgb={rgb} "
+                    f"[find={t1-t0:.3f}s, focus={t2-t1:.3f}s, read={t3-t2:.3f}s]"
                 )
 
                 if state == desired:
+                    self.logger.debug(f"Power already {desired}")
                     self._last_known_state = state
                     return True
 
                 if state == "unknown":
                     raise GlmStateUnknownError(
-                        f"Lost track of power state during set_state",
+                        f"Cannot determine initial power state",
                         rgb=rgb,
                         point=(pt.x, pt.y)
                     )
 
-                # Click the button
-                self._click_point(pt)
-
-                if verify:
-                    # Wait for state to change
-                    state2, rgb2, pt2 = self._wait_for_state(win, desired)
+                # Attempt clicks with retries
+                for attempt in range(retries + 1):
+                    state, rgb, pt = self._read_state_internal(win)
                     self.logger.debug(
-                        f"Power verify {attempt}: state={state2}, rgb={rgb2}"
+                        f"Power attempt {attempt}: state={state}, rgb={rgb}"
                     )
 
-                    if state2 == desired:
-                        self._last_known_state = state2
-                        self.logger.info(f"Power set to {desired}")
+                    if state == desired:
+                        self._last_known_state = state
                         return True
-                else:
-                    # Assume success without verification
-                    self._last_known_state = desired
-                    return True
 
-            # All retries exhausted
-            final_state, final_rgb, final_pt = self._read_state_internal(win)
-            raise GlmStateChangeFailedError(
-                f"Failed to set power to {desired} after {retries + 1} attempts",
-                desired=desired,
-                actual=final_state
-            )
+                    if state == "unknown":
+                        raise GlmStateUnknownError(
+                            f"Lost track of power state during set_state",
+                            rgb=rgb,
+                            point=(pt.x, pt.y)
+                        )
+
+                    # Click the button
+                    self._click_point(pt)
+
+                    if verify:
+                        # Wait for state to change
+                        state2, rgb2, pt2 = self._wait_for_state(win, desired)
+                        self.logger.debug(
+                            f"Power verify {attempt}: state={state2}, rgb={rgb2}"
+                        )
+
+                        if state2 == desired:
+                            self._last_known_state = state2
+                            self.logger.info(f"Power set to {desired}")
+                            return True
+                    else:
+                        # Assume success without verification
+                        self._last_known_state = desired
+                        return True
+
+                # All retries exhausted
+                final_state, final_rgb, final_pt = self._read_state_internal(win)
+                raise GlmStateChangeFailedError(
+                    f"Failed to set power to {desired} after {retries + 1} attempts",
+                    desired=desired,
+                    actual=final_state
+                )
+            finally:
+                if saved_state:
+                    self._restore_window_state(win, saved_state)
 
     def ensure_on(self, verify: bool = True) -> bool:
         """
@@ -776,21 +923,25 @@ class GlmPowerController:
         """
         return self.set_state("off", verify=verify)
 
-    def toggle(self, verify: bool = True) -> PowerState:
+    def toggle(self, verify: bool = True, restore_window: bool = True) -> PowerState:
         """
         Toggle power state.
+
+        Args:
+            verify: If True, poll to verify state changed.
+            restore_window: If True (default), restore GLM to its previous state after toggling.
 
         Returns the new state after toggling.
 
         Raises:
             GlmStateUnknownError: If current state cannot be determined.
         """
-        current = self.get_state()
+        current = self.get_state(restore_window=False)  # Don't restore yet
         if current == "unknown":
             raise GlmStateUnknownError("Cannot toggle: current state unknown")
 
         new_state = "off" if current == "on" else "on"
-        self.set_state(new_state, verify=verify)
+        self.set_state(new_state, verify=verify, restore_window=restore_window)
         return new_state
 
     @property
@@ -802,6 +953,42 @@ class GlmPowerController:
         """
         with self._lock:
             return self._last_known_state
+
+    def minimize(self) -> bool:
+        """
+        Minimize the GLM window.
+
+        Uses pywinauto to find and minimize the window, ensuring we use
+        the same window handle as all other power controller operations.
+
+        Returns:
+            True if window was minimized, False if window not found or error.
+        """
+        try:
+            win = self._find_window(use_cache=False)
+            hwnd = win.handle
+
+            # Check if already minimized
+            is_iconic = bool(ctypes.windll.user32.IsIconic(hwnd))
+            if is_iconic:
+                self.logger.debug(f"Window already minimized (Handle={hwnd})")
+                return True
+
+            # Use pywinauto's minimize
+            win.minimize()
+
+            # Verify it worked
+            time.sleep(0.2)
+            is_iconic = bool(ctypes.windll.user32.IsIconic(hwnd))
+            self.logger.info(f"Minimize GLM window: Handle={hwnd} IsIconic={is_iconic}")
+
+            return is_iconic
+        except GlmWindowNotFoundError:
+            self.logger.warning("Cannot minimize: GLM window not found")
+            return False
+        except Exception as e:
+            self.logger.warning(f"Failed to minimize GLM window: {e}")
+            return False
 
     def is_available(self) -> bool:
         """

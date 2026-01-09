@@ -1,3 +1,12 @@
+"""
+VOL20 to Genelec GLM MIDI Bridge
+
+Bridges a Fosi Audio VOL20 USB volume knob to Genelec GLM software via MIDI.
+Supports volume control, mute, dim, and power management with UI automation.
+"""
+
+__version__ = "3.0.0"
+
 import time
 import signal
 import sys
@@ -21,6 +30,14 @@ except ImportError:
     get_display_diagnostics = None
     ensure_session_connected = None
     GlmPowerController = None
+
+# GLM process manager (Windows only) - replaces PowerShell script
+try:
+    from PowerOnOff import GlmManager, GlmManagerConfig, GLM_MANAGER_AVAILABLE
+except ImportError:
+    GLM_MANAGER_AVAILABLE = False
+    GlmManager = None
+    GlmManagerConfig = None
 import psutil
 import argparse
 
@@ -53,7 +70,7 @@ else:
 MAX_EVENT_AGE = 2.0  # seconds
 SEND_DELAY = 0  # seconds for non-volume commands
 RETRY_DELAY = 2.0  # seconds
-HID_READ_TIMEOUT_MS = 200  # milliseconds - responsive shutdown
+HID_READ_TIMEOUT_MS = 1000  # milliseconds - balance between CPU usage and shutdown responsiveness
 QUEUE_MAX_SIZE = 100  # Maximum queued events before backpressure
 
 # Power control timing (UI automation based)
@@ -750,6 +767,18 @@ def parse_arguments():
     parser.add_argument("--no_mqtt_ha_discovery", action="store_false", dest="mqtt_ha_discovery",
                         help="Disable Home Assistant MQTT Discovery.")
 
+    # GLM Manager options
+    parser.add_argument("--glm_manager", action="store_true", default=True,
+                        help="Enable GLM process manager (start GLM, watchdog, auto-restart). Default is True.")
+    parser.add_argument("--no_glm_manager", action="store_false", dest="glm_manager",
+                        help="Disable GLM process manager (use external script or manual GLM start).")
+    parser.add_argument("--glm_path", type=str, default=r"C:\Program Files (x86)\Genelec\GLMv5\GLMv5.exe",
+                        help="Path to GLM executable.")
+    parser.add_argument("--glm_cpu_gating", action="store_true", default=True,
+                        help="Wait for CPU idle before starting GLM. Default is True.")
+    parser.add_argument("--no_glm_cpu_gating", action="store_false", dest="glm_cpu_gating",
+                        help="Disable CPU gating for GLM startup.")
+
     # Parse arguments
     args = parser.parse_args()
 
@@ -766,6 +795,22 @@ def set_higher_priority():
         logger.debug("Main Process priority set to AboveNormal.")
     except Exception as e:
         logger.warning(f"Failed to set higher priority: {e}")
+
+
+def minimize_console_window():
+    """Minimize the script's console window (Windows only)."""
+    if not IS_WINDOWS:
+        return
+
+    try:
+        # Get console window handle
+        hwnd = ctypes.windll.kernel32.GetConsoleWindow()
+        if hwnd:
+            # SW_MINIMIZE = 6
+            ctypes.windll.user32.ShowWindow(hwnd, 6)
+            logger.debug("Console window minimized")
+    except Exception as e:
+        logger.debug(f"Failed to minimize console window: {e}")
 
 def set_current_thread_priority(priority_level):
     """Set the priority of the current thread (Windows only)."""
@@ -828,7 +873,7 @@ def setup_logging(log_level, log_file_name, max_bytes=4*1024*1024, backup_count=
 
     # Listener Thread
     stop_event = threading.Event()
-    logger.info(f">----- Starting {os.path.basename(__file__)} agent. Logger setup complete. Initializing application...")
+    logger.info(f">----- Starting {os.path.basename(__file__)} v{__version__}. Initializing...")
 
     def log_listener_thread():
         listener = QueueListener(log_queue, file_handler, console_handler)
@@ -894,7 +939,8 @@ class HIDToMIDIDaemon:
     def __init__(self, min_click_time, max_avg_click_time, volume_increases_list,
                  VID, PID, midi_in_channel, midi_out_channel, startup_volume=None, api_port=8080,
                  mqtt_broker=None, mqtt_port=1883, mqtt_user=None, mqtt_pass=None,
-                 mqtt_topic="glm", mqtt_ha_discovery=True):
+                 mqtt_topic="glm", mqtt_ha_discovery=True,
+                 glm_manager_enabled=False, glm_path=None, glm_cpu_gating=True):
         self.queue = queue.Queue(maxsize=QUEUE_MAX_SIZE)
         self._stop_event = threading.Event()
         self.hid_reader_thread = threading.Thread(target=self.hid_reader, daemon=True, name="HIDReaderThread")
@@ -924,9 +970,32 @@ class HIDToMIDIDaemon:
         # Power pattern detection state (legacy, kept for MIDI state sync)
         self._rx_seq = []  # List of (timestamp, cc) for pattern detection
         self._last_pattern_time = None  # For startup detection (double-burst)
+        self._suppress_power_pattern = False  # Temporarily suppress pattern detection
+
+        # GLM Manager (process lifecycle and watchdog)
+        # Initialize this BEFORE power controller, since it may need to start GLM first
+        self._glm_manager = None
+        if glm_manager_enabled and GLM_MANAGER_AVAILABLE:
+            try:
+                config = GlmManagerConfig(
+                    glm_path=glm_path or r"C:\Program Files (x86)\Genelec\GLMv5\GLMv5.exe",
+                    cpu_gating_enabled=glm_cpu_gating,
+                )
+                # Callback to reinitialize power controller after GLM restart
+                self._glm_manager = GlmManager(
+                    config=config,
+                    reinit_callback=self._reinit_power_controller,
+                )
+                logger.info("GlmManager initialized (will start GLM and watchdog)")
+            except Exception as e:
+                logger.warning(f"GlmManager not available: {e}")
+        elif glm_manager_enabled and not GLM_MANAGER_AVAILABLE:
+            logger.warning("--glm_manager requested but GlmManager not available (missing dependencies)")
+
         # Power control via UI automation
+        # Skip init if GLM Manager is enabled - it will init after starting GLM
         self._power_controller = None
-        if POWER_CONTROL_AVAILABLE:
+        if POWER_CONTROL_AVAILABLE and not self._glm_manager:
             try:
                 # Log display/session diagnostics (for debugging)
                 if get_display_diagnostics:
@@ -942,6 +1011,35 @@ class HIDToMIDIDaemon:
                 logger.info("GlmPowerController initialized for UI-based power control")
             except Exception as e:
                 logger.warning(f"GlmPowerController not available: {e}")
+
+    def _reinit_power_controller(self, pid: int = None, minimize_after: bool = True):
+        """Reinitialize power controller after GLM restart and sync power state.
+
+        Args:
+            pid: GLM process ID for window filtering
+            minimize_after: If True, minimize GLM window after reinit (for restarts)
+        """
+        if POWER_CONTROL_AVAILABLE:
+            try:
+                # Recreate power controller with PID to find correct window
+                self._power_controller = GlmPowerController(steal_focus=True, pid=pid)
+                logger.info(f"Power controller reinitialized after GLM restart (PID={pid})")
+
+                # Sync power state from UI (overrides any MIDI-based detection)
+                state = self._power_controller.get_state()
+                if state in ("on", "off"):
+                    glm_controller.power = (state == "on")
+                    logger.info(f"Power state synced from GLM UI after restart: {state.upper()}")
+                else:
+                    logger.warning(f"Could not determine GLM power state after restart: {state}")
+
+                # Minimize GLM window (uses same pywinauto window as power operations)
+                if minimize_after:
+                    time.sleep(1.0)  # Let GLM finish any startup animation
+                    logger.info("Minimizing GLM window after reinit")
+                    self._power_controller.minimize()
+            except Exception as e:
+                logger.warning(f"Failed to reinitialize power controller: {e}")
 
     def _get_midi_output(self):
         """Get connected MIDI output, reconnecting if necessary. Thread-safe."""
@@ -1062,35 +1160,63 @@ class HIDToMIDIDaemon:
                         if len(seq) >= 5 and seq[-5:] == POWER_PATTERN:
                             time_span = self._rx_seq[-1][0] - self._rx_seq[-5][0]
                             if time_span >= POWER_PATTERN_MIN_SPAN:  # Not a buffer dump
-                                if len(seq) == 5:
-                                    # Clean 5-message burst
-                                    if (self._last_pattern_time and
-                                        (now - self._last_pattern_time) < POWER_STARTUP_WINDOW):
-                                        # Second pattern within window = GLM startup
-                                        old_power = glm_controller.power
-                                        glm_controller.power = True  # Sync to ON
-                                        logger.info(f"GLM startup detected - power synced to ON (was {'ON' if old_power else 'OFF'})")
-                                        glm_controller._notify_state_change()
-                                        self._last_pattern_time = None
-                                    else:
-                                        # Skip toggle detection during power cooldown
-                                        # UI automation verified state is authoritative
-                                        allowed, wait_time, _ = glm_controller.can_accept_power_command()
-                                        if not allowed:
-                                            logger.debug(f"MIDI power pattern ignored during cooldown ({wait_time:.1f}s remaining)")
-                                        else:
-                                            # Single burst = real power toggle
-                                            glm_controller.power = not glm_controller.power
-                                            logger.info(f"Power toggle detected (now {'ON' if glm_controller.power else 'OFF'})")
-                                            glm_controller._notify_state_change()
-                                            self._last_pattern_time = now
-                                    self._rx_seq = []  # Clear after detection
-                                else:
-                                    # Burst with extra messages (len > 5) - likely first burst of startup
-                                    # Record time but don't toggle - wait for second burst
-                                    logger.debug(f"Power pattern with {len(seq)} msgs - recording for startup detection")
-                                    self._last_pattern_time = now
+                                # Skip pattern processing during startup/volume init
+                                if self._suppress_power_pattern:
+                                    logger.debug("MIDI power pattern ignored (suppressed during init)")
                                     self._rx_seq = []
+                                    continue
+
+                                # Skip pattern processing during power cooldown
+                                # (UI automation already verified state)
+                                allowed, wait_time, _ = glm_controller.can_accept_power_command()
+                                if not allowed:
+                                    logger.debug(f"MIDI power pattern ignored during cooldown ({wait_time:.1f}s remaining)")
+                                    self._rx_seq = []
+                                    continue
+
+                                # Power pattern detected - use it as trigger to read UI state
+                                # This is more reliable than inferring state from pattern heuristics
+                                old_power = glm_controller.power
+                                state_updated = False
+
+                                if self._power_controller:
+                                    try:
+                                        actual_state = self._power_controller.get_state()
+                                        if actual_state in ("on", "off"):
+                                            glm_controller.power = (actual_state == "on")
+                                            state_updated = True
+                                            if glm_controller.power != old_power:
+                                                logger.info(f"Power state read from UI: {actual_state.upper()} (was {'ON' if old_power else 'OFF'})")
+                                            else:
+                                                logger.debug(f"Power state confirmed from UI: {actual_state.upper()}")
+                                        else:
+                                            logger.warning(f"UI returned unknown power state: {actual_state}")
+                                    except Exception as e:
+                                        logger.warning(f"Failed to read power state from UI: {e}")
+
+                                # Fallback: if UI unavailable, use toggle heuristic
+                                if not state_updated:
+                                    if len(seq) == 5:
+                                        # Clean 5-message burst - toggle
+                                        if (self._last_pattern_time and
+                                            (now - self._last_pattern_time) < POWER_STARTUP_WINDOW):
+                                            # Second pattern within window = GLM startup
+                                            glm_controller.power = True
+                                            logger.info(f"GLM startup detected (fallback) - power synced to ON")
+                                            self._last_pattern_time = None
+                                        else:
+                                            glm_controller.power = not glm_controller.power
+                                            logger.info(f"Power toggle detected (fallback, now {'ON' if glm_controller.power else 'OFF'})")
+                                            self._last_pattern_time = now
+                                    else:
+                                        # Burst with extra messages - record for startup detection
+                                        logger.debug(f"Power pattern with {len(seq)} msgs (fallback) - recording for startup detection")
+                                        self._last_pattern_time = now
+
+                                if glm_controller.power != old_power:
+                                    glm_controller._notify_state_change()
+
+                                self._rx_seq = []  # Clear after detection
 
                         # Process state update
                         changed = glm_controller.update_from_midi(msg.control, msg.value)
@@ -1275,6 +1401,9 @@ class HIDToMIDIDaemon:
                     logger.debug(f"Volume: {current} -> {target} (delta={sign}{delta}, CC 20)")
                     glm_controller.set_pending_volume(target)
                     glm_controller.send_volume_absolute(target, midi_out)
+                    # Clear power pattern buffer - GLM's response (DIM, MUTE, VOL)
+                    # should not be mistaken for power toggle pattern
+                    self._rx_seq = []
                 else:
                     direction = "up" if delta > 0 else "down"
                     logger.debug(f"Volume already at limit ({current}), ignoring {direction}")
@@ -1304,6 +1433,8 @@ class HIDToMIDIDaemon:
             logger.debug(f"Setting volume to {target} (CC 20)")
             glm_controller.set_pending_volume(target)
             glm_controller.send_volume_absolute(target, midi_out)
+            # Clear power pattern buffer - GLM's response should not trigger pattern
+            self._rx_seq = []
         except (OSError, IOError) as e:
             logger.error(f"Error setting volume: {e}")
             self._reset_midi_output()
@@ -1330,19 +1461,29 @@ class HIDToMIDIDaemon:
         # Wait a moment for MIDI reader to connect and be ready
         time.sleep(GLM_INIT_WAIT)
 
-        if self.startup_volume is not None:
-            # Set volume to specified value
-            logger.info(f"Setting startup volume to {self.startup_volume}")
-            glm_controller.send_volume_absolute(self.startup_volume, midi_out)
-        else:
-            # Query current volume by sending vol+1 then vol-1
-            logger.info("Querying current GLM volume (sending vol+1, vol-1)...")
-            glm_controller.send_action(Action.VOL_UP, midi_out)
-            time.sleep(GLM_VOL_QUERY_DELAY)
-            glm_controller.send_action(Action.VOL_DOWN, midi_out)
+        # Suppress power pattern detection during volume init
+        # (GLM responses can form false power patterns)
+        self._suppress_power_pattern = True
 
-        # Wait for GLM to respond with volume state
-        time.sleep(GLM_VOL_RESPONSE_WAIT)
+        try:
+            if self.startup_volume is not None:
+                # Set volume to specified value
+                logger.info(f"Setting startup volume to {self.startup_volume}")
+                glm_controller.send_volume_absolute(self.startup_volume, midi_out)
+            else:
+                # Query current volume by sending vol+1 then vol-1
+                logger.info("Querying current GLM volume (sending vol+1, vol-1)...")
+                glm_controller.send_action(Action.VOL_UP, midi_out)
+                time.sleep(GLM_VOL_QUERY_DELAY)
+                glm_controller.send_action(Action.VOL_DOWN, midi_out)
+
+            # Wait for GLM to respond with volume state
+            time.sleep(GLM_VOL_RESPONSE_WAIT)
+        finally:
+            # Clear power pattern buffer and re-enable detection
+            self._rx_seq = []
+            self._suppress_power_pattern = False
+
         if glm_controller.has_valid_volume:
             logger.info(f"GLM volume initialized: {glm_controller.volume}")
         else:
@@ -1350,6 +1491,17 @@ class HIDToMIDIDaemon:
 
     def start(self):
         """Starts all threads."""
+        # Start GLM Manager first (ensures GLM is running before we try to sync state)
+        if self._glm_manager:
+            logger.info("Starting GLM Manager (will start GLM and watchdog)...")
+            if self._glm_manager.start():
+                logger.info("GLM Manager started successfully")
+                # Reinitialize power controller now that GLM is running (window still visible)
+                # Don't minimize here - we do it at end of start() after all init complete
+                self._reinit_power_controller(pid=self._glm_manager.pid, minimize_after=False)
+            else:
+                logger.error("GLM Manager failed to start")
+
         # Register state change callback for logging (proof of concept)
         def log_state_change(state: dict):
             transitioning = " [TRANSITIONING]" if state.get('power_transitioning') else ""
@@ -1357,7 +1509,8 @@ class HIDToMIDIDaemon:
         glm_controller.add_state_callback(log_state_change)
 
         # Sync power state from GLM UI (before starting threads)
-        if self._power_controller:
+        # Skip if GLM Manager already did this in _reinit_power_controller
+        if self._power_controller and not self._glm_manager:
             try:
                 state = self._power_controller.get_state()
                 if state in ("on", "off"):
@@ -1397,11 +1550,23 @@ class HIDToMIDIDaemon:
                 ha_discovery=self.mqtt_ha_discovery,
             )
 
+        # Minimize GLM window at the very end of startup
+        # Use power controller's minimize to ensure same window handle as power operations
+        if self._power_controller:
+            # Give GLM a moment to finish any startup animation
+            time.sleep(1.0)
+            logger.info("Minimizing GLM window (post-startup)")
+            self._power_controller.minimize()
+
     def stop(self):
         """Stops the daemon gracefully."""
         logger.info("Stopping daemon...")
         self._stop_event.set()
         self.queue.put(None)  # Sentinel to unblock the consumer
+
+        # Stop GLM Manager watchdog (but don't kill GLM - let it keep running)
+        if self._glm_manager:
+            self._glm_manager.stop(kill_glm=False)
 
         # Stop MQTT client
         if self.mqtt_client:
@@ -1468,10 +1633,11 @@ if __name__ == "__main__":
         sock.close()
         if result == 0:
             logger.error(f"Another instance is already running (port {args.api_port} in use). Exiting.")
+            stop_logging()  # Stop logging thread before exit
             sys.exit(1)
 
     set_higher_priority()
-    time.sleep(2.0)
+    minimize_console_window()
 
     daemon = HIDToMIDIDaemon(
         args.min_click_time,
@@ -1489,6 +1655,9 @@ if __name__ == "__main__":
         args.mqtt_pass,
         args.mqtt_topic,
         args.mqtt_ha_discovery,
+        args.glm_manager,
+        args.glm_path,
+        args.glm_cpu_gating,
     )
     signal.signal(signal.SIGINT, lambda sig, frame: signal_handler(sig, frame, daemon, stop_logging))
     daemon.start()
