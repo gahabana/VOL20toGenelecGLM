@@ -5,7 +5,7 @@ Bridges a Fosi Audio VOL20 USB volume knob to Genelec GLM software via MIDI.
 Supports volume control, mute, dim, and power management with UI automation.
 """
 
-__version__ = "3.1.0"
+__version__ = "3.1.1"
 
 import time
 import signal
@@ -928,10 +928,22 @@ class HIDToMIDIDaemon:
         # This uses WTSEnumerateSessionsW to detect disconnected RDP sessions
         # and reconnects via tscon if needed
         if ensure_session_connected:
-            if not ensure_session_connected(logger=logger):
+            session_ok, reconnected = ensure_session_connected(logger=logger)
+            if not session_ok:
                 logger.error("Power control failed: could not ensure session is connected to console")
                 glm_controller.end_power_transition(success=False)
                 return
+
+            # If session was reconnected via tscon, GLM may have display context issues
+            # (high CPU due to RDP→console display driver mismatch)
+            # Restart GLM to get a fresh display context
+            if reconnected and self._glm_manager:
+                logger.warning("Session was reconnected via tscon - restarting GLM to fix display context")
+                if not self._glm_manager.restart(reason="tscon session reconnection"):
+                    logger.error("Failed to restart GLM after session reconnection")
+                    glm_controller.end_power_transition(success=False)
+                    return
+                logger.info("GLM restarted successfully after session reconnection")
 
         success = False
         try:

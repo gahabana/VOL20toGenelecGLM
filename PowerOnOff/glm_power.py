@@ -155,7 +155,7 @@ def is_session_disconnected(session_id: int = None) -> bool:
         return False
 
 
-def ensure_session_connected(logger=None) -> bool:
+def ensure_session_connected(logger=None) -> tuple:
     """
     Check if current session is disconnected and reconnect to console if needed.
 
@@ -165,21 +165,23 @@ def ensure_session_connected(logger=None) -> bool:
         logger: Optional logger for debug output.
 
     Returns:
-        True if session is connected (or was successfully reconnected),
-        False if session is disconnected and reconnection failed.
+        Tuple of (success: bool, reconnected: bool):
+        - success: True if session is connected (or was successfully reconnected)
+        - reconnected: True if tscon was used to reconnect (may require GLM restart)
     """
     session_id = get_current_session_id()
     if session_id < 0:
-        return True  # Can't check, assume OK
+        return True, False  # Can't check, assume OK, no reconnection
 
     if not is_session_disconnected(session_id):
-        return True  # Already connected
+        return True, False  # Already connected, no reconnection needed
 
     # Session is disconnected, try to reconnect
     if logger:
         logger.info(f"Session {session_id} is disconnected, reconnecting to console...")
 
-    return reconnect_to_console(logger=logger)
+    success = reconnect_to_console(logger=logger)
+    return success, success  # If reconnection succeeded, we did reconnect
 
 
 def reconnect_to_console(logger=None) -> bool:
