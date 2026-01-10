@@ -201,6 +201,7 @@ def reconnect_to_console(logger=None) -> bool:
     """
     import subprocess
     import shutil
+    import time
 
     session_id = get_current_session_id()
     if session_id < 0:
@@ -222,7 +223,8 @@ def reconnect_to_console(logger=None) -> bool:
 
         if result.returncode == 0:
             if logger:
-                logger.info("Successfully reconnected session to console")
+                logger.info("Successfully reconnected session to console, waiting 0.5s for display driver to settle...")
+            time.sleep(0.5)  # Allow display driver to settle after tscon
             return True
 
         # If direct tscon failed, try with psexec for SYSTEM privileges
@@ -239,7 +241,8 @@ def reconnect_to_console(logger=None) -> bool:
 
             if result.returncode == 0:
                 if logger:
-                    logger.info("Successfully reconnected session to console via psexec")
+                    logger.info("Successfully reconnected session to console via psexec, waiting 0.5s for display driver to settle...")
+                time.sleep(0.5)  # Allow display driver to settle after tscon
                 return True
 
         # Both methods failed
