@@ -1,11 +1,11 @@
 """
-VOL20 to Genelec GLM MIDI Bridge
+GLM Manager - VOL20 to Genelec GLM MIDI Bridge
 
 Bridges a Fosi Audio VOL20 USB volume knob to Genelec GLM software via MIDI.
 Supports volume control, mute, dim, and power management with UI automation.
 """
 
-__version__ = "3.0.0"
+__version__ = "3.1.0"
 
 import time
 import signal
@@ -14,13 +14,25 @@ import os
 import threading
 import queue
 from queue import Queue
-from enum import Enum
-from dataclasses import dataclass
 from typing import Dict, Optional, List, Callable
 import hid
 
 from glm_core import SetVolume, AdjustVolume, SetMute, SetDim, SetPower, QueuedAction
 from mido import Message, open_output, open_input
+
+# Import from extracted modules
+from config import parse_arguments
+from retry_logger import SmartRetryLogger, retry_logger, RETRY_LOG_INTERVALS
+from midi_constants import (
+    Action, ControlMode, GlmControl,
+    GLM_VOLUME_ABS, GLM_VOL_UP_CC, GLM_VOL_DOWN_CC, GLM_MUTE_CC, GLM_DIM_CC, GLM_POWER_CC,
+    POWER_PATTERN, POWER_PATTERN_WINDOW, POWER_PATTERN_MIN_SPAN, POWER_STARTUP_WINDOW,
+    CC_NAMES, ACTION_TO_GLM, CC_TO_ACTION,
+    KEY_VOL_UP, KEY_VOL_DOWN, KEY_CLICK, KEY_DOUBLE_CLICK, KEY_TRIPLE_CLICK, KEY_LONG_PRESS,
+    KEY_NAMES, DEFAULT_BINDINGS, log_midi as _log_midi
+)
+from acceleration import AccelerationHandler
+from logging_setup import LOG_FORMAT
 
 # Power control via UI automation (Windows only)
 try:
@@ -38,9 +50,8 @@ except ImportError:
     GLM_MANAGER_AVAILABLE = False
     GlmManager = None
     GlmManagerConfig = None
-import psutil
-import argparse
 
+import psutil
 import logging
 from logging.handlers import RotatingFileHandler, QueueHandler, QueueListener
 
@@ -66,7 +77,6 @@ else:
     THREAD_PRIORITY_ABOVE_NORMAL = THREAD_PRIORITY_HIGHEST = 0
 
 # Parameters
-
 MAX_EVENT_AGE = 2.0  # seconds
 SEND_DELAY = 0  # seconds for non-volume commands
 RETRY_DELAY = 2.0  # seconds
@@ -78,299 +88,22 @@ POWER_SETTLING_TIME = 2.0   # Block ALL commands during power settling
 POWER_COOLDOWN_TIME = 5.0   # Block power commands after settling ends
 POWER_TOTAL_LOCKOUT = POWER_SETTLING_TIME + POWER_COOLDOWN_TIME  # 7s total
 
-# Smart retry logging intervals (absolute milestones from first event)
-# Format: list of seconds. If value > prev_log_time, it's an absolute milestone.
-#         Otherwise, it's added to prev_log_time. Last value repeats indefinitely.
-# Example: [2, 10, 60, 600, 3600, 86400] logs at t=2s, 10s, 60s, 10min, 1hr, 1day from start
-# Example: [2, 2, 2, 10, 10, 60] logs at t=2, 4, 6, 10, 20, 60, 120, 180... from start
-RETRY_LOG_INTERVALS = [2, 10, 60, 600, 3600, 86400]  # 2s, 10s, 1min, 10min, 1hr, 1day
-
-
-# ==============================================================================
-# SMART RETRY LOGGER - Absolute milestone logging with exponential backoff
-# ==============================================================================
-
-class SmartRetryLogger:
-    """
-    Manages smart logging during retry loops using absolute time milestones.
-
-    Retries continue at their normal frequency (RETRY_DELAY), but log messages
-    are throttled based on elapsed time since the first failure.
-
-    Interval values work as follows:
-    - If interval > previous_log_time: use as absolute milestone from first event
-    - Otherwise: add interval to previous_log_time (cumulative)
-    - Last interval repeats indefinitely
-
-    Example: [2, 10, 60, 600, 3600, 86400] → logs at 2s, 10s, 1min, 10min, 1hr, 1day
-    Example: [2, 2, 2, 10, 10] → logs at 2s, 4s, 6s, 10s, 20s, 30s...
-    """
-
-    def __init__(self, intervals: list = None):
-        """
-        Initialize the smart retry logger.
-
-        Args:
-            intervals: List of interval values (see class docstring for behavior).
-                      Last value repeats indefinitely.
-                      Defaults to RETRY_LOG_INTERVALS.
-        """
-        self.intervals = intervals or RETRY_LOG_INTERVALS
-        self._trackers: Dict[str, dict] = {}
-        self._lock = threading.Lock()
-
-    def _compute_next_log_time(self, prev_log_time: float, interval: float) -> float:
-        """
-        Compute next log time using the milestone rule.
-
-        If interval > prev_log_time: use interval as absolute milestone
-        Otherwise: use prev_log_time + interval (cumulative)
-        """
-        if interval > prev_log_time:
-            return interval
-        return prev_log_time + interval
-
-    def should_log(self, key: str) -> bool:
-        """
-        Check if we should log a retry message for the given key.
-
-        Args:
-            key: Unique identifier for this retry context (e.g., "hid_connect", "midi_reader")
-
-        Returns:
-            True if enough time has passed since first event, False otherwise.
-        """
-        now = time.time()
-
-        with self._lock:
-            if key not in self._trackers:
-                # First attempt - always log
-                first_interval = self.intervals[0] if self.intervals else 2
-                self._trackers[key] = {
-                    'first_event_time': now,
-                    'next_log_time': first_interval,  # Absolute time from first event
-                    'prev_log_time': 0,  # Track previous log time for milestone calculation
-                    'interval_index': 0,
-                    'retry_count': 1
-                }
-                return True
-
-            tracker = self._trackers[key]
-            tracker['retry_count'] += 1
-
-            elapsed = now - tracker['first_event_time']
-
-            if elapsed >= tracker['next_log_time']:
-                # Time to log - compute next log time
-                tracker['prev_log_time'] = tracker['next_log_time']
-                tracker['interval_index'] += 1
-
-                # Get next interval (use last value if we've exceeded the list)
-                idx = min(tracker['interval_index'], len(self.intervals) - 1)
-                next_interval = self.intervals[idx]
-
-                tracker['next_log_time'] = self._compute_next_log_time(
-                    tracker['prev_log_time'], next_interval
-                )
-                return True
-
-            return False
-
-    def get_retry_count(self, key: str) -> int:
-        """Get the current retry count for a key."""
-        with self._lock:
-            if key in self._trackers:
-                return self._trackers[key]['retry_count']
-            return 0
-
-    def reset(self, key: str):
-        """
-        Reset the tracker for a key (call when connection succeeds).
-
-        Args:
-            key: The retry context key to reset.
-        """
-        with self._lock:
-            if key in self._trackers:
-                del self._trackers[key]
-
-    def _format_duration(self, seconds: float) -> str:
-        """Format a duration in seconds to a human-readable string."""
-        if seconds < 60:
-            return f"{int(seconds)}s"
-        elif seconds < 3600:
-            return f"{int(seconds // 60)}m"
-        elif seconds < 86400:
-            return f"{int(seconds // 3600)}h"
-        else:
-            return f"{int(seconds // 86400)}d"
-
-    def format_retry_info(self, key: str) -> str:
-        """
-        Format retry information for logging.
-
-        Returns a string like "(retry #5)" or "(retry #100, next log at ~10m)"
-        """
-        with self._lock:
-            if key not in self._trackers:
-                return ""
-
-            tracker = self._trackers[key]
-            count = tracker['retry_count']
-            next_log = tracker['next_log_time']
-
-            if tracker['interval_index'] > 0:
-                return f"(retry #{count}, next log at ~{self._format_duration(next_log)})"
-            else:
-                return f"(retry #{count})"
-
-
-# Global smart retry logger instance
-retry_logger = SmartRetryLogger()
-
 # GLM volume initialization timing
 GLM_INIT_WAIT = 0.5  # seconds - wait for MIDI reader to connect
 GLM_VOL_QUERY_DELAY = 0.1  # seconds - delay between vol+1 and vol-1
 GLM_VOL_RESPONSE_WAIT = 0.3  # seconds - wait for GLM to report volume
 
-
-# ==============================================================================
-# 1) LOGICAL ACTIONS - What the system can do
-# ==============================================================================
-
-class Action(Enum):
-    VOL_UP = "VolUp"
-    VOL_DOWN = "VolDown"
-    MUTE = "Mute"
-    DIM = "Dim"
-    POWER = "Power"
-    # Non-GLM actions (for future routing to other apps)
-    PLAY_PAUSE = "Play/Pause"
-    NEXT_TRACK = "NextTrack"
-    PREV_TRACK = "PrevTrack"
-
-
-# ==============================================================================
-# 2) GLM MIDI MAPPING - How GLM exposes controls via MIDI
-# ==============================================================================
-
-class ControlMode(Enum):
-    MOMENTARY = "momentary"  # Send 127 to trigger, auto-resets
-    TOGGLE = "toggle"        # Send 127/0 to set state explicitly
-
-
-@dataclass(frozen=True)
-class GlmControl:
-    cc: int                 # MIDI CC number
-    label: str              # Human-readable label
-    mode: ControlMode       # How this control behaves
-
-
-# GLM MIDI CC numbers (from GLM MIDI Settings)
-GLM_VOLUME_ABS = 20   # Absolute volume (0-127) - GLM outputs this, can also set it
-GLM_VOL_UP_CC = 21    # Volume increment (momentary)
-GLM_VOL_DOWN_CC = 22  # Volume decrement (momentary)
-GLM_MUTE_CC = 23      # Mute (toggle)
-GLM_DIM_CC = 24       # Dim (toggle)
-GLM_POWER_CC = 28     # System Power (momentary trigger, no MIDI feedback)
-
-# Power detection pattern: MUTE -> VOL -> DIM -> MUTE -> VOL (5 messages within ~150ms)
-# GLM sends this pattern on power toggle and startup (startup sends 7 then 5)
-POWER_PATTERN = [GLM_MUTE_CC, GLM_VOLUME_ABS, GLM_DIM_CC, GLM_MUTE_CC, GLM_VOLUME_ABS]
-POWER_PATTERN_WINDOW = 0.5  # seconds - max time window for pattern
-POWER_PATTERN_MIN_SPAN = 0.05  # seconds - min span (faster = buffer dump, ignore)
-POWER_STARTUP_WINDOW = 3.0  # seconds - if second pattern within this, it's GLM startup
-
-# CC number to human-readable name (for logging)
-CC_NAMES = {
-    GLM_VOLUME_ABS: "Volume",
-    GLM_VOL_UP_CC: "Vol+",
-    GLM_VOL_DOWN_CC: "Vol-",
-    GLM_MUTE_CC: "Mute",
-    GLM_DIM_CC: "Dim",
-    GLM_POWER_CC: "Power",
-}
+# Module-level logger (set by setup_logging)
+logger = logging.getLogger(__name__)
 
 
 def log_midi(direction: str, msg_type: str, cc: int = None, value: int = None, channel: int = None, raw: str = None):
-    """
-    Log MIDI message in consistent format.
-
-    Args:
-        direction: "TX" for sent, "RX" for received
-        msg_type: MIDI message type (e.g., "control_change", "note_on")
-        cc: Control change number (if applicable)
-        value: Value (if applicable)
-        channel: MIDI channel (if applicable)
-        raw: Raw message string for unknown types
-    """
-    if msg_type == "control_change" and cc is not None:
-        cc_name = CC_NAMES.get(cc, f"CC{cc}")
-        logger.info(f"MIDI {direction}: {cc_name}(CC{cc})={value}")
-    elif raw:
-        logger.info(f"MIDI {direction}: {raw}")
-    else:
-        parts = [f"MIDI {direction}: {msg_type}"]
-        if channel is not None:
-            parts.append(f"ch={channel}")
-        if value is not None:
-            parts.append(f"val={value}")
-        logger.info(" ".join(parts))
-
-
-# Catalogue of GLM controls
-ACTION_TO_GLM: Dict[Action, GlmControl] = {
-    Action.VOL_UP:   GlmControl(cc=GLM_VOL_UP_CC,   label="Vol+",  mode=ControlMode.MOMENTARY),
-    Action.VOL_DOWN: GlmControl(cc=GLM_VOL_DOWN_CC, label="Vol-",  mode=ControlMode.MOMENTARY),
-    Action.MUTE:     GlmControl(cc=GLM_MUTE_CC,     label="Mute",  mode=ControlMode.TOGGLE),
-    Action.DIM:      GlmControl(cc=GLM_DIM_CC,      label="Dim",   mode=ControlMode.TOGGLE),
-    Action.POWER:    GlmControl(cc=GLM_POWER_CC,    label="Power", mode=ControlMode.TOGGLE),
-    # Non-GLM actions don't have GLM controls (yet)
-}
-
-# Reverse lookup: CC number → Action (for reading GLM state from MIDI output)
-CC_TO_ACTION: Dict[int, Action] = {
-    ctrl.cc: action for action, ctrl in ACTION_TO_GLM.items()
-}
+    """Wrapper for log_midi that uses the module logger."""
+    _log_midi(logger, direction, msg_type, cc, value, channel, raw)
 
 
 # ==============================================================================
-# 3) PHYSICAL DEVICE - VOL20 Hardware Keycodes (immutable)
-# ==============================================================================
-
-KEY_VOL_UP = 2
-KEY_VOL_DOWN = 1
-KEY_CLICK = 32          # Single click on VOL20
-KEY_DOUBLE_CLICK = 16   # Double click on VOL20
-KEY_TRIPLE_CLICK = 8    # Triple click on VOL20
-KEY_LONG_PRESS = 4      # 2-second press on VOL20
-
-KEY_NAMES: Dict[int, str] = {
-    KEY_VOL_UP: "VolUp",
-    KEY_VOL_DOWN: "VolDown",
-    KEY_CLICK: "Click",
-    KEY_DOUBLE_CLICK: "DblClick",
-    KEY_TRIPLE_CLICK: "TplClick",
-    KEY_LONG_PRESS: "LongPress",
-}
-
-
-# ==============================================================================
-# 4) KEY BINDINGS - Map physical keys to logical actions (configurable)
-# ==============================================================================
-
-DEFAULT_BINDINGS: Dict[int, Action] = {
-    KEY_VOL_UP: Action.VOL_UP,
-    KEY_VOL_DOWN: Action.VOL_DOWN,
-    KEY_CLICK: Action.POWER,         # Click → Power
-    KEY_DOUBLE_CLICK: Action.DIM,    # Double click → Dim
-    KEY_TRIPLE_CLICK: Action.DIM,    # Triple click → Dim
-    KEY_LONG_PRESS: Action.MUTE,     # Long press → Mute
-}
-
-
-# ==============================================================================
-# 5) GLM STATE CONTROLLER - Tracks and controls GLM state
+# GLM STATE CONTROLLER - Tracks and controls GLM state
 # ==============================================================================
 
 class GlmController:
@@ -672,121 +405,6 @@ class GlmController:
 # Global GLM controller instance
 glm_controller = GlmController()
 
-def validate_volume_increases(value):
-    try:
-        parsed = list(map(int, value.strip("[]").split(",")))
-        if len(parsed) < 2 or len(parsed) > 15:
-            raise argparse.ArgumentTypeError("Volume increase list must have between 2 and 15 items.")
-        if not all(1 <= x <= 10 for x in parsed):
-            raise argparse.ArgumentTypeError("All values in the list must be integers between 1 and 10.")
-        return parsed
-    except ValueError as e:
-        raise argparse.ArgumentTypeError(f"Invalid format for volume_increase_list: {e}")
-
-def validate_click_times(values):
-    try:
-        # Split and parse the two values
-        parsed = list(map(float, values.split(",")))
-        if len(parsed) != 2:
-            raise argparse.ArgumentTypeError("You must provide exactly two values: MIN_CLICK_TIME,MAX_AVG_CLICK_TIME.")
-
-        min_click_time, max_avg_click_time = parsed
-
-        # Validate the values
-        if not (0.01 < min_click_time < 1):
-            raise argparse.ArgumentTypeError("MIN_CLICK_TIME must be > 0.01 and < 1.")
-        if max_avg_click_time > min_click_time:
-            raise argparse.ArgumentTypeError("MAX_AVG_CLICK_TIME must be <= MIN_CLICK_TIME.")
-
-        return min_click_time, max_avg_click_time
-    except ValueError:
-        raise argparse.ArgumentTypeError("Click times must be two float values separated by a comma.")
-
-def validate_device(value):
-    try:
-        vid, pid = map(lambda x: int(x, 16), value.split(","))
-        if vid < 0x0000 or vid > 0xFFFF or pid < 0x0000 or pid > 0xFFFF:
-            raise argparse.ArgumentTypeError("VID and PID must be valid 16-bit hexadecimal values.")
-        return vid, pid
-    except ValueError as e:
-        raise argparse.ArgumentTypeError(f"Invalid VID/PID format: {e}")
-
-def parse_arguments():
-    parser = argparse.ArgumentParser(description="HID to MIDI Agent with CLI options.")
-
-    parser.add_argument("--log_level", choices=["DEBUG", "INFO", "NONE"], default="DEBUG",
-                        help="Set logging level. Default is DEBUG.")
-
-    # Log file name (defaults to script name with .log extension)
-    default_log_file = os.path.splitext(os.path.basename(__file__))[0] + ".log"
-    parser.add_argument("--log_file_name", type=str, default=default_log_file,
-                        help=f"Name of the log file. Default is '{default_log_file}'.")
-
-    # Single argument for click times
-    parser.add_argument("--click_times", type=validate_click_times, default=(0.2, 0.15),
-                        help="Comma-separated values for MIN_CLICK_TIME and MAX_AVG_CLICK_TIME. "
-                             "MIN_CLICK_TIME must be > 0.01 and < 1, and MAX_AVG_CLICK_TIME must be <= MIN_CLICK_TIME. "
-                             "Default is '0.2,0.15'.")
-
-    parser.add_argument("--volume_increases_list", type=validate_volume_increases, default=[1, 1, 2, 2, 3],
-                        help="List of volume increases. Must be between 2 and 15 integers, each >=1 and <=10. Default is [1, 1, 2, 2, 3].")
-
-
-    # VID/PID combination
-    parser.add_argument("--device", type=validate_device, default=(0x07d7, 0x0000),
-                        help="VID and PID of the device to be listened to, in the format 'VID,PID'. Default is '0x07d7,0x0000'.")
-
-    # MIDI channel names
-    parser.add_argument("--midi_in_channel", type=str, default="GLMMIDI 1",
-                        help="MIDI input channel name (to send commands TO GLM). Default is 'GLMMIDI 1'.")
-
-    parser.add_argument("--midi_out_channel", type=str, default="GLMOUT 1",
-                        help="MIDI output channel name (to receive state FROM GLM). Default is 'GLMOUT 1'.")
-
-    parser.add_argument("--startup_volume", type=int, default=None, choices=range(0, 128), metavar="0-127",
-                        help="Optional startup volume (0-127). If set, GLM volume will be set to this value on startup. "
-                             "79 corresponds to -46dB in GLM. If not set, script will query current volume.")
-
-    # REST API
-    parser.add_argument("--api_port", type=int, default=8080,
-                        help="Port for REST API server. Set to 0 to disable API. Default is 8080.")
-
-    # MQTT / Home Assistant
-    parser.add_argument("--mqtt_broker", type=str, default=None,
-                        help="MQTT broker hostname. If not set, MQTT is disabled.")
-    parser.add_argument("--mqtt_port", type=int, default=1883,
-                        help="MQTT broker port. Default is 1883.")
-    parser.add_argument("--mqtt_user", type=str, default=None,
-                        help="MQTT username (optional).")
-    parser.add_argument("--mqtt_pass", type=str, default=None,
-                        help="MQTT password (optional).")
-    parser.add_argument("--mqtt_topic", type=str, default="glm",
-                        help="MQTT topic prefix. Default is 'glm'.")
-    parser.add_argument("--mqtt_ha_discovery", action="store_true", default=True,
-                        help="Enable Home Assistant MQTT Discovery. Default is True.")
-    parser.add_argument("--no_mqtt_ha_discovery", action="store_false", dest="mqtt_ha_discovery",
-                        help="Disable Home Assistant MQTT Discovery.")
-
-    # GLM Manager options
-    parser.add_argument("--glm_manager", action="store_true", default=True,
-                        help="Enable GLM process manager (start GLM, watchdog, auto-restart). Default is True.")
-    parser.add_argument("--no_glm_manager", action="store_false", dest="glm_manager",
-                        help="Disable GLM process manager (use external script or manual GLM start).")
-    parser.add_argument("--glm_path", type=str, default=r"C:\Program Files (x86)\Genelec\GLMv5\GLMv5.exe",
-                        help="Path to GLM executable.")
-    parser.add_argument("--glm_cpu_gating", action="store_true", default=True,
-                        help="Wait for CPU idle before starting GLM. Default is True.")
-    parser.add_argument("--no_glm_cpu_gating", action="store_false", dest="glm_cpu_gating",
-                        help="Disable CPU gating for GLM startup.")
-
-    # Parse arguments
-    args = parser.parse_args()
-
-    # Assign parsed click times to individual variables for clarity
-    args.min_click_time, args.max_avg_click_time = args.click_times
-    args.vid, args.pid = args.device
-    return args
-
 
 def set_higher_priority():
     try:
@@ -845,13 +463,13 @@ def setup_logging(log_level, log_file_name, max_bytes=4*1024*1024, backup_count=
     # File Handler
     file_handler = RotatingFileHandler(log_file_path, maxBytes=max_bytes, backupCount=backup_count)
     file_handler.setLevel(logging.DEBUG if log_level != "NONE" else logging.CRITICAL)
-    file_handler.setFormatter(logging.Formatter('%(asctime)s [%(levelname)s] %(message)s'))
+    file_handler.setFormatter(logging.Formatter(LOG_FORMAT))
     file_handler.addFilter(ws_filter)  # Filter WebSocket disconnect errors
 
     # Console Handler
     console_handler = logging.StreamHandler()
     console_handler.setLevel(logging.INFO if log_level in ["INFO", "DEBUG"] else logging.CRITICAL)
-    console_handler.setFormatter(logging.Formatter('%(asctime)s [%(levelname)s] %(message)s'))
+    console_handler.setFormatter(logging.Formatter(LOG_FORMAT))
     console_handler.addFilter(ws_filter)  # Filter WebSocket disconnect errors
 
     # QueueHandler
@@ -900,40 +518,6 @@ def signal_handler(sig, frame, daemon, stop_logging_func):
     stop_logging_func()
     sys.exit(0)
 
-class AccelerationHandler:
-    def __init__(self, min_click, max_per_click_avg, volume_list):
-        self.min_click = min_click
-        self.max_per_click_avg = max_per_click_avg
-        self.volume_increases_list = volume_list
-        self.len = len(volume_list)  # Cache length (list is immutable)
-        self.last_button = 0
-        self.last_time = 0
-        self.first_time = 0
-        self.distance = 0
-        self.count = 1
-        self.delta_time = 0
-
-    def calculate_speed(self, current_time, button):
-        self.delta_time = current_time - self.last_time
-        # Guard against division by zero (shouldn't happen with count initialized to 1)
-        if self.count > 0:
-            avg_step_time = (current_time - self.first_time) / self.count
-        else:
-            avg_step_time = float('inf')
-
-        if (self.last_button != button) or (avg_step_time > self.max_per_click_avg) or (self.delta_time > self.min_click):
-            self.distance = 1
-            self.count = 1
-            self.first_time = current_time
-        else:
-            if self.count <= self.len:  # count 1..len maps to indices 0..len-1
-                self.distance = self.volume_increases_list[self.count - 1]
-            else:
-                self.distance = self.volume_increases_list[-1]
-            self.count += 1
-        self.last_button = button
-        self.last_time = current_time
-        return int(self.distance)
 
 class HIDToMIDIDaemon:
     def __init__(self, min_click_time, max_avg_click_time, volume_increases_list,

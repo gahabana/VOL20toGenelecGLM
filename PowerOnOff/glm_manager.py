@@ -34,6 +34,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Optional
 
+# Centralized logging format with thread, module, function, and line number
+LOG_FORMAT = '%(asctime)s [%(levelname)s] %(threadName)s %(module)s:%(funcName)s:%(lineno)d - %(message)s'
+
 logger = logging.getLogger(__name__)
 
 # Conditional imports for Windows-only functionality
@@ -132,9 +135,7 @@ class GlmManager:
         file_handler = logging.FileHandler(
             self.config.log_file, encoding="utf-8"
         )
-        file_handler.setFormatter(
-            logging.Formatter("%(asctime)s\t%(message)s")
-        )
+        file_handler.setFormatter(logging.Formatter(LOG_FORMAT))
         logger.addHandler(file_handler)
 
     def start(self, block_until_ready: bool = True) -> bool:
