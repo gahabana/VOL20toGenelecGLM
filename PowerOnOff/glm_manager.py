@@ -652,30 +652,3 @@ class GlmManager:
             logger.info(f"Reinitialized with GLM PID={self._process.pid}")
         else:
             logger.warning("Reinitialized but GLM process not found")
-
-    def restart(self, reason: str = None) -> bool:
-        """
-        Kill and restart GLM.
-
-        This is useful when GLM needs to be restarted due to display context
-        changes (e.g., after session reconnection via tscon).
-
-        Args:
-            reason: Optional reason string for logging.
-
-        Returns:
-            True if GLM was successfully restarted, False otherwise.
-        """
-        reason_str = f" (reason: {reason})" if reason else ""
-        logger.info(f"=== Manual GLM restart requested{reason_str} ===")
-
-        # Kill existing GLM process
-        self._kill_glm()
-
-        # Wait a moment for cleanup
-        time.sleep(self.config.restart_delay)
-
-        # Restart GLM (reuses _restart_glm logic)
-        self._restart_glm()
-
-        return self._process is not None and self._process.is_running()
