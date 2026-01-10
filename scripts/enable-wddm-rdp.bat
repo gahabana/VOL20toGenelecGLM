@@ -20,7 +20,7 @@ if %errorlevel% neq 0 (
 )
 
 echo Removing registry fix...
-REG DELETE "HKLM\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services" /v "fEnableWddmDriver" /f 2>nul
+REG DELETE "HKLM\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services" /v fEnableWddmDriver /f >nul 2>&1
 
 if %errorlevel% equ 0 (
     echo.
@@ -31,7 +31,7 @@ if %errorlevel% equ 0 (
     echo After reboot, RDP will use the default WDDM driver.
 ) else (
     echo.
-    echo NOTE: Registry key not found (WDDM may already be enabled).
+    echo NOTE: Registry key not found - WDDM is already enabled.
 )
 
 echo.

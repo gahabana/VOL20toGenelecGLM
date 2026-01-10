@@ -21,7 +21,7 @@ if %errorlevel% neq 0 (
 )
 
 echo Applying registry fix...
-REG ADD "HKLM\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services" /v "fEnableWddmDriver" /t REG_DWORD /d 0 /f
+REG ADD "HKLM\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services" /v fEnableWddmDriver /t REG_DWORD /d 0 /f >nul
 
 if %errorlevel% equ 0 (
     echo.
