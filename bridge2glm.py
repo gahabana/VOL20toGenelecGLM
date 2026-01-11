@@ -430,6 +430,128 @@ def minimize_console_window():
     except Exception as e:
         logger.debug(f"Failed to minimize console window: {e}")
 
+
+# ==============================================================================
+# RDP SESSION PRIMING - Prevents high CPU after RDP disconnect
+# ==============================================================================
+
+def get_boot_time() -> int:
+    """Get system boot time as Unix timestamp (Windows only)."""
+    if not IS_WINDOWS:
+        return 0
+    try:
+        kernel32 = ctypes.windll.kernel32
+        tick_count = kernel32.GetTickCount64()
+        boot_time = time.time() - (tick_count / 1000)
+        return int(boot_time)
+    except Exception:
+        return 0
+
+
+def needs_rdp_priming() -> bool:
+    """
+    Check if RDP priming is needed (only once per boot).
+
+    RDP priming prevents high CPU in GLM after RDP disconnect by doing
+    an RDP connect/disconnect cycle before GLM starts. This only needs
+    to happen once per boot.
+
+    Returns True if priming is needed, False if already primed this boot.
+    """
+    if not IS_WINDOWS:
+        return False
+
+    flag_file = os.path.join(os.environ.get('TEMP', r'C:\temp'), 'rdp_primed.flag')
+    current_boot = get_boot_time()
+
+    if os.path.exists(flag_file):
+        try:
+            with open(flag_file, 'r') as f:
+                stored_boot = int(f.read().strip())
+            # Same boot session (within 60 second tolerance for clock drift)
+            if abs(stored_boot - current_boot) < 60:
+                return False  # Already primed this boot
+        except Exception:
+            pass  # Flag file corrupted, re-prime
+
+    # Write current boot time as flag
+    try:
+        with open(flag_file, 'w') as f:
+            f.write(str(current_boot))
+    except Exception as e:
+        logger.warning(f"Failed to write RDP priming flag: {e}")
+
+    return True  # Need to prime
+
+
+def prime_rdp_session() -> bool:
+    """
+    Prime the RDP session to prevent high CPU after disconnect.
+
+    This does an RDP connect/disconnect cycle using FreeRDP, which initializes
+    the Windows display driver properly. Without this, GLM (OpenGL app) may
+    consume high CPU after the first RDP disconnect on a headless VM.
+
+    Returns True if priming succeeded, False otherwise.
+    """
+    if not IS_WINDOWS:
+        return True  # Not needed on non-Windows
+
+    import subprocess
+    import shutil
+
+    # Find wfreerdp.exe
+    wfreerdp = shutil.which("wfreerdp") or shutil.which("wfreerdp.exe")
+    if not wfreerdp:
+        logger.warning("RDP priming skipped: wfreerdp not found in PATH")
+        return False
+
+    logger.info("Priming RDP session to prevent high CPU after disconnect...")
+
+    try:
+        # Start FreeRDP connection to localhost
+        # Credentials should be configured on the system
+        # /sec:tls is needed because NLA is disabled for this to work
+        proc = subprocess.Popen(
+            [wfreerdp, "/v:localhost", "/u:zh", "/p:qwe2qwe2", "/cert:ignore", "/sec:tls"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+
+        # Wait for connection to establish
+        logger.debug("FreeRDP connecting...")
+        time.sleep(3)
+
+        # Kill FreeRDP to disconnect
+        proc.terminate()
+        try:
+            proc.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+
+        logger.debug("FreeRDP disconnected")
+        time.sleep(1)
+
+        # Reconnect session to console
+        result = subprocess.run(
+            ["tscon", "1", "/dest:console"],
+            capture_output=True,
+            timeout=10,
+        )
+
+        if result.returncode == 0:
+            logger.info("RDP session primed successfully")
+            time.sleep(1)
+            return True
+        else:
+            stderr = result.stderr.decode('utf-8', errors='ignore').strip()
+            logger.warning(f"tscon failed during priming: {stderr}")
+            return False
+
+    except Exception as e:
+        logger.error(f"RDP priming failed: {e}")
+        return False
+
 def set_current_thread_priority(priority_level):
     """Set the priority of the current thread (Windows only)."""
     if not HAS_WIN32:
@@ -1182,7 +1304,7 @@ class HIDToMIDIDaemon:
         logger.info("Daemon stopped.")
 
 if __name__ == "__main__":
-    args = parse_arguments()
+    args = parse_arguments(__file__)
     stop_logging = setup_logging(args.log_level, args.log_file_name)
 
     # Log the configurations for confirmation
@@ -1222,6 +1344,13 @@ if __name__ == "__main__":
 
     set_higher_priority()
     minimize_console_window()
+
+    # RDP session priming - prevents high CPU in GLM after RDP disconnect
+    # Only runs once per boot (before GLM starts)
+    if needs_rdp_priming():
+        prime_rdp_session()
+    else:
+        logger.debug("RDP session already primed this boot, skipping")
 
     daemon = HIDToMIDIDaemon(
         args.min_click_time,
