@@ -724,6 +724,9 @@
             const centerX = rect.left + rect.width / 2;
             const centerY = rect.top + rect.height / 2;
 
+            // Scale factor: actual rendered size vs CSS size (200px)
+            const scale = rect.width / 200;
+
             const clientX = e.touches ? e.touches[0].clientX : e.clientX;
             const clientY = e.touches ? e.touches[0].clientY : e.clientY;
 
@@ -731,8 +734,9 @@
             const deltaY = clientY - centerY;
             const distance = Math.sqrt(deltaX * deltaX + deltaY * deltaY);
 
-            const minRadius = KNOB_CENTER_RADIUS - KNOB_TOUCH_INNER_TOLERANCE;  // 55px
-            const maxRadius = KNOB_RING_OUTER + KNOB_TOUCH_OUTER_TOLERANCE;     // 85px
+            // Scale the thresholds to match actual rendered size
+            const minRadius = (KNOB_CENTER_RADIUS - KNOB_TOUCH_INNER_TOLERANCE) * scale;
+            const maxRadius = (KNOB_RING_OUTER + KNOB_TOUCH_OUTER_TOLERANCE) * scale;
 
             return distance >= minRadius && distance <= maxRadius;
         }
