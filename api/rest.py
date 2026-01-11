@@ -161,6 +161,15 @@ def create_app(action_queue, glm_controller) -> FastAPI:
             return FileResponse(index_path, media_type="text/html")
         return JSONResponse({"error": "Web UI not found"}, status_code=404)
 
+    @app.get("/favicon.svg")
+    async def serve_favicon():
+        """Serve the favicon."""
+        web_dir = Path(__file__).parent.parent / "web"
+        favicon_path = web_dir / "favicon.svg"
+        if favicon_path.exists():
+            return FileResponse(favicon_path, media_type="image/svg+xml")
+        return JSONResponse({"error": "Favicon not found"}, status_code=404)
+
     return app
 
 
