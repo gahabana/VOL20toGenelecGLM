@@ -739,9 +739,6 @@
             const minRadius = (KNOB_CENTER_RADIUS - KNOB_TOUCH_INNER_TOLERANCE) * scale;
             const maxRadius = (KNOB_RING_OUTER + KNOB_TOUCH_OUTER_TOLERANCE) * scale;
 
-            // DEBUG: log values to understand touch area
-            console.log(`Knob click: dist=${distance.toFixed(1)}, min=${minRadius.toFixed(1)}, max=${maxRadius.toFixed(1)}, scale=${scale.toFixed(2)}, rectW=${rect.width}`);
-
             return distance >= minRadius && distance <= maxRadius;
         }
 
@@ -807,6 +804,9 @@
                     endDrag();
                 }
             }, 5000);
+
+            // Option B: Pause when outside ring, resume when back inside
+            if (!isWithinKnobRing(e)) return;
 
             const angle = getAngleFromEvent(e);
             const volume = angleToVolume(angle);
