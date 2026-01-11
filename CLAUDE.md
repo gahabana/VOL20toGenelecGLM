@@ -19,11 +19,16 @@
 
 ## Technical Context
 
-### Known Issues
-- **High CPU after RDP disconnect**: When RDP connects then disconnects on a headless-started VM, GLM may spin at high CPU after tscon reconnects the session to console. This is due to display driver context mismatch.
-  - The issue only occurs on the FIRST RDP connect/disconnect after headless VM start
-  - Subsequent RDP connect/disconnect cycles work fine
-  - Reconnecting via RDP resolves the high CPU
+### Known Issues (Resolved)
+- **High CPU after RDP disconnect** - FIXED with RDP session priming
+  - **Root cause**: GLM (OpenGL app) encounters Windows display driver context issues when tscon switches session from disconnected RDP back to console. The Windows USER subsystem gets stuck in `UserSessionSwitchLeaveCrit`, causing high CPU.
+  - **Solution**: Do an RDP connect/disconnect cycle BEFORE GLM starts. This "primes" the session so subsequent RDP disconnects don't cause issues.
+  - **Implementation**: `bridge2glm.py` uses FreeRDP (`wfreerdp.exe`) to do a quick localhost RDP connection at startup, then disconnects and reconnects to console via `tscon`.
+  - **Requirements**:
+    - FreeRDP must be installed and `wfreerdp.exe` in PATH
+    - NLA must be disabled on RDP server (registry: `HKLM\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp\UserAuthentication = 0`)
+    - RDP credentials for localhost (currently hardcoded in script)
+  - Priming only runs once per boot (tracked via `%TEMP%\rdp_primed.flag` with boot timestamp)
 
 ### Architecture Notes
 - Multi-threaded application (HID, MIDI, Consumer, Logging threads)
