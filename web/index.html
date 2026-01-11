@@ -505,11 +505,12 @@
         const BREAK2_ANGLE = 0;     // 12 o'clock
 
         // Knob geometry (for touch area validation)
+        // Note: CSS radial-gradient % are relative to farthest-corner (~141px for 200px square)
+        // so 78% in CSS = ~110px, but clipped at container edge (100px)
         const KNOB_CENTER_RADIUS = 60;   // r1: center circle radius (px)
-        const KNOB_RING_INNER = 52;      // r2: ring inner edge (px) - covered by center
-        const KNOB_RING_OUTER = 78;      // r3: ring outer edge (px)
+        const KNOB_RING_OUTER = 100;     // r3: visible ring outer edge (container edge)
         const KNOB_TOUCH_INNER_TOLERANCE = 5;   // px inside r1 to allow
-        const KNOB_TOUCH_OUTER_TOLERANCE = 7;   // px outside r3 to allow
+        const KNOB_TOUCH_OUTER_TOLERANCE = 10;  // px outside r3 to allow
 
         // Gradient colors
         const COLOR_NAVY = '#1a237e';    // 0-70
