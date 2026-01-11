@@ -19,14 +19,11 @@
 
 ## Technical Context
 
-### Known Issues (Resolved)
-- **High CPU after RDP disconnect** - FIXED with Mesa3D software OpenGL
-  - **Root cause**: GLMv5 is an OpenGL application. When RDP disconnects and tscon switches session to console, the OpenGL context created during RDP becomes invalid, causing GLM to spin at high CPU.
-  - **Solution**: Install Mesa3D software OpenGL renderer (llvmpipe) for GLM only:
-    1. Download MSVC build from https://github.com/pal1000/mesa-dist-win/releases
-    2. Copy all DLLs from `x64/` folder to GLM's installation directory (e.g., `C:\Program Files\Genelec\GLM5\`)
-    3. Windows DLL loading prefers local directory, so GLM uses software OpenGL while other apps use hardware
-  - Software rendering is immune to display context switching because it's CPU-based, not GPU-bound
+### Known Issues
+- **High CPU after RDP disconnect**: When RDP connects then disconnects on a headless-started VM, GLM may spin at high CPU after tscon reconnects the session to console. This is due to display driver context mismatch.
+  - The issue only occurs on the FIRST RDP connect/disconnect after headless VM start
+  - Subsequent RDP connect/disconnect cycles work fine
+  - Reconnecting via RDP resolves the high CPU
 
 ### Architecture Notes
 - Multi-threaded application (HID, MIDI, Consumer, Logging threads)
