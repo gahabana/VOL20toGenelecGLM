@@ -504,6 +504,13 @@
         const BREAK1_ANGLE = -120;  // 8 o'clock
         const BREAK2_ANGLE = 0;     // 12 o'clock
 
+        // Knob geometry (for touch area validation)
+        const KNOB_CENTER_RADIUS = 60;   // r1: center circle radius (px)
+        const KNOB_RING_INNER = 52;      // r2: ring inner edge (px) - covered by center
+        const KNOB_RING_OUTER = 78;      // r3: ring outer edge (px)
+        const KNOB_TOUCH_INNER_TOLERANCE = 5;   // px inside r1 to allow
+        const KNOB_TOUCH_OUTER_TOLERANCE = 7;   // px outside r3 to allow
+
         // Gradient colors
         const COLOR_NAVY = '#1a237e';    // 0-70
         const COLOR_PURPLE = '#bb86fc';  // 70-90
@@ -711,6 +718,25 @@
             powerBtn.classList.toggle('active', state.power && !isPowerTransitioning);
         }
 
+        // Check if touch/click is within the allowed ring area
+        function isWithinKnobRing(e) {
+            const rect = volumeKnob.getBoundingClientRect();
+            const centerX = rect.left + rect.width / 2;
+            const centerY = rect.top + rect.height / 2;
+
+            const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+            const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+
+            const deltaX = clientX - centerX;
+            const deltaY = clientY - centerY;
+            const distance = Math.sqrt(deltaX * deltaX + deltaY * deltaY);
+
+            const minRadius = KNOB_CENTER_RADIUS - KNOB_TOUCH_INNER_TOLERANCE;  // 55px
+            const maxRadius = KNOB_RING_OUTER + KNOB_TOUCH_OUTER_TOLERANCE;     // 85px
+
+            return distance >= minRadius && distance <= maxRadius;
+        }
+
         // Get angle from pointer position relative to knob center
         function getAngleFromEvent(e) {
             const rect = volumeKnob.getBoundingClientRect();
@@ -737,6 +763,11 @@
             const now = Date.now();
             const recentlyAdjusted = (now - volumeAccel.lastTime) < volumeAccel.adjustWindow;
             if (recentlyAdjusted) {
+                return;
+            }
+
+            // Only allow drag to start within the ring area (not center or outside)
+            if (!isWithinKnobRing(e)) {
                 return;
             }
 
