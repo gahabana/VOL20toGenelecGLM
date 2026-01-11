@@ -509,8 +509,17 @@
         // so 78% in CSS = ~110px, but clipped at container edge (100px)
         const KNOB_CENTER_RADIUS = 60;   // r1: center circle radius (px)
         const KNOB_RING_OUTER = 100;     // r3: visible ring outer edge (container edge)
-        const KNOB_TOUCH_INNER_TOLERANCE = 5;   // px inside r1 to allow
-        const KNOB_TOUCH_OUTER_TOLERANCE = 10;  // px outside r3 to allow
+
+        // Touch area tolerances - expand the clickable/draggable area beyond visible ring
+        // INNER: how many px INSIDE the center circle edge (r1) to accept
+        //        Higher value = accepts touches closer to center (over the dB display)
+        //        Touch area inner edge = KNOB_CENTER_RADIUS - KNOB_TOUCH_INNER_TOLERANCE
+        const KNOB_TOUCH_INNER_TOLERANCE = 15;  // accepts from 45px (60-15) from center
+
+        // OUTER: how many px OUTSIDE the ring outer edge (r3) to accept
+        //        Higher value = accepts touches beyond the visible ring
+        //        Touch area outer edge = KNOB_RING_OUTER + KNOB_TOUCH_OUTER_TOLERANCE
+        const KNOB_TOUCH_OUTER_TOLERANCE = 10;  // accepts up to 110px (100+10) from center
 
         // Gradient colors
         const COLOR_NAVY = '#1a237e';    // 0-70
