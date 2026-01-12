@@ -100,7 +100,7 @@
         .knob-row {
             display: flex;
             align-items: center;
-            gap: 16px;
+            gap: 24px;
         }
 
         .volume-step-btn {
@@ -117,6 +117,8 @@
             transition: all 0.2s;
             flex-shrink: 0;
             box-shadow: var(--shadow);
+            position: relative;
+            z-index: 10;
             /* Prevent double-tap zoom on mobile */
             touch-action: manipulation;
         }
