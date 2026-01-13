@@ -597,13 +597,18 @@ def prime_rdp_session() -> bool:
 
         proc = subprocess.Popen(
             cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
         )
 
         # Wait for connection to establish
         logger.debug("FreeRDP connecting...")
         time.sleep(3)
+
+        # Check if RDP session was created
+        query_result = subprocess.run(["query", "session"], capture_output=True, timeout=5)
+        session_output = query_result.stdout.decode('utf-8', errors='replace')
+        logger.debug(f"Sessions after FreeRDP connect: {session_output.strip()}")
 
         # Reconnect session to console WHILE FreeRDP is still connected
         # (if we kill FreeRDP first, Windows auto-reconnects to console and tscon fails)
@@ -625,15 +630,6 @@ def prime_rdp_session() -> bool:
             proc.wait(timeout=2)
         except subprocess.TimeoutExpired:
             proc.kill()
-
-        # Capture any output for debugging
-        stdout, stderr = proc.communicate(timeout=2)
-        if stderr:
-            stderr_text = stderr.decode('utf-8', errors='replace').strip()
-            # Log first few lines of stderr
-            for line in stderr_text.split('\n')[:5]:
-                if '[ERROR]' in line or '[WARN]' in line:
-                    logger.debug(f"FreeRDP: {line}")
 
         logger.debug("FreeRDP disconnected")
 
