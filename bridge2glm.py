@@ -595,14 +595,11 @@ def prime_rdp_session() -> bool:
         safe_cmd = [c if not c.startswith("/p:") else "/p:****" for c in cmd]
         logger.debug(f"FreeRDP command: {' '.join(safe_cmd)}")
 
-        # Use 'start' to launch FreeRDP like a normal Windows GUI app
-        # This may help with NLA authentication which needs desktop context
-        start_cmd = ["cmd", "/c", "start", "", wfreerdp,
-                     "/v:localhost", "/u:" + username, "/p:" + password, "/cert:ignore", "/sec:nla"]
+        # Build command string for shell execution (closest to manual typing)
+        cmd_str = f'"{wfreerdp}" /v:localhost /u:{username} /p:{password} /cert:ignore /sec:nla'
         proc = subprocess.Popen(
-            start_cmd,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            cmd_str,
+            shell=True,
         )
 
         # Wait for connection to establish
@@ -628,7 +625,7 @@ def prime_rdp_session() -> bool:
             stderr = result.stderr.decode('utf-8', errors='ignore').strip()
             logger.debug(f"tscon returned non-zero: {stderr}")
 
-        # Now kill FreeRDP (use taskkill since we launched via 'start')
+        # Kill FreeRDP process
         subprocess.run(["taskkill", "/f", "/im", "wfreerdp.exe"],
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         try:
