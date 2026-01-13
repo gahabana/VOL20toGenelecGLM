@@ -61,13 +61,25 @@ reg add "HKLM\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-T
 
 **3. Configure RDP Credentials**
 
-The script currently has credentials hardcoded in `bridge2glm.py` in the `prime_rdp_session()` function:
-```python
-[wfreerdp, "/v:localhost", "/u:.\\zh", "/p:qwe2qwe2", "/cert:ignore", "/sec:nla"]
+Credentials are stored securely in Windows Credential Manager (not hardcoded in the script).
+
+Add credentials using `cmdkey`:
+```cmd
+cmdkey /add:localhost /user:.\YOUR_USERNAME /pass:YOUR_PASSWORD
 ```
 
-Update the `/u:` (username) and `/p:` (password) values to match your Windows user account.
-**Important**: Keep the `.\` prefix before the username - this is required for NLA to work.
+**Important**: Include the `.\` prefix before the username - this is required for NLA to work with local accounts.
+
+To verify credentials are stored:
+```cmd
+cmdkey /list:localhost
+```
+
+To update or remove credentials:
+```cmd
+cmdkey /delete:localhost
+cmdkey /add:localhost /user:.\YOUR_USERNAME /pass:NEW_PASSWORD
+```
 
 **4. Verify Setup**
 
@@ -83,12 +95,15 @@ This should:
 
 **Note**: The `.\` prefix specifies the local machine domain, which is required for NLA authentication with local accounts.
 
+**Security**: The script reads credentials from Windows Credential Manager at runtime and passes them to FreeRDP via stdin (not visible in process list). Credentials are encrypted by Windows DPAPI and tied to your user account.
+
 **5. How It Works**
 
 At script startup (`bridge2glm.py`):
 1. `needs_rdp_priming()` checks if priming was already done this boot (via `%TEMP%\rdp_primed.flag`)
 2. If not primed, `prime_rdp_session()` runs:
-   - Starts FreeRDP connection to localhost
+   - Reads credentials from Windows Credential Manager (`localhost` or `TERMSRV/localhost`)
+   - Starts FreeRDP connection to localhost (password passed via stdin)
    - Waits 3 seconds for connection to establish
    - Kills FreeRDP process (disconnects)
    - Runs `tscon 1 /dest:console` to reconnect session to console
@@ -100,6 +115,7 @@ At script startup (`bridge2glm.py`):
 | Issue | Cause | Solution |
 |-------|-------|----------|
 | `wfreerdp not found` | Not in PATH | Add FreeRDP directory to PATH |
+| `No credentials found` | Credential Manager empty | Run `cmdkey /add:localhost /user:.\USERNAME /pass:PASSWORD` |
 | `SEC_E_UNKNOWN_CREDENTIALS` | Missing `.\` prefix or wrong password | Use `.\username` syntax, verify password |
 | `HYBRID_REQUIRED_BY_SERVER` | NLA required but not using `/sec:nla` | Add `/sec:nla` to command |
 | Priming runs every boot | Flag file issue | Check `%TEMP%\rdp_primed.flag` exists and is writable |

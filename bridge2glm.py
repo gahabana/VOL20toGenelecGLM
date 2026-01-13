@@ -484,6 +484,61 @@ def needs_rdp_priming() -> bool:
     return True  # Need to prime
 
 
+def get_credential_from_manager(target: str) -> tuple[str, str] | None:
+    """
+    Read credentials from Windows Credential Manager.
+
+    Args:
+        target: The credential target name (e.g., "localhost", "TERMSRV/localhost")
+
+    Returns:
+        Tuple of (username, password) if found, None otherwise.
+    """
+    if not IS_WINDOWS:
+        return None
+
+    import ctypes
+    from ctypes import wintypes
+
+    # Windows Credential Manager API
+    advapi32 = ctypes.windll.advapi32
+
+    CRED_TYPE_DOMAIN_PASSWORD = 2
+    CRED_TYPE_GENERIC = 1
+
+    class CREDENTIAL(ctypes.Structure):
+        _fields_ = [
+            ("Flags", wintypes.DWORD),
+            ("Type", wintypes.DWORD),
+            ("TargetName", wintypes.LPWSTR),
+            ("Comment", wintypes.LPWSTR),
+            ("LastWritten", wintypes.FILETIME),
+            ("CredentialBlobSize", wintypes.DWORD),
+            ("CredentialBlob", ctypes.POINTER(ctypes.c_ubyte)),
+            ("Persist", wintypes.DWORD),
+            ("AttributeCount", wintypes.DWORD),
+            ("Attributes", ctypes.c_void_p),
+            ("TargetAlias", wintypes.LPWSTR),
+            ("UserName", wintypes.LPWSTR),
+        ]
+
+    # Try different credential types
+    for cred_type in [CRED_TYPE_DOMAIN_PASSWORD, CRED_TYPE_GENERIC]:
+        pcred = ctypes.POINTER(CREDENTIAL)()
+        if advapi32.CredReadW(target, cred_type, 0, ctypes.byref(pcred)):
+            try:
+                cred = pcred.contents
+                username = cred.UserName
+                # Extract password from blob
+                password_bytes = bytes(cred.CredentialBlob[:cred.CredentialBlobSize])
+                password = password_bytes.decode('utf-16-le')
+                return (username, password)
+            finally:
+                advapi32.CredFree(pcred)
+
+    return None
+
+
 def prime_rdp_session() -> bool:
     """
     Prime the RDP session to prevent high CPU after disconnect.
@@ -491,6 +546,9 @@ def prime_rdp_session() -> bool:
     This does an RDP connect/disconnect cycle using FreeRDP, which initializes
     the Windows display driver properly. Without this, GLM (OpenGL app) may
     consume high CPU after the first RDP disconnect on a headless VM.
+
+    Credentials are read from Windows Credential Manager for security.
+    To set up: cmdkey /add:localhost /user:.\USERNAME /pass:PASSWORD
 
     Returns True if priming succeeded, False otherwise.
     """
@@ -506,17 +564,42 @@ def prime_rdp_session() -> bool:
         logger.warning("RDP priming skipped: wfreerdp not found in PATH")
         return False
 
+    # Try to get credentials from Windows Credential Manager
+    # Try multiple target names that might have been created
+    credential = None
+    for target in ["localhost", "TERMSRV/localhost"]:
+        credential = get_credential_from_manager(target)
+        if credential:
+            logger.debug(f"Found credential for target: {target}")
+            break
+
+    if not credential:
+        logger.warning(
+            "RDP priming skipped: No credentials found in Windows Credential Manager. "
+            "Run: cmdkey /add:localhost /user:.\\USERNAME /pass:PASSWORD"
+        )
+        return False
+
+    username, password = credential
+    # Ensure username has local domain prefix for NLA
+    if not username.startswith(".\\") and "\\" not in username:
+        username = ".\\" + username
+
     logger.info("Priming RDP session to prevent high CPU after disconnect...")
 
     try:
         # Start FreeRDP connection to localhost
+        # Use /from-stdin:force to pass password securely (not visible in process list)
         # Use explicit local domain (.\user) for NLA to work properly
-        # This allows NLA to remain enabled for better security
         proc = subprocess.Popen(
-            [wfreerdp, "/v:localhost", "/u:.\\zh", "/p:qwe2qwe2", "/cert:ignore", "/sec:nla"],
+            [wfreerdp, "/v:localhost", "/u:" + username, "/cert:ignore", "/sec:nla", "/from-stdin:force"],
+            stdin=subprocess.PIPE,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
+        # Send password via stdin
+        proc.stdin.write(password.encode('utf-8'))
+        proc.stdin.close()
 
         # Wait for connection to establish
         logger.debug("FreeRDP connecting...")
