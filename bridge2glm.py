@@ -564,9 +564,26 @@ def prime_rdp_session() -> bool:
             stderr=subprocess.DEVNULL,
         )
 
-        # Wait for connection to establish
+        # Wait for RDP session to establish (poll every 0.5s, max 10s)
         logger.debug("FreeRDP connecting...")
-        time.sleep(3)
+        rdp_connected = False
+        for _ in range(20):
+            time.sleep(0.5)
+            result = subprocess.run(["query", "session"], capture_output=True, timeout=5)
+            output = result.stdout.decode('utf-8', errors='replace')
+            if "rdp-tcp#" in output:
+                rdp_connected = True
+                logger.debug("RDP session detected")
+                break
+
+        if not rdp_connected:
+            logger.warning("FreeRDP failed to establish RDP session within 10s")
+            proc.terminate()
+            try:
+                proc.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+            return False
 
         # Kill FreeRDP to disconnect
         proc.terminate()
@@ -576,7 +593,6 @@ def prime_rdp_session() -> bool:
             proc.kill()
 
         logger.debug("FreeRDP disconnected")
-        time.sleep(1)
 
         # Reconnect session to console
         result = subprocess.run(
