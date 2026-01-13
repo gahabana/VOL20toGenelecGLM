@@ -594,20 +594,28 @@ def prime_rdp_session() -> bool:
     logger.info("Priming RDP session to prevent high CPU after disconnect...")
 
     try:
-        # Build command string for shell execution
-        # shell=True is needed for NLA authentication to work properly
-        cmd_str = f'"{wfreerdp}" /v:localhost /u:{username} /p:{password} /cert:ignore /sec:nla'
+        # Start FreeRDP connection to localhost
         proc = subprocess.Popen(
-            cmd_str,
-            shell=True,
+            [wfreerdp, "/v:localhost", "/u:" + username, "/p:" + password, "/cert:ignore", "/sec:nla"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
         )
 
         # Wait for connection to establish
         logger.debug("FreeRDP connecting...")
         time.sleep(3)
 
-        # Reconnect session to console WHILE FreeRDP is still connected
-        # (if we kill FreeRDP first, Windows auto-reconnects to console and tscon fails)
+        # Kill FreeRDP to disconnect
+        proc.terminate()
+        try:
+            proc.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+
+        logger.debug("FreeRDP disconnected")
+        time.sleep(1)
+
+        # Reconnect session to console
         result = subprocess.run(
             ["tscon", "1", "/dest:console"],
             capture_output=True,
@@ -615,25 +623,13 @@ def prime_rdp_session() -> bool:
         )
 
         if result.returncode == 0:
-            logger.debug("tscon reconnected session to console")
+            logger.info("RDP session primed successfully")
+            time.sleep(1)
+            return True
         else:
             stderr = result.stderr.decode('utf-8', errors='ignore').strip()
-            logger.debug(f"tscon returned non-zero: {stderr}")
-
-        # Kill FreeRDP process
-        subprocess.run(["taskkill", "/f", "/im", "wfreerdp.exe"],
-                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        try:
-            proc.wait(timeout=2)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-
-        logger.debug("FreeRDP disconnected")
-
-        # Priming succeeded if we got here - the FreeRDP connect/disconnect + tscon cycle is complete
-        logger.info("RDP session primed successfully")
-        time.sleep(1)
-        return True
+            logger.warning(f"tscon failed during priming: {stderr}")
+            return False
 
     except Exception as e:
         logger.error(f"RDP priming failed: {e}")
