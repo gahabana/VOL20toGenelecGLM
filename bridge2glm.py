@@ -605,7 +605,21 @@ def prime_rdp_session() -> bool:
         logger.debug("FreeRDP connecting...")
         time.sleep(3)
 
-        # Kill FreeRDP to disconnect
+        # Reconnect session to console WHILE FreeRDP is still connected
+        # (if we kill FreeRDP first, Windows auto-reconnects to console and tscon fails)
+        result = subprocess.run(
+            ["tscon", "1", "/dest:console"],
+            capture_output=True,
+            timeout=10,
+        )
+
+        if result.returncode == 0:
+            logger.debug("tscon reconnected session to console")
+        else:
+            stderr = result.stderr.decode('utf-8', errors='ignore').strip()
+            logger.debug(f"tscon returned non-zero: {stderr}")
+
+        # Now kill FreeRDP
         proc.terminate()
         try:
             proc.wait(timeout=2)
@@ -622,24 +636,8 @@ def prime_rdp_session() -> bool:
                     logger.debug(f"FreeRDP: {line}")
 
         logger.debug("FreeRDP disconnected")
-        time.sleep(1)
 
-        # Try to reconnect session to console (may fail if already on console, which is fine)
-        result = subprocess.run(
-            ["tscon", "1", "/dest:console"],
-            capture_output=True,
-            timeout=10,
-        )
-
-        if result.returncode == 0:
-            logger.debug("tscon reconnected session to console")
-        else:
-            # tscon failure is not critical - priming already happened via FreeRDP connect/disconnect
-            # Common failures: already on console (7045), wrong session ID, etc.
-            stderr = result.stderr.decode('utf-8', errors='ignore').strip()
-            logger.debug(f"tscon returned non-zero (may be already on console): {stderr}")
-
-        # Priming succeeded if we got here - the FreeRDP connect/disconnect cycle is what matters
+        # Priming succeeded if we got here - the FreeRDP connect/disconnect + tscon cycle is complete
         logger.info("RDP session primed successfully")
         time.sleep(1)
         return True
