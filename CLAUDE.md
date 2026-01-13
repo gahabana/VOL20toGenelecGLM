@@ -95,7 +95,7 @@ This should:
 
 **Note**: The `.\` prefix specifies the local machine domain, which is required for NLA authentication with local accounts.
 
-**Security**: The script reads credentials from Windows Credential Manager at runtime and passes them to FreeRDP via stdin (not visible in process list). Credentials are encrypted by Windows DPAPI and tied to your user account.
+**Security**: The script reads credentials from Windows Credential Manager at runtime. Credentials are encrypted by Windows DPAPI and tied to your user account.
 
 **5. How It Works**
 
@@ -103,7 +103,7 @@ At script startup (`bridge2glm.py`):
 1. `needs_rdp_priming()` checks if priming was already done this boot (via `%TEMP%\rdp_primed.flag`)
 2. If not primed, `prime_rdp_session()` runs:
    - Reads credentials from Windows Credential Manager (`localhost` or `TERMSRV/localhost`)
-   - Starts FreeRDP connection to localhost (password passed via stdin)
+   - Starts FreeRDP connection to localhost
    - Waits 3 seconds for connection to establish
    - Kills FreeRDP process (disconnects)
    - Runs `tscon 1 /dest:console` to reconnect session to console
