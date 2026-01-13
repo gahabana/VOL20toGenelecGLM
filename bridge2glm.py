@@ -565,24 +565,9 @@ def prime_rdp_session() -> bool:
         proc = subprocess.Popen(cmd_str, shell=True)
         logger.debug(f"FreeRDP process started (PID {proc.pid}) in {time.time()-t_start:.2f}s")
 
-        # Wait for RDP session to establish (poll every 0.5s, max 10s)
-        logger.debug("Polling for RDP session...")
-        rdp_connected = False
-        for _ in range(20):
-            time.sleep(0.5)
-            result = subprocess.run(["query", "session"], capture_output=True, timeout=5)
-            output = result.stdout.decode('utf-8', errors='replace')
-            if "rdp-tcp#" in output:
-                rdp_connected = True
-                logger.debug("RDP session detected")
-                break
-
-        if not rdp_connected:
-            logger.warning("FreeRDP failed to establish RDP session within 10s")
-            # With shell=True, proc.terminate() only kills cmd.exe, not wfreerdp
-            subprocess.run(["taskkill", "/f", "/im", "wfreerdp.exe"],
-                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            return False
+        # Wait for connection to establish
+        logger.debug("Waiting 3s for RDP connection...")
+        time.sleep(3)
 
         # Kill FreeRDP to disconnect (taskkill needed because shell=True)
         subprocess.run(["taskkill", "/f", "/im", "wfreerdp.exe"],
