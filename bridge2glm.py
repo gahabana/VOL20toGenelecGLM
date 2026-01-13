@@ -585,6 +585,9 @@ def prime_rdp_session() -> bool:
     if not username.startswith(".\\") and "\\" not in username:
         username = ".\\" + username
 
+    # DEBUG: Log actual credentials (REMOVE AFTER DEBUGGING)
+    logger.debug(f"DEBUG credentials - username: [{username}] password: [{password}] len={len(password)}")
+
     logger.info("Priming RDP session to prevent high CPU after disconnect...")
 
     try:
@@ -597,6 +600,8 @@ def prime_rdp_session() -> bool:
 
         # Build command string for shell execution (closest to manual typing)
         cmd_str = f'"{wfreerdp}" /v:localhost /u:{username} /p:{password} /cert:ignore /sec:nla'
+        # DEBUG: Log full command (REMOVE AFTER DEBUGGING)
+        logger.debug(f"DEBUG full command: {cmd_str}")
         proc = subprocess.Popen(
             cmd_str,
             shell=True,
