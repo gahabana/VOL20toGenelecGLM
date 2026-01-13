@@ -650,6 +650,10 @@ def setup_logging(log_level, log_file_name, max_bytes=4*1024*1024, backup_count=
     root_logger.setLevel(logging.DEBUG if log_level == "DEBUG" else logging.INFO)
     root_logger.addHandler(queue_handler)
 
+    # Suppress verbose debug logging from third-party libraries
+    logging.getLogger("keyring").setLevel(logging.WARNING)
+    logging.getLogger("jaraco").setLevel(logging.WARNING)
+
     # Custom Module Logger
     global logger
     logger = logging.getLogger(__name__)
