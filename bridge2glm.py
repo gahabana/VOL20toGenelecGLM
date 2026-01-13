@@ -486,61 +486,24 @@ def needs_rdp_priming() -> bool:
 
 def get_credential_from_manager(target: str) -> tuple[str, str] | None:
     """
-    Read credentials from Windows Credential Manager.
+    Read credentials from Windows Credential Manager using keyring library.
 
     Args:
-        target: The credential target name (e.g., "localhost", "TERMSRV/localhost")
+        target: The credential target name (e.g., "localhost")
 
     Returns:
         Tuple of (username, password) if found, None otherwise.
     """
-    if not IS_WINDOWS:
+    try:
+        import keyring
+    except ImportError:
+        logger.warning("keyring module not installed, cannot read credentials")
         return None
 
-    import ctypes
-    from ctypes import wintypes
-
-    # Windows Credential Manager API
-    advapi32 = ctypes.windll.advapi32
-
-    CRED_TYPE_DOMAIN_PASSWORD = 2
-    CRED_TYPE_GENERIC = 1
-
-    class CREDENTIAL(ctypes.Structure):
-        _fields_ = [
-            ("Flags", wintypes.DWORD),
-            ("Type", wintypes.DWORD),
-            ("TargetName", wintypes.LPWSTR),
-            ("Comment", wintypes.LPWSTR),
-            ("LastWritten", wintypes.FILETIME),
-            ("CredentialBlobSize", wintypes.DWORD),
-            ("CredentialBlob", ctypes.POINTER(ctypes.c_ubyte)),
-            ("Persist", wintypes.DWORD),
-            ("AttributeCount", wintypes.DWORD),
-            ("Attributes", ctypes.c_void_p),
-            ("TargetAlias", wintypes.LPWSTR),
-            ("UserName", wintypes.LPWSTR),
-        ]
-
-    # Try different credential types
-    for cred_type in [CRED_TYPE_GENERIC, CRED_TYPE_DOMAIN_PASSWORD]:
-        pcred = ctypes.POINTER(CREDENTIAL)()
-        if advapi32.CredReadW(target, cred_type, 0, ctypes.byref(pcred)):
-            try:
-                cred = pcred.contents
-                username = cred.UserName
-                blob_size = cred.CredentialBlobSize
-                logger.debug(f"Credential found: type={cred_type}, user={username}, blob_size={blob_size}")
-
-                if blob_size > 0:
-                    # Extract password from blob
-                    password_bytes = bytes(cred.CredentialBlob[:blob_size])
-                    password = password_bytes.decode('utf-16-le')
-                    return (username, password)
-                else:
-                    logger.debug(f"Credential blob is empty for type {cred_type}, trying next type")
-            finally:
-                advapi32.CredFree(pcred)
+    cred = keyring.get_credential(target, None)
+    if cred and cred.password:
+        logger.debug(f"Credential found for target: {target}, user: {cred.username}")
+        return (cred.username, cred.password)
 
     return None
 
