@@ -579,19 +579,15 @@ def prime_rdp_session() -> bool:
 
         if not rdp_connected:
             logger.warning("FreeRDP failed to establish RDP session within 10s")
-            proc.terminate()
-            try:
-                proc.wait(timeout=2)
-            except subprocess.TimeoutExpired:
-                proc.kill()
+            # With shell=True, proc.terminate() only kills cmd.exe, not wfreerdp
+            subprocess.run(["taskkill", "/f", "/im", "wfreerdp.exe"],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             return False
 
-        # Kill FreeRDP to disconnect
-        proc.terminate()
-        try:
-            proc.wait(timeout=2)
-        except subprocess.TimeoutExpired:
-            proc.kill()
+        # Kill FreeRDP to disconnect (taskkill needed because shell=True)
+        subprocess.run(["taskkill", "/f", "/im", "wfreerdp.exe"],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        time.sleep(0.5)  # Give Windows time to clean up RDP session
 
         logger.debug("FreeRDP disconnected")
 
