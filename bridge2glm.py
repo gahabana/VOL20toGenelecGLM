@@ -523,16 +523,22 @@ def get_credential_from_manager(target: str) -> tuple[str, str] | None:
         ]
 
     # Try different credential types
-    for cred_type in [CRED_TYPE_DOMAIN_PASSWORD, CRED_TYPE_GENERIC]:
+    for cred_type in [CRED_TYPE_GENERIC, CRED_TYPE_DOMAIN_PASSWORD]:
         pcred = ctypes.POINTER(CREDENTIAL)()
         if advapi32.CredReadW(target, cred_type, 0, ctypes.byref(pcred)):
             try:
                 cred = pcred.contents
                 username = cred.UserName
-                # Extract password from blob
-                password_bytes = bytes(cred.CredentialBlob[:cred.CredentialBlobSize])
-                password = password_bytes.decode('utf-16-le')
-                return (username, password)
+                blob_size = cred.CredentialBlobSize
+                logger.debug(f"Credential found: type={cred_type}, user={username}, blob_size={blob_size}")
+
+                if blob_size > 0:
+                    # Extract password from blob
+                    password_bytes = bytes(cred.CredentialBlob[:blob_size])
+                    password = password_bytes.decode('utf-16-le')
+                    return (username, password)
+                else:
+                    logger.debug(f"Credential blob is empty for type {cred_type}, trying next type")
             finally:
                 advapi32.CredFree(pcred)
 
