@@ -548,7 +548,7 @@ def prime_rdp_session() -> bool:
     consume high CPU after the first RDP disconnect on a headless VM.
 
     Credentials are read from Windows Credential Manager for security.
-    To set up: cmdkey /add:localhost /user:.\USERNAME /pass:PASSWORD
+    To set up: cmdkey /add:localhost /user:.\\USERNAME /pass:PASSWORD
 
     Returns True if priming succeeded, False otherwise.
     """
