@@ -562,8 +562,6 @@ def prime_rdp_session() -> bool:
         t_start = time.time()
         proc = subprocess.Popen(
             [wfreerdp, "/v:localhost", "/u:" + username, "/p:" + password, "/cert:ignore", "/sec:nla"],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
         )
         logger.debug(f"FreeRDP process started (PID {proc.pid}) in {time.time()-t_start:.2f}s")
 
