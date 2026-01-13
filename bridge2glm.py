@@ -558,11 +558,11 @@ def prime_rdp_session() -> bool:
 
     try:
         # Start FreeRDP connection to localhost
+        # Use shell=True - without it, Popen blocks for ~12s on Windows
+        cmd_str = f'"{wfreerdp}" /v:localhost /u:{username} /p:{password} /cert:ignore /sec:nla'
         logger.debug("Starting FreeRDP process...")
         t_start = time.time()
-        proc = subprocess.Popen(
-            [wfreerdp, "/v:localhost", "/u:" + username, "/p:" + password, "/cert:ignore", "/sec:nla"],
-        )
+        proc = subprocess.Popen(cmd_str, shell=True)
         logger.debug(f"FreeRDP process started (PID {proc.pid}) in {time.time()-t_start:.2f}s")
 
         # Wait for RDP session to establish (poll every 0.5s, max 10s)
