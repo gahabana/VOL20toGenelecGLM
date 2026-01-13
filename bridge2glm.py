@@ -599,6 +599,7 @@ def prime_rdp_session() -> bool:
             cmd,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
+            creationflags=subprocess.CREATE_NEW_CONSOLE,
         )
 
         # Wait for connection to establish
