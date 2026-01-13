@@ -590,10 +590,15 @@ def prime_rdp_session() -> bool:
     try:
         # Start FreeRDP connection to localhost
         # Use explicit local domain (.\user) for NLA to work properly
+        cmd = [wfreerdp, "/v:localhost", "/u:" + username, "/p:" + password, "/cert:ignore", "/sec:nla"]
+        # Log command (mask password)
+        safe_cmd = [c if not c.startswith("/p:") else "/p:****" for c in cmd]
+        logger.debug(f"FreeRDP command: {' '.join(safe_cmd)}")
+
         proc = subprocess.Popen(
-            [wfreerdp, "/v:localhost", "/u:" + username, "/p:" + password, "/cert:ignore", "/sec:nla"],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
         )
 
         # Wait for connection to establish
@@ -606,6 +611,15 @@ def prime_rdp_session() -> bool:
             proc.wait(timeout=2)
         except subprocess.TimeoutExpired:
             proc.kill()
+
+        # Capture any output for debugging
+        stdout, stderr = proc.communicate(timeout=2)
+        if stderr:
+            stderr_text = stderr.decode('utf-8', errors='replace').strip()
+            # Log first few lines of stderr
+            for line in stderr_text.split('\n')[:5]:
+                if '[ERROR]' in line or '[WARN]' in line:
+                    logger.debug(f"FreeRDP: {line}")
 
         logger.debug("FreeRDP disconnected")
         time.sleep(1)
