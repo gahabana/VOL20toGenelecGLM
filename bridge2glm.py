@@ -558,23 +558,25 @@ def prime_rdp_session() -> bool:
 
     try:
         # Start FreeRDP connection to localhost
-        # Use shell=True - without it, Popen blocks for ~12s on Windows
-        cmd_str = f'"{wfreerdp}" /v:localhost /u:{username} /p:{password} /cert:ignore /sec:nla'
-        logger.debug("Starting FreeRDP process...")
-        t_start = time.time()
-        proc = subprocess.Popen(cmd_str, shell=True)
-        logger.debug(f"FreeRDP process started (PID {proc.pid}) in {time.time()-t_start:.2f}s")
+        proc = subprocess.Popen(
+            [wfreerdp, "/v:localhost", "/u:" + username, "/p:" + password, "/cert:ignore", "/sec:nla"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
 
         # Wait for connection to establish
-        logger.debug("Waiting 3s for RDP connection...")
+        logger.debug("FreeRDP connecting...")
         time.sleep(3)
 
-        # Kill FreeRDP to disconnect (taskkill needed because shell=True)
-        subprocess.run(["taskkill", "/f", "/im", "wfreerdp.exe"],
-                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        time.sleep(0.5)  # Give Windows time to clean up RDP session
+        # Kill FreeRDP to disconnect
+        proc.terminate()
+        try:
+            proc.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            proc.kill()
 
         logger.debug("FreeRDP disconnected")
+        time.sleep(1)
 
         # Reconnect session to console
         result = subprocess.run(
