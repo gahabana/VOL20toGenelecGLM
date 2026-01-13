@@ -589,17 +589,12 @@ def prime_rdp_session() -> bool:
 
     try:
         # Start FreeRDP connection to localhost
-        # Use /from-stdin:force to pass password securely (not visible in process list)
         # Use explicit local domain (.\user) for NLA to work properly
         proc = subprocess.Popen(
-            [wfreerdp, "/v:localhost", "/u:" + username, "/cert:ignore", "/sec:nla", "/from-stdin:force"],
-            stdin=subprocess.PIPE,
+            [wfreerdp, "/v:localhost", "/u:" + username, "/p:" + password, "/cert:ignore", "/sec:nla"],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
-        # Send password via stdin
-        proc.stdin.write(password.encode('utf-8'))
-        proc.stdin.close()
 
         # Wait for connection to establish
         logger.debug("FreeRDP connecting...")
