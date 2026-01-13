@@ -582,7 +582,7 @@ def prime_rdp_session() -> bool:
     if not credential:
         logger.warning(
             "RDP priming skipped: No credentials found in Windows Credential Manager. "
-            "Run: cmdkey /add:localhost /user:.\\USERNAME /pass:PASSWORD"
+            "Run: cmdkey /generic:localhost /user:USERNAME /pass:PASSWORD"
         )
         return False
 
@@ -591,23 +591,12 @@ def prime_rdp_session() -> bool:
     if not username.startswith(".\\") and "\\" not in username:
         username = ".\\" + username
 
-    # DEBUG: Log actual credentials (REMOVE AFTER DEBUGGING)
-    logger.debug(f"DEBUG credentials - username: [{username}] password: [{password}] len={len(password)}")
-
     logger.info("Priming RDP session to prevent high CPU after disconnect...")
 
     try:
-        # Start FreeRDP connection to localhost
-        # Use explicit local domain (.\user) for NLA to work properly
-        cmd = [wfreerdp, "/v:localhost", "/u:" + username, "/p:" + password, "/cert:ignore", "/sec:nla"]
-        # Log command (mask password)
-        safe_cmd = [c if not c.startswith("/p:") else "/p:****" for c in cmd]
-        logger.debug(f"FreeRDP command: {' '.join(safe_cmd)}")
-
-        # Build command string for shell execution (closest to manual typing)
+        # Build command string for shell execution
+        # shell=True is needed for NLA authentication to work properly
         cmd_str = f'"{wfreerdp}" /v:localhost /u:{username} /p:{password} /cert:ignore /sec:nla'
-        # DEBUG: Log full command (REMOVE AFTER DEBUGGING)
-        logger.debug(f"DEBUG full command: {cmd_str}")
         proc = subprocess.Popen(
             cmd_str,
             shell=True,
@@ -616,11 +605,6 @@ def prime_rdp_session() -> bool:
         # Wait for connection to establish
         logger.debug("FreeRDP connecting...")
         time.sleep(3)
-
-        # Check if RDP session was created
-        query_result = subprocess.run(["query", "session"], capture_output=True, timeout=5)
-        session_output = query_result.stdout.decode('utf-8', errors='replace')
-        logger.debug(f"Sessions after FreeRDP connect: {session_output.strip()}")
 
         # Reconnect session to console WHILE FreeRDP is still connected
         # (if we kill FreeRDP first, Windows auto-reconnects to console and tscon fails)

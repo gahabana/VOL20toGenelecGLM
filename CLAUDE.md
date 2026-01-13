@@ -63,12 +63,12 @@ reg add "HKLM\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-T
 
 Credentials are stored securely in Windows Credential Manager (not hardcoded in the script).
 
-Add credentials using `cmdkey`:
+Add credentials using `cmdkey` with the `/generic:` flag (required for API access):
 ```cmd
-cmdkey /add:localhost /user:.\YOUR_USERNAME /pass:YOUR_PASSWORD
+cmdkey /generic:localhost /user:YOUR_USERNAME /pass:YOUR_PASSWORD
 ```
 
-**Important**: Include the `.\` prefix before the username - this is required for NLA to work with local accounts.
+**Note**: Use `/generic:` not `/add:`. Generic credentials expose the password via the Windows API, while domain credentials don't. The script will automatically add the `.\` prefix for NLA.
 
 To verify credentials are stored:
 ```cmd
@@ -78,7 +78,7 @@ cmdkey /list:localhost
 To update or remove credentials:
 ```cmd
 cmdkey /delete:localhost
-cmdkey /add:localhost /user:.\YOUR_USERNAME /pass:NEW_PASSWORD
+cmdkey /generic:localhost /user:YOUR_USERNAME /pass:NEW_PASSWORD
 ```
 
 **4. Verify Setup**
@@ -115,7 +115,7 @@ At script startup (`bridge2glm.py`):
 | Issue | Cause | Solution |
 |-------|-------|----------|
 | `wfreerdp not found` | Not in PATH | Add FreeRDP directory to PATH |
-| `No credentials found` | Credential Manager empty | Run `cmdkey /add:localhost /user:.\USERNAME /pass:PASSWORD` |
+| `No credentials found` | Credential Manager empty or wrong type | Run `cmdkey /generic:localhost /user:USERNAME /pass:PASSWORD` (use `/generic:` not `/add:`) |
 | `SEC_E_UNKNOWN_CREDENTIALS` | Missing `.\` prefix or wrong password | Use `.\username` syntax, verify password |
 | `HYBRID_REQUIRED_BY_SERVER` | NLA required but not using `/sec:nla` | Add `/sec:nla` to command |
 | Priming runs every boot | Flag file issue | Check `%TEMP%\rdp_primed.flag` exists and is writable |
