@@ -510,10 +510,10 @@ def prime_rdp_session() -> bool:
 
     try:
         # Start FreeRDP connection to localhost
-        # Credentials should be configured on the system
-        # /sec:tls is needed because NLA is disabled for this to work
+        # Use explicit local domain (.\user) for NLA to work properly
+        # This allows NLA to remain enabled for better security
         proc = subprocess.Popen(
-            [wfreerdp, "/v:localhost", "/u:zh", "/p:qwe2qwe2", "/cert:ignore", "/sec:tls"],
+            [wfreerdp, "/v:localhost", "/u:.\\zh", "/p:qwe2qwe2", "/cert:ignore", "/sec:nla"],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )

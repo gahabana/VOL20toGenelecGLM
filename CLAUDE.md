@@ -26,8 +26,8 @@
   - **Implementation**: `bridge2glm.py` uses FreeRDP (`wfreerdp.exe`) to do a quick localhost RDP connection at startup, then disconnects and reconnects to console via `tscon`.
   - **Requirements**:
     - FreeRDP must be installed and `wfreerdp.exe` in PATH
-    - NLA must be disabled on RDP server (registry: `HKLM\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp\UserAuthentication = 0`)
     - RDP credentials for localhost (currently hardcoded in script)
+    - Use explicit local domain syntax (`.\username`) for NLA compatibility
   - Priming only runs once per boot (tracked via `%TEMP%\rdp_primed.flag` with boot timestamp)
 
 #### RDP Priming Setup Instructions
@@ -44,42 +44,44 @@ https://github.com/FreeRDP/FreeRDP/releases
 - Copy `wfreerdp.exe` to a directory in your PATH (e.g., `C:\Users\<username>\AppData\Local\Microsoft\WindowsApps\`)
 - Verify installation: `where wfreerdp` should return the path
 
-**2. Disable NLA (Network Level Authentication)**
+**2. NLA Configuration**
 
-NLA must be disabled because FreeRDP's automated connection can't handle NLA prompts.
+NLA (Network Level Authentication) can remain **enabled** for better security. The key is to use explicit local domain syntax (`.\username`) when specifying credentials.
 
-From an elevated (Administrator) command prompt:
+To verify NLA is enabled (recommended):
 ```cmd
-reg add "HKLM\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp" /v UserAuthentication /t REG_DWORD /d 0 /f
+reg query "HKLM\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp" /v UserAuthentication
 ```
+Should show `UserAuthentication    REG_DWORD    0x1` (enabled).
 
-Or via GUI:
-1. Run `sysdm.cpl` (System Properties)
-2. Go to **Remote** tab
-3. Uncheck **"Allow connections only from computers running Remote Desktop with Network Level Authentication"**
-
-**Why**: Without disabling NLA, FreeRDP fails with `HYBRID_REQUIRED_BY_SERVER` error because it can't complete the CredSSP/NLA handshake in automated mode.
+**Note**: If you previously disabled NLA, you can re-enable it:
+```cmd
+reg add "HKLM\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp" /v UserAuthentication /t REG_DWORD /d 1 /f
+```
 
 **3. Configure RDP Credentials**
 
 The script currently has credentials hardcoded in `bridge2glm.py` in the `prime_rdp_session()` function:
 ```python
-[wfreerdp, "/v:localhost", "/u:zh", "/p:qwe2qwe2", "/cert:ignore", "/sec:tls"]
+[wfreerdp, "/v:localhost", "/u:.\\zh", "/p:qwe2qwe2", "/cert:ignore", "/sec:nla"]
 ```
 
 Update the `/u:` (username) and `/p:` (password) values to match your Windows user account.
+**Important**: Keep the `.\` prefix before the username - this is required for NLA to work.
 
 **4. Verify Setup**
 
 Test manually from command prompt (with no VNC/RDP connected):
 ```cmd
-wfreerdp /v:localhost /u:YOUR_USER /p:YOUR_PASS /cert:ignore /sec:tls
+wfreerdp /v:localhost /u:.\YOUR_USER /p:YOUR_PASS /cert:ignore /sec:nla
 ```
 
 This should:
 - Open an RDP window to localhost
 - Connect without prompting for credentials
 - You can close it manually after verifying it works
+
+**Note**: The `.\` prefix specifies the local machine domain, which is required for NLA authentication with local accounts.
 
 **5. How It Works**
 
@@ -98,8 +100,8 @@ At script startup (`bridge2glm.py`):
 | Issue | Cause | Solution |
 |-------|-------|----------|
 | `wfreerdp not found` | Not in PATH | Add FreeRDP directory to PATH |
-| `HYBRID_REQUIRED_BY_SERVER` | NLA enabled | Disable NLA via registry (step 2) |
-| `SEC_E_UNKNOWN_CREDENTIALS` | Wrong credentials or NLA | Check username/password, ensure NLA disabled |
+| `SEC_E_UNKNOWN_CREDENTIALS` | Missing `.\` prefix or wrong password | Use `.\username` syntax, verify password |
+| `HYBRID_REQUIRED_BY_SERVER` | NLA required but not using `/sec:nla` | Add `/sec:nla` to command |
 | Priming runs every boot | Flag file issue | Check `%TEMP%\rdp_primed.flag` exists and is writable |
 | High CPU still occurs | Priming failed or didn't run | Check logs for "RDP session primed successfully" |
 
