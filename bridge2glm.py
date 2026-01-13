@@ -586,6 +586,7 @@ def prime_rdp_session() -> bool:
         )
 
         if result.returncode == 0:
+            logger.debug("tscon reconnected session to console")
             logger.info("RDP session primed successfully")
             time.sleep(1)
             return True
