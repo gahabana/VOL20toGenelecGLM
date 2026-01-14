@@ -72,7 +72,7 @@ class GlmManagerConfig:
     process_name: str = "GLMv5"
 
     # CPU gating (only at initial start, not restarts)
-    cpu_threshold: float = 6.0  # % CPU considered "idle enough"
+    cpu_threshold: float = 10.0  # % CPU considered "idle enough"
     cpu_check_interval: float = 3.0  # seconds between checks
     cpu_max_checks: int = 100  # 100 * 3s = 5 minutes max wait
     cpu_gating_enabled: bool = True  # Set False to skip CPU check
