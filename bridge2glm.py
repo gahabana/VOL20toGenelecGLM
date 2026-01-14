@@ -5,7 +5,7 @@ Bridges a Fosi Audio VOL20 USB volume knob to Genelec GLM software via MIDI.
 Supports volume control, mute, dim, and power management with UI automation.
 """
 
-__version__ = "3.2.0"
+__version__ = "3.2.1"
 
 import time
 import signal
@@ -573,6 +573,7 @@ def prime_rdp_session() -> bool:
             if "rdp-tcp#" in output:
                 rdp_connected = True
                 logger.debug(f"RDP session detected after {(i+1)*0.5:.1f}s")
+                time.sleep(1.0)  # Allow Windows to fully register session before tscon
                 break
 
         if not rdp_connected:
@@ -790,6 +791,9 @@ class HIDToMIDIDaemon:
                 # Recreate power controller with PID to find correct window
                 self._power_controller = GlmPowerController(steal_focus=True, pid=pid)
                 logger.info(f"Power controller reinitialized after GLM restart (PID={pid})")
+
+                # Wait for GLM UI to fully render (splash screen ~5s + OpenGL init)
+                time.sleep(1.0)
 
                 # Sync power state from UI (overrides any MIDI-based detection)
                 state = self._power_controller.get_state()
