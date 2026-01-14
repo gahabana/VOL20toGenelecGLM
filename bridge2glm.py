@@ -558,10 +558,9 @@ def prime_rdp_session() -> bool:
 
     try:
         # Start FreeRDP connection to localhost
+        # Note: Don't use stdout/stderr=DEVNULL - causes 12s blocking delay on Windows
         proc = subprocess.Popen(
             [wfreerdp, "/v:localhost", "/u:" + username, "/p:" + password, "/cert:ignore", "/sec:nla"],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
         )
 
         # Wait for connection to establish
