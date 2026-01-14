@@ -73,8 +73,8 @@ class GlmManagerConfig:
 
     # CPU gating (only at initial start, not restarts)
     cpu_threshold: float = 10.0  # % CPU considered "idle enough"
-    cpu_check_interval: float = 3.0  # seconds between checks
-    cpu_max_checks: int = 100  # 100 * 3s = 5 minutes max wait
+    cpu_check_interval: float = 1.0  # seconds between checks
+    cpu_max_checks: int = 300  # 300 * 1s = 5 minutes max wait
     cpu_gating_enabled: bool = True  # Set False to skip CPU check
 
     # Window stabilization and minimize
@@ -283,10 +283,14 @@ class GlmManager:
             f"maxChecks={self.config.cpu_max_checks}"
         )
 
+        # Prime psutil - first call returns meaningless value
+        psutil.cpu_percent(interval=None)
+
         for check in range(1, self.config.cpu_max_checks + 1):
             try:
-                # psutil.cpu_percent with interval gives accurate reading
-                cpu = psutil.cpu_percent(interval=1)
+                time.sleep(self.config.cpu_check_interval)
+                # Instant CPU reading (measures since last call)
+                cpu = psutil.cpu_percent(interval=None)
 
                 if cpu < self.config.cpu_threshold:
                     logger.info(
@@ -296,15 +300,12 @@ class GlmManager:
 
                 logger.info(
                     f"CPU {cpu:.1f}% >= threshold {self.config.cpu_threshold}%. "
-                    f"Waiting {self.config.cpu_check_interval}s... "
-                    f"(check {check}/{self.config.cpu_max_checks})"
+                    f"Waiting... (check {check}/{self.config.cpu_max_checks})"
                 )
 
             except Exception as e:
                 logger.warning(f"CPU check failed: {e}. Proceeding without gating.")
                 return True
-
-            time.sleep(self.config.cpu_check_interval - 1)  # -1 for cpu_percent interval
 
         logger.warning("CPU did not drop below threshold in allotted time; proceeding anyway.")
         return True
