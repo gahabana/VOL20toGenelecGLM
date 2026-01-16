@@ -985,13 +985,17 @@ class HIDToMIDIDaemon:
 
                                     # Poll for state change (RF remote → GLM can take variable time)
                                     # Expected new state is toggle of current known state
+                                    # IMPORTANT: Use restore_window=False during polling to keep GLM
+                                    # visible - minimizing after each read prevents proper rendering
                                     expected_state = "on" if not old_power else "off"
                                     poll_start = time.time()
                                     poll_deadline = poll_start + POWER_PATTERN_POLL_TIMEOUT
+                                    actual_state = None
 
                                     try:
                                         while time.time() < poll_deadline:
-                                            actual_state = self._power_controller.get_state()
+                                            # Don't restore window between polls - keep GLM visible
+                                            actual_state = self._power_controller.get_state(restore_window=False)
                                             if actual_state == expected_state:
                                                 elapsed_ms = (time.time() - poll_start) * 1000
                                                 glm_controller.power = (actual_state == "on")
@@ -1013,6 +1017,12 @@ class HIDToMIDIDaemon:
                                                 logger.warning(f"Power state polling timeout ({elapsed_ms:.0f}ms) - unknown state: {actual_state}")
                                     except Exception as e:
                                         logger.warning(f"Failed to read power state from UI: {e}")
+                                    finally:
+                                        # Restore GLM window to minimized state after polling
+                                        try:
+                                            self._power_controller.minimize()
+                                        except Exception:
+                                            pass  # Best effort
 
                                 # Fallback: if UI unavailable, use toggle heuristic
                                 if not state_updated:
