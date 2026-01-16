@@ -746,7 +746,7 @@ class GlmPowerController:
             GlmWindowNotFoundError: If GLM window not found.
         """
         with self._lock:
-            win = self._find_window()
+            win = self._find_window(use_cache=False)  # Fresh lookup for accurate state
 
             # Capture state before any focus changes
             saved_state = None
