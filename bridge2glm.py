@@ -5,13 +5,20 @@ Bridges a Fosi Audio VOL20 USB volume knob to Genelec GLM software via MIDI.
 Supports volume control, mute, dim, and power management with UI automation.
 """
 
+# v3.2.3 changes from v3.2.2:
+# 1. Timing-based power pattern filter: Real power toggles have consistent ~31ms gaps
+#    between MIDI messages, while false positives (volume changes) have ~130-150ms gaps.
+#    Patterns with any gap > 50ms are now rejected to prevent false positive detections.
+# 2. UI read delay: Added 300ms delay before reading power state from GLM UI after
+#    pattern detection, giving GLM time to update its display.
+#
 # v3.2.2 changes from v3.2.0:
 # 1. Timing improvements: Added delays after RDP session detection and GLM restart
 #    to prevent "screen grab failed" errors when Windows display driver not ready.
 # 2. Session reconnect for RF remote: When power is toggled via GLM's RF remote,
 #    the MIDIReaderThread now reconnects the session (via tscon) before reading UI,
 #    preventing state desync from failed screen grabs.
-__version__ = "3.2.2"
+__version__ = "3.2.3"
 
 import time
 import signal
@@ -33,6 +40,7 @@ from midi_constants import (
     Action, ControlMode, GlmControl,
     GLM_VOLUME_ABS, GLM_VOL_UP_CC, GLM_VOL_DOWN_CC, GLM_MUTE_CC, GLM_DIM_CC, GLM_POWER_CC,
     POWER_PATTERN, POWER_PATTERN_WINDOW, POWER_PATTERN_MIN_SPAN, POWER_STARTUP_WINDOW,
+    POWER_PATTERN_MAX_GAP, POWER_PATTERN_UI_DELAY,
     CC_NAMES, ACTION_TO_GLM, CC_TO_ACTION,
     KEY_VOL_UP, KEY_VOL_DOWN, KEY_CLICK, KEY_DOUBLE_CLICK, KEY_TRIPLE_CLICK, KEY_LONG_PRESS,
     KEY_NAMES, DEFAULT_BINDINGS, log_midi as _log_midi
@@ -936,6 +944,17 @@ class HIDToMIDIDaemon:
                         if len(seq) >= 5 and seq[-5:] == POWER_PATTERN:
                             time_span = self._rx_seq[-1][0] - self._rx_seq[-5][0]
                             if time_span >= POWER_PATTERN_MIN_SPAN:  # Not a buffer dump
+                                # Check timing gaps between consecutive messages
+                                # Real power toggles have consistent ~31ms gaps
+                                # False positives (volume changes) have ~130-150ms gaps
+                                pattern_times = [t for t, _ in self._rx_seq[-5:]]
+                                gaps = [pattern_times[i+1] - pattern_times[i] for i in range(4)]
+                                max_gap = max(gaps)
+                                if max_gap > POWER_PATTERN_MAX_GAP:
+                                    logger.debug(f"Power pattern rejected: max gap {max_gap*1000:.0f}ms > {POWER_PATTERN_MAX_GAP*1000:.0f}ms (gaps: {[f'{g*1000:.0f}ms' for g in gaps]})")
+                                    self._rx_seq = []
+                                    continue
+
                                 # Skip pattern processing during startup/volume init
                                 if self._suppress_power_pattern:
                                     logger.debug("MIDI power pattern ignored (suppressed during init)")
@@ -960,6 +979,9 @@ class HIDToMIDIDaemon:
                                     # (reconnect via tscon if RDP session is disconnected)
                                     if ensure_session_connected:
                                         ensure_session_connected(logger=logger)
+
+                                    # Wait for GLM UI to update after power toggle
+                                    time.sleep(POWER_PATTERN_UI_DELAY)
 
                                     try:
                                         actual_state = self._power_controller.get_state()

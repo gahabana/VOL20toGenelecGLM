@@ -55,6 +55,10 @@ GLM_POWER_CC = 28     # System Power (momentary trigger, no MIDI feedback)
 POWER_PATTERN = [GLM_MUTE_CC, GLM_VOLUME_ABS, GLM_DIM_CC, GLM_MUTE_CC, GLM_VOLUME_ABS]
 POWER_PATTERN_WINDOW = 0.5  # seconds - max time window for pattern
 POWER_PATTERN_MIN_SPAN = 0.05  # seconds - min span (faster = buffer dump, ignore)
+POWER_PATTERN_MAX_GAP = 0.05  # seconds - max gap between consecutive messages (50ms)
+# Real power toggles have consistent ~31ms gaps; volume changes have ~130-150ms gaps
+# in the middle (two separate status cycles combining into false positive pattern)
+POWER_PATTERN_UI_DELAY = 0.3  # seconds - delay before UI read to let GLM update display
 POWER_STARTUP_WINDOW = 3.0  # seconds - if second pattern within this, it's GLM startup
 
 # CC number to human-readable name (for logging)
