@@ -58,7 +58,7 @@ POWER_PATTERN_MIN_SPAN = 0.05  # seconds - min span (faster = buffer dump, ignor
 POWER_PATTERN_MAX_GAP = 0.05  # seconds - max gap between consecutive messages (50ms)
 # Real power toggles have consistent ~31ms gaps; volume changes have ~130-150ms gaps
 # in the middle (two separate status cycles combining into false positive pattern)
-POWER_PATTERN_UI_DELAY = 0.6  # seconds - delay before UI read (600ms)
+POWER_PATTERN_UI_DELAY = 1.5  # seconds - delay before UI read (1500ms for power ON)
 POWER_STARTUP_WINDOW = 3.0  # seconds - if second pattern within this, it's GLM startup
 
 # CC number to human-readable name (for logging)
