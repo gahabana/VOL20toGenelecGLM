@@ -58,7 +58,8 @@ POWER_PATTERN_MIN_SPAN = 0.05  # seconds - min span (faster = buffer dump, ignor
 POWER_PATTERN_MAX_GAP = 0.05  # seconds - max gap between consecutive messages (50ms)
 # Real power toggles have consistent ~31ms gaps; volume changes have ~130-150ms gaps
 # in the middle (two separate status cycles combining into false positive pattern)
-POWER_PATTERN_UI_DELAY = 1.5  # seconds - delay before UI read (1500ms for power ON)
+POWER_PATTERN_POLL_TIMEOUT = 3.0  # seconds - max time to poll for state change after RF remote toggle
+POWER_PATTERN_POLL_INTERVAL = 0.15  # seconds - interval between UI reads while polling
 POWER_STARTUP_WINDOW = 3.0  # seconds - if second pattern within this, it's GLM startup
 
 # CC number to human-readable name (for logging)

@@ -5,12 +5,15 @@ Bridges a Fosi Audio VOL20 USB volume knob to Genelec GLM software via MIDI.
 Supports volume control, mute, dim, and power management with UI automation.
 """
 
+# v3.2.4 changes from v3.2.3:
+# 1. Polling for RF remote power detection: Instead of fixed delay before UI read,
+#    now polls until state change is detected (up to 3s timeout, 150ms interval).
+#    RF remote → GLM path can take variable time (Power ON measured at 1329-2000+ms).
+#
 # v3.2.3 changes from v3.2.2:
 # 1. Timing-based power pattern filter: Real power toggles have consistent ~31ms gaps
 #    between MIDI messages, while false positives (volume changes) have ~130-150ms gaps.
 #    Patterns with any gap > 50ms are now rejected to prevent false positive detections.
-# 2. UI read delay: Added 300ms delay before reading power state from GLM UI after
-#    pattern detection, giving GLM time to update its display.
 #
 # v3.2.2 changes from v3.2.0:
 # 1. Timing improvements: Added delays after RDP session detection and GLM restart
@@ -18,7 +21,7 @@ Supports volume control, mute, dim, and power management with UI automation.
 # 2. Session reconnect for RF remote: When power is toggled via GLM's RF remote,
 #    the MIDIReaderThread now reconnects the session (via tscon) before reading UI,
 #    preventing state desync from failed screen grabs.
-__version__ = "3.2.3"
+__version__ = "3.2.4"
 
 import time
 import signal
@@ -40,7 +43,7 @@ from midi_constants import (
     Action, ControlMode, GlmControl,
     GLM_VOLUME_ABS, GLM_VOL_UP_CC, GLM_VOL_DOWN_CC, GLM_MUTE_CC, GLM_DIM_CC, GLM_POWER_CC,
     POWER_PATTERN, POWER_PATTERN_WINDOW, POWER_PATTERN_MIN_SPAN, POWER_STARTUP_WINDOW,
-    POWER_PATTERN_MAX_GAP, POWER_PATTERN_UI_DELAY,
+    POWER_PATTERN_MAX_GAP, POWER_PATTERN_POLL_TIMEOUT, POWER_PATTERN_POLL_INTERVAL,
     CC_NAMES, ACTION_TO_GLM, CC_TO_ACTION,
     KEY_VOL_UP, KEY_VOL_DOWN, KEY_CLICK, KEY_DOUBLE_CLICK, KEY_TRIPLE_CLICK, KEY_LONG_PRESS,
     KEY_NAMES, DEFAULT_BINDINGS, log_midi as _log_midi
@@ -980,20 +983,34 @@ class HIDToMIDIDaemon:
                                     if ensure_session_connected:
                                         ensure_session_connected(logger=logger)
 
-                                    # Wait for GLM UI to update after power toggle
-                                    time.sleep(POWER_PATTERN_UI_DELAY)
+                                    # Poll for state change (RF remote → GLM can take variable time)
+                                    # Expected new state is toggle of current known state
+                                    expected_state = "on" if not old_power else "off"
+                                    poll_start = time.time()
+                                    poll_deadline = poll_start + POWER_PATTERN_POLL_TIMEOUT
 
                                     try:
-                                        actual_state = self._power_controller.get_state()
-                                        if actual_state in ("on", "off"):
-                                            glm_controller.power = (actual_state == "on")
-                                            state_updated = True
-                                            if glm_controller.power != old_power:
-                                                logger.info(f"Power state read from UI: {actual_state.upper()} (was {'ON' if old_power else 'OFF'})")
-                                            else:
-                                                logger.debug(f"Power state confirmed from UI: {actual_state.upper()}")
+                                        while time.time() < poll_deadline:
+                                            actual_state = self._power_controller.get_state()
+                                            if actual_state == expected_state:
+                                                elapsed_ms = (time.time() - poll_start) * 1000
+                                                glm_controller.power = (actual_state == "on")
+                                                state_updated = True
+                                                logger.info(f"Power state changed to {actual_state.upper()} after {elapsed_ms:.0f}ms polling (was {'ON' if old_power else 'OFF'})")
+                                                break
+                                            time.sleep(POWER_PATTERN_POLL_INTERVAL)
                                         else:
-                                            logger.warning(f"UI returned unknown power state: {actual_state}")
+                                            # Timeout - use whatever state we last read
+                                            elapsed_ms = (time.time() - poll_start) * 1000
+                                            if actual_state in ("on", "off"):
+                                                glm_controller.power = (actual_state == "on")
+                                                state_updated = True
+                                                if glm_controller.power != old_power:
+                                                    logger.warning(f"Power state polling timeout ({elapsed_ms:.0f}ms) - state is {actual_state.upper()} (unexpected)")
+                                                else:
+                                                    logger.warning(f"Power state polling timeout ({elapsed_ms:.0f}ms) - state unchanged: {actual_state.upper()}")
+                                            else:
+                                                logger.warning(f"Power state polling timeout ({elapsed_ms:.0f}ms) - unknown state: {actual_state}")
                                     except Exception as e:
                                         logger.warning(f"Failed to read power state from UI: {e}")
 
