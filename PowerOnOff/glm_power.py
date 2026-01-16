@@ -710,15 +710,20 @@ class GlmPowerController:
     ) -> Tuple[PowerState, Tuple[int, int, int], Point]:
         """Poll until desired state or timeout."""
         timeout = timeout or self.config.verify_timeout
-        deadline = time.time() + timeout
+        start_time = time.time()
+        deadline = start_time + timeout
         last = ("unknown", (0, 0, 0), Point(0, 0))
 
         while time.time() < deadline:
             last = self._read_state_internal(win)
             if last[0] == desired:
+                elapsed_ms = (time.time() - start_time) * 1000
+                self.logger.debug(f"Power state changed to {desired} after {elapsed_ms:.0f}ms polling")
                 return last
             time.sleep(self.config.poll_interval)
 
+        elapsed_ms = (time.time() - start_time) * 1000
+        self.logger.warning(f"Power state polling timed out after {elapsed_ms:.0f}ms (wanted {desired}, got {last[0]})")
         return last
 
     # =========================================================================
