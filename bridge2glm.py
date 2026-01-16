@@ -946,6 +946,11 @@ class HIDToMIDIDaemon:
                                 state_updated = False
 
                                 if self._power_controller:
+                                    # Ensure session is connected before UI read
+                                    # (reconnect via tscon if RDP session is disconnected)
+                                    if ensure_session_connected:
+                                        ensure_session_connected(logger=logger)
+
                                     try:
                                         actual_state = self._power_controller.get_state()
                                         if actual_state in ("on", "off"):
