@@ -5,6 +5,12 @@ Bridges a Fosi Audio VOL20 USB volume knob to Genelec GLM software via MIDI.
 Supports volume control, mute, dim, and power management with UI automation.
 """
 
+# v3.2.8 changes from v3.2.7:
+# 1. Refactored RF remote power detection to use new wait_for_state() method in GlmPowerController.
+#    This method brings window to foreground, waits for render delay, polls efficiently using
+#    _read_state_internal() (no window-finding overhead per poll), then minimizes.
+#    Much cleaner than the custom polling loop and matches what set_state() does internally.
+#
 # v3.2.7 changes from v3.2.6:
 # 1. Add render delay after bringing GLM window to foreground for RF remote power detection.
 #    Without this delay, we read stale pixel values because GLM hasn't repainted yet.
@@ -37,7 +43,7 @@ Supports volume control, mute, dim, and power management with UI automation.
 # 2. Session reconnect for RF remote: When power is toggled via GLM's RF remote,
 #    the MIDIReaderThread now reconnects the session (via tscon) before reading UI,
 #    preventing state desync from failed screen grabs.
-__version__ = "3.2.7"
+__version__ = "3.2.8"
 
 import time
 import signal
@@ -1021,41 +1027,21 @@ class HIDToMIDIDaemon:
                                     if ensure_session_connected:
                                         ensure_session_connected(logger=logger)
 
-                                    # Poll for state change (RF remote → GLM can take variable time)
-                                    # Expected new state is toggle of current known state
-                                    # IMPORTANT: Use restore_window=False during polling to keep GLM
-                                    # visible - minimizing after each read prevents proper rendering
+                                    # Wait for state change using dedicated method
+                                    # This brings window to foreground, waits for render, polls, then minimizes
                                     expected_state = "on" if not old_power else "off"
-                                    poll_start = time.time()
-                                    poll_deadline = poll_start + POWER_PATTERN_POLL_TIMEOUT
-                                    actual_state = None
-
                                     try:
-                                        # First read brings window to foreground - wait for GLM to repaint
-                                        # Without this delay, we may read stale pixel values
-                                        actual_state = self._power_controller.get_state(restore_window=False)
-                                        if actual_state == expected_state:
-                                            elapsed_ms = (time.time() - poll_start) * 1000
+                                        actual_state, elapsed_ms, matched = self._power_controller.wait_for_state(
+                                            desired=expected_state,
+                                            timeout=POWER_PATTERN_POLL_TIMEOUT,
+                                            render_delay=POWER_PATTERN_RENDER_DELAY,
+                                        )
+                                        if matched:
                                             glm_controller.power = (actual_state == "on")
                                             state_updated = True
                                             logger.info(f"Power state changed to {actual_state.upper()} after {elapsed_ms:.0f}ms polling (was {'ON' if old_power else 'OFF'})")
                                         else:
-                                            # Wait for GLM to finish rendering after window restore
-                                            time.sleep(POWER_PATTERN_RENDER_DELAY)
-
-                                        while not state_updated and time.time() < poll_deadline:
-                                            # Don't restore window between polls - keep GLM visible
-                                            actual_state = self._power_controller.get_state(restore_window=False)
-                                            if actual_state == expected_state:
-                                                elapsed_ms = (time.time() - poll_start) * 1000
-                                                glm_controller.power = (actual_state == "on")
-                                                state_updated = True
-                                                logger.info(f"Power state changed to {actual_state.upper()} after {elapsed_ms:.0f}ms polling (was {'ON' if old_power else 'OFF'})")
-                                                break
-                                            time.sleep(POWER_PATTERN_POLL_INTERVAL)
-                                        else:
-                                            # Timeout - use whatever state we last read
-                                            elapsed_ms = (time.time() - poll_start) * 1000
+                                            # Timeout - use whatever state was last read
                                             if actual_state in ("on", "off"):
                                                 glm_controller.power = (actual_state == "on")
                                                 state_updated = True
@@ -1067,12 +1053,6 @@ class HIDToMIDIDaemon:
                                                 logger.warning(f"Power state polling timeout ({elapsed_ms:.0f}ms) - unknown state: {actual_state}")
                                     except Exception as e:
                                         logger.warning(f"Failed to read power state from UI: {e}")
-                                    finally:
-                                        # Restore GLM window to minimized state after polling
-                                        try:
-                                            self._power_controller.minimize()
-                                        except Exception:
-                                            pass  # Best effort
 
                                 # Fallback: if UI unavailable, use toggle heuristic
                                 if not state_updated:

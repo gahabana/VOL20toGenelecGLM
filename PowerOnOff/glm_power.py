@@ -805,6 +805,79 @@ class GlmPowerController:
                 if saved_state:
                     self._restore_window_state(win, saved_state)
 
+    def wait_for_state(
+        self,
+        desired: PowerState,
+        timeout: float = 3.0,
+        render_delay: float = 0.3,
+    ) -> Tuple[PowerState, float, bool]:
+        """
+        Wait for GLM power state to reach desired value.
+
+        Brings window to foreground, waits for render delay, then polls until
+        state matches desired or timeout. Minimizes window when done.
+
+        This is useful for detecting state changes triggered externally (e.g.,
+        RF remote) where we need to wait for GLM UI to update.
+
+        Args:
+            desired: Target state to wait for ("on" or "off")
+            timeout: Maximum time to wait in seconds (default 3.0)
+            render_delay: Time to wait after bringing window to foreground
+                         for GLM to repaint (default 0.3s)
+
+        Returns:
+            Tuple of (actual_state, elapsed_ms, matched)
+            - actual_state: The last state read ("on", "off", or "unknown")
+            - elapsed_ms: Time elapsed in milliseconds
+            - matched: True if actual_state == desired
+
+        Raises:
+            GlmWindowNotFoundError: If GLM window not found.
+        """
+        with self._lock:
+            win = self._find_window(use_cache=False)
+            start_time = time.time()
+
+            try:
+                # Bring window to foreground
+                if self.steal_focus:
+                    self._ensure_foreground(win)
+
+                # Wait for GLM to repaint after window restore
+                time.sleep(render_delay)
+
+                # Poll until desired state or timeout
+                deadline = start_time + timeout
+                last_state = "unknown"
+
+                while time.time() < deadline:
+                    state, rgb, pt = self._read_state_internal(win)
+                    last_state = state
+
+                    if state == desired:
+                        elapsed_ms = (time.time() - start_time) * 1000
+                        self.logger.debug(f"Power state changed to {desired} after {elapsed_ms:.0f}ms")
+                        if state != "unknown":
+                            self._last_known_state = state
+                        return state, elapsed_ms, True
+
+                    time.sleep(self.config.poll_interval)
+
+                # Timeout
+                elapsed_ms = (time.time() - start_time) * 1000
+                self.logger.warning(f"wait_for_state timed out after {elapsed_ms:.0f}ms (wanted {desired}, got {last_state})")
+                if last_state != "unknown":
+                    self._last_known_state = last_state
+                return last_state, elapsed_ms, False
+
+            finally:
+                # Always minimize window when done
+                try:
+                    self.minimize()
+                except Exception:
+                    pass
+
     def set_state(
         self,
         desired: Literal["on", "off"],
