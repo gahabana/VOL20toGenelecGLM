@@ -850,9 +850,19 @@ class GlmPowerController:
                 if self.steal_focus:
                     self._ensure_foreground(win)
 
-                # Read state immediately after foreground - this is what HID path does
-                # and it works reliably. No extra delays, no neutral clicks needed.
-                # The _ensure_foreground() already waits for focus_delay and valid coords.
+                # Force GLM to repaint. When window is restored from minimized, OpenGL/JUCE
+                # apps may show stale pixels. RedrawWindow with aggressive flags forces a
+                # full repaint of the window content.
+                hwnd = win.handle
+                RDW_INVALIDATE = 0x0001
+                RDW_UPDATENOW = 0x0100
+                RDW_ERASE = 0x0004
+                RDW_ALLCHILDREN = 0x0080
+                ctypes.windll.user32.RedrawWindow(
+                    hwnd, None, None,
+                    RDW_INVALIDATE | RDW_UPDATENOW | RDW_ERASE | RDW_ALLCHILDREN
+                )
+                time.sleep(0.1)  # Brief pause for repaint to complete
 
                 # Log window state for diagnostics
                 r = win.rectangle()
