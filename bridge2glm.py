@@ -5,6 +5,11 @@ Bridges a Fosi Audio VOL20 USB volume knob to Genelec GLM software via MIDI.
 Supports volume control, mute, dim, and power management with UI automation.
 """
 
+# v3.2.9 changes from v3.2.8:
+# 1. Added diagnostic logging to wait_for_state() to investigate RF remote power detection issues.
+#    Now logs: window rectangle, foreground status, minimized status, and RGB values on each poll.
+#    This helps diagnose why we're reading OFF when speakers are actually ON.
+#
 # v3.2.8 changes from v3.2.7:
 # 1. Refactored RF remote power detection to use new wait_for_state() method in GlmPowerController.
 #    This method brings window to foreground, waits for render delay, polls efficiently using
@@ -43,7 +48,7 @@ Supports volume control, mute, dim, and power management with UI automation.
 # 2. Session reconnect for RF remote: When power is toggled via GLM's RF remote,
 #    the MIDIReaderThread now reconnects the session (via tscon) before reading UI,
 #    preventing state desync from failed screen grabs.
-__version__ = "3.2.8"
+__version__ = "3.2.9"
 
 import time
 import signal

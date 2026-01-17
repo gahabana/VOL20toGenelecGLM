@@ -847,13 +847,34 @@ class GlmPowerController:
                 # Wait for GLM to repaint after window restore
                 time.sleep(render_delay)
 
+                # Log window rectangle and foreground status for diagnostics
+                r = win.rectangle()
+                hwnd = win.handle
+                fg_hwnd = ctypes.windll.user32.GetForegroundWindow()
+                is_fg = (hwnd == fg_hwnd)
+                is_minimized = bool(ctypes.windll.user32.IsIconic(hwnd))
+                self.logger.debug(
+                    f"wait_for_state: window rect=({r.left},{r.top},{r.right},{r.bottom}), "
+                    f"hwnd={hwnd}, is_foreground={is_fg}, is_minimized={is_minimized}, "
+                    f"waiting for {desired}, render_delay={render_delay}s, timeout={timeout}s"
+                )
+
                 # Poll until desired state or timeout
                 deadline = start_time + timeout
                 last_state = "unknown"
+                poll_count = 0
 
                 while time.time() < deadline:
                     state, rgb, pt = self._read_state_internal(win)
                     last_state = state
+                    poll_count += 1
+
+                    # Log RGB values for diagnostics
+                    elapsed_now = (time.time() - start_time) * 1000
+                    self.logger.debug(
+                        f"wait_for_state poll #{poll_count}: state={state}, rgb={rgb}, "
+                        f"pt=({pt.x},{pt.y}), elapsed={elapsed_now:.0f}ms"
+                    )
 
                     if state == desired:
                         elapsed_ms = (time.time() - start_time) * 1000
