@@ -853,14 +853,15 @@ class GlmPowerController:
                 # Wait for GLM to repaint after window restore
                 time.sleep(render_delay)
 
-                # Click in neutral area above power button to force GLM to process
-                # its event queue and repaint. This mimics what happens in the HID
-                # path where clicking forces synchronous UI updates.
-                # Power button is at dy_from_top=80; click at dy=45 (above button,
-                # below window controls) in empty grey area.
+                # Click in neutral area to the LEFT of power button to force GLM
+                # to process its event queue and repaint. This mimics what happens
+                # in the HID path where clicking forces synchronous UI updates.
+                # Power button is at dy_from_top=80; we click at same y but 80px
+                # to the left, in the empty grey area.
                 pt = self._get_power_point(win)
-                neutral_y = win.rectangle().top + 45  # Above power button
-                win32api.SetCursorPos((pt.x, neutral_y))
+                neutral_x = pt.x - 80  # 80 pixels to the LEFT of power button
+                neutral_y = pt.y       # Same height as power button (dy_from_top=80)
+                win32api.SetCursorPos((neutral_x, neutral_y))
                 time.sleep(0.02)
                 # Perform the click
                 win32api.mouse_event(win32con.MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
@@ -869,7 +870,7 @@ class GlmPowerController:
                 time.sleep(0.1)  # Brief pause for GLM to process click and repaint
 
                 # Move mouse away from button area before reading
-                win32api.SetCursorPos((pt.x - 100, pt.y))
+                win32api.SetCursorPos((neutral_x - 50, neutral_y))  # Move further left
                 time.sleep(0.05)
 
                 # Log window rectangle and foreground status for diagnostics
