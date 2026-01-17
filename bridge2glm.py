@@ -5,6 +5,11 @@ Bridges a Fosi Audio VOL20 USB volume knob to Genelec GLM software via MIDI.
 Supports volume control, mute, dim, and power management with UI automation.
 """
 
+# v3.2.19 changes from v3.2.18:
+# 1. TEST: Hypothesis that minimize/restore causes stale button. Disabled post-startup
+#    minimize. Re-enabled UI reading for RF path. If window stays visible, reading
+#    should work like it does at startup.
+#
 # v3.2.18 changes from v3.2.17:
 # 1. Trust MIDI pattern for RF power detection: Skip UI verification entirely since GLM's
 #    power button doesn't repaint when power changes via RF remote. Just toggle internal
@@ -97,7 +102,7 @@ Supports volume control, mute, dim, and power management with UI automation.
 # 2. Session reconnect for RF remote: When power is toggled via GLM's RF remote,
 #    the MIDIReaderThread now reconnects the session (via tscon) before reading UI,
 #    preventing state desync from failed screen grabs.
-__version__ = "3.2.18"
+__version__ = "3.2.19"
 
 import time
 import signal
@@ -1070,15 +1075,34 @@ class HIDToMIDIDaemon:
                                     self._rx_seq = []
                                     continue
 
-                                # Power pattern detected via MIDI
-                                # GLM button visual doesn't update without clicking, so we can't
-                                # reliably read state via UI. Just toggle based on MIDI pattern.
-                                # Our triple-condition filter (max gap, total gaps, pre-gap) should
-                                # prevent false positives.
+                                # Power pattern detected - try to read UI state
+                                # Testing hypothesis: if window is NOT minimized, reading should work
                                 old_power = glm_controller.power
-                                glm_controller.power = not old_power
-                                new_state = "ON" if glm_controller.power else "OFF"
-                                logger.info(f"RF remote power toggle detected - now {new_state} (was {'ON' if old_power else 'OFF'})")
+                                state_updated = False
+
+                                if self._power_controller:
+                                    # Wait for state change using dedicated method
+                                    expected_state = "on" if not old_power else "off"
+                                    try:
+                                        actual_state, elapsed_ms, matched = self._power_controller.wait_for_state(
+                                            desired=expected_state,
+                                            timeout=POWER_PATTERN_POLL_TIMEOUT,
+                                            render_delay=POWER_PATTERN_RENDER_DELAY,
+                                        )
+                                        if matched:
+                                            glm_controller.power = (actual_state == "on")
+                                            state_updated = True
+                                            logger.info(f"Power state changed to {actual_state.upper()} after {elapsed_ms:.0f}ms polling (was {'ON' if old_power else 'OFF'})")
+                                        else:
+                                            # Timeout - log but still toggle
+                                            logger.warning(f"Power state polling timeout ({elapsed_ms:.0f}ms) - got {actual_state}, falling back to toggle")
+                                    except Exception as e:
+                                        logger.warning(f"Failed to read power state from UI: {e}")
+
+                                # Fallback: if UI read failed, just toggle
+                                if not state_updated:
+                                    glm_controller.power = not old_power
+                                    logger.info(f"RF power toggle (fallback) - now {'ON' if glm_controller.power else 'OFF'}")
 
                                 if glm_controller.power != old_power:
                                     glm_controller._notify_state_change()
@@ -1417,13 +1441,14 @@ class HIDToMIDIDaemon:
                 ha_discovery=self.mqtt_ha_discovery,
             )
 
+        # DISABLED: Testing hypothesis that minimize/restore causes stale button pixels
         # Minimize GLM window at the very end of startup
         # Use power controller's minimize to ensure same window handle as power operations
-        if self._power_controller:
-            # Give GLM a moment to finish any startup animation
-            time.sleep(1.0)
-            logger.info("Minimizing GLM window (post-startup)")
-            self._power_controller.minimize()
+        # if self._power_controller:
+        #     # Give GLM a moment to finish any startup animation
+        #     time.sleep(1.0)
+        #     logger.info("Minimizing GLM window (post-startup)")
+        #     self._power_controller.minimize()
 
     def stop(self):
         """Stops the daemon gracefully."""
