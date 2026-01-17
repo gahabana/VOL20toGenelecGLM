@@ -839,6 +839,12 @@ class GlmPowerController:
             win = self._find_window(use_cache=False)
             start_time = time.time()
 
+            # Capture window state BEFORE any operations
+            # Only minimize at end if window was minimized before
+            saved_state = None
+            if self.steal_focus:
+                saved_state = self._capture_window_state(win)
+
             try:
                 # Bring window to foreground
                 if self.steal_focus:
@@ -905,11 +911,9 @@ class GlmPowerController:
                 return last_state, elapsed_ms, False
 
             finally:
-                # Always minimize window when done
-                try:
-                    self.minimize()
-                except Exception:
-                    pass
+                # Restore window to previous state (only minimize if was minimized before)
+                if saved_state:
+                    self._restore_window_state(win, saved_state)
 
     def set_state(
         self,
