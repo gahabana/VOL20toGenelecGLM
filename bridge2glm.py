@@ -5,11 +5,13 @@ Bridges a Fosi Audio VOL20 USB volume knob to Genelec GLM software via MIDI.
 Supports volume control, mute, dim, and power management with UI automation.
 """
 
+# v3.2.17 changes from v3.2.16:
+# 1. Use resize trick instead of RedrawWindow: OpenGL/JUCE apps ignore RedrawWindow/WM_PAINT.
+#    Instead, resize window by +1 pixel width then back to original. This forces OpenGL to
+#    re-render because the framebuffer dimensions change. SetWindowPos with SWP_NOZORDER.
+#
 # v3.2.16 changes from v3.2.15:
-# 1. Force GLM repaint with RedrawWindow: After restoring window from minimized, call
-#    RedrawWindow() with RDW_INVALIDATE | RDW_UPDATENOW | RDW_ERASE | RDW_ALLCHILDREN
-#    to force OpenGL/JUCE to repaint. Without this, GLM shows stale pixels from before
-#    the power state changed. This is the key difference vs HID path (which clicks button).
+# 1. (Failed) Tried RedrawWindow - doesn't work for OpenGL apps, they ignore paint messages.
 #
 # v3.2.15 changes from v3.2.14:
 # 1. Simplify RF path to match HID path exactly: Removed render_delay, neutral click, and
@@ -88,7 +90,7 @@ Supports volume control, mute, dim, and power management with UI automation.
 # 2. Session reconnect for RF remote: When power is toggled via GLM's RF remote,
 #    the MIDIReaderThread now reconnects the session (via tscon) before reading UI,
 #    preventing state desync from failed screen grabs.
-__version__ = "3.2.16"
+__version__ = "3.2.17"
 
 import time
 import signal

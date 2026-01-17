@@ -850,19 +850,27 @@ class GlmPowerController:
                 if self.steal_focus:
                     self._ensure_foreground(win)
 
-                # Force GLM to repaint. When window is restored from minimized, OpenGL/JUCE
-                # apps may show stale pixels. RedrawWindow with aggressive flags forces a
-                # full repaint of the window content.
+                # Force GLM to re-render by resizing window. OpenGL/JUCE apps ignore
+                # RedrawWindow/WM_PAINT but MUST re-render when window size changes
+                # because the framebuffer dimensions change. Resize by 1 pixel and back.
                 hwnd = win.handle
-                RDW_INVALIDATE = 0x0001
-                RDW_UPDATENOW = 0x0100
-                RDW_ERASE = 0x0004
-                RDW_ALLCHILDREN = 0x0080
-                ctypes.windll.user32.RedrawWindow(
-                    hwnd, None, None,
-                    RDW_INVALIDATE | RDW_UPDATENOW | RDW_ERASE | RDW_ALLCHILDREN
+                r = win.rectangle()
+                SWP_NOZORDER = 0x0004
+                SWP_NOACTIVATE = 0x0010
+                # Resize +1 width
+                ctypes.windll.user32.SetWindowPos(
+                    hwnd, None,
+                    r.left, r.top, r.width() + 1, r.height(),
+                    SWP_NOZORDER | SWP_NOACTIVATE
                 )
-                time.sleep(0.1)  # Brief pause for repaint to complete
+                time.sleep(0.05)
+                # Resize back to original
+                ctypes.windll.user32.SetWindowPos(
+                    hwnd, None,
+                    r.left, r.top, r.width(), r.height(),
+                    SWP_NOZORDER | SWP_NOACTIVATE
+                )
+                time.sleep(0.1)  # Brief pause for render to complete
 
                 # Log window state for diagnostics
                 r = win.rectangle()
