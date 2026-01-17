@@ -846,34 +846,15 @@ class GlmPowerController:
                 saved_state = self._capture_window_state(win)
 
             try:
-                # Bring window to foreground
+                # Bring window to foreground - exactly like HID path does in set_state()
                 if self.steal_focus:
                     self._ensure_foreground(win)
 
-                # Wait for GLM to repaint after window restore
-                time.sleep(render_delay)
+                # Read state immediately after foreground - this is what HID path does
+                # and it works reliably. No extra delays, no neutral clicks needed.
+                # The _ensure_foreground() already waits for focus_delay and valid coords.
 
-                # Click in neutral area to the LEFT of power button to force GLM
-                # to process its event queue and repaint. This mimics what happens
-                # in the HID path where clicking forces synchronous UI updates.
-                # Power button is at dy_from_top=80; we click at same y but 80px
-                # to the left, in the empty grey area.
-                pt = self._get_power_point(win)
-                neutral_x = pt.x - 80  # 80 pixels to the LEFT of power button
-                neutral_y = pt.y       # Same height as power button (dy_from_top=80)
-                win32api.SetCursorPos((neutral_x, neutral_y))
-                time.sleep(0.02)
-                # Perform the click
-                win32api.mouse_event(win32con.MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
-                time.sleep(0.02)
-                win32api.mouse_event(win32con.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
-                time.sleep(0.1)  # Brief pause for GLM to process click and repaint
-
-                # Move mouse away from button area before reading
-                win32api.SetCursorPos((neutral_x - 50, neutral_y))  # Move further left
-                time.sleep(0.05)
-
-                # Log window rectangle and foreground status for diagnostics
+                # Log window state for diagnostics
                 r = win.rectangle()
                 hwnd = win.handle
                 fg_hwnd = ctypes.windll.user32.GetForegroundWindow()
@@ -882,10 +863,10 @@ class GlmPowerController:
                 self.logger.debug(
                     f"wait_for_state: window rect=({r.left},{r.top},{r.right},{r.bottom}), "
                     f"hwnd={hwnd}, is_foreground={is_fg}, is_minimized={is_minimized}, "
-                    f"waiting for {desired}, render_delay={render_delay}s, timeout={timeout}s"
+                    f"waiting for {desired}, timeout={timeout}s"
                 )
 
-                # Poll until desired state or timeout
+                # Poll until desired state or timeout - same as internal _wait_for_state()
                 deadline = start_time + timeout
                 last_state = "unknown"
                 poll_count = 0
