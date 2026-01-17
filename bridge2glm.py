@@ -5,10 +5,17 @@ Bridges a Fosi Audio VOL20 USB volume knob to Genelec GLM software via MIDI.
 Supports volume control, mute, dim, and power management with UI automation.
 """
 
+# v3.2.18 changes from v3.2.17:
+# 1. Trust MIDI pattern for RF power detection: Skip UI verification entirely since GLM's
+#    power button doesn't repaint when power changes via RF remote. Just toggle internal
+#    state when valid MIDI pattern is detected. The triple-condition filter (max gap <100ms,
+#    total gaps <200ms, pre-gap >200ms) prevents false positives from volume changes.
+#    This makes RF detection instant (no 3s timeout) and reliable.
+#
 # v3.2.17 changes from v3.2.16:
-# 1. Use resize trick instead of RedrawWindow: OpenGL/JUCE apps ignore RedrawWindow/WM_PAINT.
-#    Instead, resize window by +1 pixel width then back to original. This forces OpenGL to
-#    re-render because the framebuffer dimensions change. SetWindowPos with SWP_NOZORDER.
+# 1. (Failed) Resize trick - also doesn't update GLM button visual. Tried v3.2.9-v3.2.17
+#    with: render delay, mouse hover, neutral clicks, RedrawWindow, window resize. None
+#    work because GLM/JUCE only updates button visual when you CLICK the button.
 #
 # v3.2.16 changes from v3.2.15:
 # 1. (Failed) Tried RedrawWindow - doesn't work for OpenGL apps, they ignore paint messages.
@@ -90,7 +97,7 @@ Supports volume control, mute, dim, and power management with UI automation.
 # 2. Session reconnect for RF remote: When power is toggled via GLM's RF remote,
 #    the MIDIReaderThread now reconnects the session (via tscon) before reading UI,
 #    preventing state desync from failed screen grabs.
-__version__ = "3.2.17"
+__version__ = "3.2.18"
 
 import time
 import signal
@@ -1063,62 +1070,15 @@ class HIDToMIDIDaemon:
                                     self._rx_seq = []
                                     continue
 
-                                # Power pattern detected - use it as trigger to read UI state
-                                # This is more reliable than inferring state from pattern heuristics
+                                # Power pattern detected via MIDI
+                                # GLM button visual doesn't update without clicking, so we can't
+                                # reliably read state via UI. Just toggle based on MIDI pattern.
+                                # Our triple-condition filter (max gap, total gaps, pre-gap) should
+                                # prevent false positives.
                                 old_power = glm_controller.power
-                                state_updated = False
-
-                                if self._power_controller:
-                                    # Ensure session is connected before UI read
-                                    # (reconnect via tscon if RDP session is disconnected)
-                                    if ensure_session_connected:
-                                        ensure_session_connected(logger=logger)
-
-                                    # Wait for state change using dedicated method
-                                    # This brings window to foreground, waits for render, polls, then minimizes
-                                    expected_state = "on" if not old_power else "off"
-                                    try:
-                                        actual_state, elapsed_ms, matched = self._power_controller.wait_for_state(
-                                            desired=expected_state,
-                                            timeout=POWER_PATTERN_POLL_TIMEOUT,
-                                            render_delay=POWER_PATTERN_RENDER_DELAY,
-                                        )
-                                        if matched:
-                                            glm_controller.power = (actual_state == "on")
-                                            state_updated = True
-                                            logger.info(f"Power state changed to {actual_state.upper()} after {elapsed_ms:.0f}ms polling (was {'ON' if old_power else 'OFF'})")
-                                        else:
-                                            # Timeout - use whatever state was last read
-                                            if actual_state in ("on", "off"):
-                                                glm_controller.power = (actual_state == "on")
-                                                state_updated = True
-                                                if glm_controller.power != old_power:
-                                                    logger.warning(f"Power state polling timeout ({elapsed_ms:.0f}ms) - state is {actual_state.upper()} (unexpected)")
-                                                else:
-                                                    logger.warning(f"Power state polling timeout ({elapsed_ms:.0f}ms) - state unchanged: {actual_state.upper()}")
-                                            else:
-                                                logger.warning(f"Power state polling timeout ({elapsed_ms:.0f}ms) - unknown state: {actual_state}")
-                                    except Exception as e:
-                                        logger.warning(f"Failed to read power state from UI: {e}")
-
-                                # Fallback: if UI unavailable, use toggle heuristic
-                                if not state_updated:
-                                    if len(seq) == 5:
-                                        # Clean 5-message burst - toggle
-                                        if (self._last_pattern_time and
-                                            (now - self._last_pattern_time) < POWER_STARTUP_WINDOW):
-                                            # Second pattern within window = GLM startup
-                                            glm_controller.power = True
-                                            logger.info(f"GLM startup detected (fallback) - power synced to ON")
-                                            self._last_pattern_time = None
-                                        else:
-                                            glm_controller.power = not glm_controller.power
-                                            logger.info(f"Power toggle detected (fallback, now {'ON' if glm_controller.power else 'OFF'})")
-                                            self._last_pattern_time = now
-                                    else:
-                                        # Burst with extra messages - record for startup detection
-                                        logger.debug(f"Power pattern with {len(seq)} msgs (fallback) - recording for startup detection")
-                                        self._last_pattern_time = now
+                                glm_controller.power = not old_power
+                                new_state = "ON" if glm_controller.power else "OFF"
+                                logger.info(f"RF remote power toggle detected - now {new_state} (was {'ON' if old_power else 'OFF'})")
 
                                 if glm_controller.power != old_power:
                                     glm_controller._notify_state_change()
