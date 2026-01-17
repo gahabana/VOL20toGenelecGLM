@@ -57,9 +57,13 @@ POWER_PATTERN_WINDOW = 0.5  # seconds - max time window for pattern
 POWER_PATTERN_MIN_SPAN = 0.05  # seconds - min span (faster = buffer dump, ignore)
 POWER_PATTERN_MAX_GAP = 0.10  # seconds - max gap between any two consecutive messages (100ms)
 POWER_PATTERN_MAX_TOTAL = 0.20  # seconds - max total of all 4 gaps combined (200ms)
-# Dual-condition filter: Both MAX_GAP and MAX_TOTAL must be satisfied.
-# Real power toggles: max gap ~70ms, total ~124-163ms
-# False positives (volume changes): max gap ~130-340ms, total ~246-431ms
+POWER_PATTERN_PRE_GAP = 0.20  # seconds - min gap before first message (200ms) to confirm isolated burst
+# Triple-condition filter: All three must be satisfied to detect power toggle.
+# 1. No single gap > MAX_GAP (100ms)
+# 2. Total of all gaps < MAX_TOTAL (200ms)
+# 3. Pre-gap before pattern > PRE_GAP (200ms) - ensures isolated burst, not embedded in stream
+# Real power toggles: isolated bursts with 200-2000+ms silence before
+# False positives (volume changes): embedded in stream with ~30ms between messages
 POWER_PATTERN_POLL_TIMEOUT = 3.0  # seconds - max time to poll for state change after RF remote toggle
 POWER_PATTERN_POLL_INTERVAL = 0.15  # seconds - interval between UI reads while polling
 POWER_STARTUP_WINDOW = 3.0  # seconds - if second pattern within this, it's GLM startup

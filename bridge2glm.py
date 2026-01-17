@@ -5,6 +5,11 @@ Bridges a Fosi Audio VOL20 USB volume knob to Genelec GLM software via MIDI.
 Supports volume control, mute, dim, and power management with UI automation.
 """
 
+# v3.2.6 changes from v3.2.5:
+# 1. Triple-condition power pattern filter: Added pre-gap check (>200ms) to ensure
+#    pattern is an isolated burst, not embedded within ongoing volume change traffic.
+#    Real power toggles have 200-2000+ms silence before; false positives have ~30ms.
+#
 # v3.2.5 changes from v3.2.4:
 # 1. Dual-condition power pattern filter: Instead of single 50ms max gap threshold,
 #    now uses both max single gap (100ms) AND total of all gaps (200ms).
@@ -27,7 +32,7 @@ Supports volume control, mute, dim, and power management with UI automation.
 # 2. Session reconnect for RF remote: When power is toggled via GLM's RF remote,
 #    the MIDIReaderThread now reconnects the session (via tscon) before reading UI,
 #    preventing state desync from failed screen grabs.
-__version__ = "3.2.5"
+__version__ = "3.2.6"
 
 import time
 import signal
@@ -49,7 +54,8 @@ from midi_constants import (
     Action, ControlMode, GlmControl,
     GLM_VOLUME_ABS, GLM_VOL_UP_CC, GLM_VOL_DOWN_CC, GLM_MUTE_CC, GLM_DIM_CC, GLM_POWER_CC,
     POWER_PATTERN, POWER_PATTERN_WINDOW, POWER_PATTERN_MIN_SPAN, POWER_STARTUP_WINDOW,
-    POWER_PATTERN_MAX_GAP, POWER_PATTERN_MAX_TOTAL, POWER_PATTERN_POLL_TIMEOUT, POWER_PATTERN_POLL_INTERVAL,
+    POWER_PATTERN_MAX_GAP, POWER_PATTERN_MAX_TOTAL, POWER_PATTERN_PRE_GAP,
+    POWER_PATTERN_POLL_TIMEOUT, POWER_PATTERN_POLL_INTERVAL,
     CC_NAMES, ACTION_TO_GLM, CC_TO_ACTION,
     KEY_VOL_UP, KEY_VOL_DOWN, KEY_CLICK, KEY_DOUBLE_CLICK, KEY_TRIPLE_CLICK, KEY_LONG_PRESS,
     KEY_NAMES, DEFAULT_BINDINGS, log_midi as _log_midi
@@ -954,21 +960,33 @@ class HIDToMIDIDaemon:
                             time_span = self._rx_seq[-1][0] - self._rx_seq[-5][0]
                             if time_span >= POWER_PATTERN_MIN_SPAN:  # Not a buffer dump
                                 # Check timing gaps between consecutive messages
-                                # Dual-condition filter for robustness:
+                                # Triple-condition filter for robustness:
                                 # 1. No single gap > MAX_GAP (100ms) - allows occasional jitter
                                 # 2. Total of all gaps < MAX_TOTAL (200ms) - catches false positives
-                                # Real power toggles: max ~70ms, total ~124-163ms
-                                # False positives: max ~130-340ms, total ~246-431ms
+                                # 3. Pre-gap before pattern > PRE_GAP (200ms) - ensures isolated burst
+                                # Real power toggles: isolated bursts with 200-2000+ms silence before
+                                # False positives: embedded in stream with ~30ms between messages
                                 pattern_times = [t for t, _ in self._rx_seq[-5:]]
                                 gaps = [pattern_times[i+1] - pattern_times[i] for i in range(4)]
                                 max_gap = max(gaps)
                                 total_gap = sum(gaps)
-                                if max_gap > POWER_PATTERN_MAX_GAP or total_gap > POWER_PATTERN_MAX_TOTAL:
+
+                                # Check pre-gap: time between message before pattern and first pattern message
+                                # If buffer has only 5 messages, pattern is isolated (no prior message)
+                                if len(self._rx_seq) > 5:
+                                    pre_gap = self._rx_seq[-5][0] - self._rx_seq[-6][0]
+                                else:
+                                    pre_gap = float('inf')  # No prior message = isolated burst
+
+                                # Reject if any condition fails
+                                if max_gap > POWER_PATTERN_MAX_GAP or total_gap > POWER_PATTERN_MAX_TOTAL or pre_gap < POWER_PATTERN_PRE_GAP:
                                     reason = []
                                     if max_gap > POWER_PATTERN_MAX_GAP:
                                         reason.append(f"max gap {max_gap*1000:.0f}ms > {POWER_PATTERN_MAX_GAP*1000:.0f}ms")
                                     if total_gap > POWER_PATTERN_MAX_TOTAL:
                                         reason.append(f"total {total_gap*1000:.0f}ms > {POWER_PATTERN_MAX_TOTAL*1000:.0f}ms")
+                                    if pre_gap < POWER_PATTERN_PRE_GAP:
+                                        reason.append(f"pre-gap {pre_gap*1000:.0f}ms < {POWER_PATTERN_PRE_GAP*1000:.0f}ms")
                                     logger.debug(f"Power pattern rejected: {', '.join(reason)} (gaps: {[f'{g*1000:.0f}ms' for g in gaps]})")
                                     self._rx_seq = []
                                     continue
