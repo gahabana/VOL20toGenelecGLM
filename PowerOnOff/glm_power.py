@@ -847,6 +847,13 @@ class GlmPowerController:
                 # Wait for GLM to repaint after window restore
                 time.sleep(render_delay)
 
+                # Move mouse to power button area to trigger repaint
+                # GLM doesn't repaint the button when restored from minimized;
+                # mouse movement over the button triggers the UI to refresh
+                pt = self._get_power_point(win)
+                win32api.SetCursorPos((pt.x, pt.y))
+                time.sleep(0.05)  # Brief pause for repaint
+
                 # Log window rectangle and foreground status for diagnostics
                 r = win.rectangle()
                 hwnd = win.handle
