@@ -5,6 +5,11 @@ Bridges a Fosi Audio VOL20 USB volume knob to Genelec GLM software via MIDI.
 Supports volume control, mute, dim, and power management with UI automation.
 """
 
+# v3.2.11 changes from v3.2.10:
+# 1. Fix RF remote power detection hover effect: Moving mouse to power button triggered repaint
+#    but left cursor on button, causing hover effect that showed green regardless of actual state.
+#    Now moves mouse away (100px left) after triggering repaint to read true button color.
+#
 # v3.2.10 changes from v3.2.9:
 # 1. Fix RF remote power detection: GLM doesn't repaint the power button when window is restored
 #    from minimized state. Added mouse movement to power button area after restore to trigger
@@ -53,7 +58,7 @@ Supports volume control, mute, dim, and power management with UI automation.
 # 2. Session reconnect for RF remote: When power is toggled via GLM's RF remote,
 #    the MIDIReaderThread now reconnects the session (via tscon) before reading UI,
 #    preventing state desync from failed screen grabs.
-__version__ = "3.2.10"
+__version__ = "3.2.11"
 
 import time
 import signal
