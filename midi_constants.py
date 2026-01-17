@@ -66,6 +66,7 @@ POWER_PATTERN_PRE_GAP = 0.20  # seconds - min gap before first message (200ms) t
 # False positives (volume changes): embedded in stream with ~30ms between messages
 POWER_PATTERN_POLL_TIMEOUT = 3.0  # seconds - max time to poll for state change after RF remote toggle
 POWER_PATTERN_POLL_INTERVAL = 0.15  # seconds - interval between UI reads while polling
+POWER_PATTERN_RENDER_DELAY = 0.3  # seconds - delay after bringing window to foreground for GLM to repaint
 POWER_STARTUP_WINDOW = 3.0  # seconds - if second pattern within this, it's GLM startup
 
 # CC number to human-readable name (for logging)

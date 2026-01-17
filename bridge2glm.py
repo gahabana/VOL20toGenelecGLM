@@ -5,6 +5,11 @@ Bridges a Fosi Audio VOL20 USB volume knob to Genelec GLM software via MIDI.
 Supports volume control, mute, dim, and power management with UI automation.
 """
 
+# v3.2.7 changes from v3.2.6:
+# 1. Add render delay after bringing GLM window to foreground for RF remote power detection.
+#    Without this delay, we read stale pixel values because GLM hasn't repainted yet.
+#    The HID path works because clicking forces synchronous UI update; RF remote is async.
+#
 # v3.2.6 changes from v3.2.5:
 # 1. Triple-condition power pattern filter: Added pre-gap check (>200ms) to ensure
 #    pattern is an isolated burst, not embedded within ongoing volume change traffic.
@@ -32,7 +37,7 @@ Supports volume control, mute, dim, and power management with UI automation.
 # 2. Session reconnect for RF remote: When power is toggled via GLM's RF remote,
 #    the MIDIReaderThread now reconnects the session (via tscon) before reading UI,
 #    preventing state desync from failed screen grabs.
-__version__ = "3.2.6"
+__version__ = "3.2.7"
 
 import time
 import signal
@@ -55,7 +60,7 @@ from midi_constants import (
     GLM_VOLUME_ABS, GLM_VOL_UP_CC, GLM_VOL_DOWN_CC, GLM_MUTE_CC, GLM_DIM_CC, GLM_POWER_CC,
     POWER_PATTERN, POWER_PATTERN_WINDOW, POWER_PATTERN_MIN_SPAN, POWER_STARTUP_WINDOW,
     POWER_PATTERN_MAX_GAP, POWER_PATTERN_MAX_TOTAL, POWER_PATTERN_PRE_GAP,
-    POWER_PATTERN_POLL_TIMEOUT, POWER_PATTERN_POLL_INTERVAL,
+    POWER_PATTERN_POLL_TIMEOUT, POWER_PATTERN_POLL_INTERVAL, POWER_PATTERN_RENDER_DELAY,
     CC_NAMES, ACTION_TO_GLM, CC_TO_ACTION,
     KEY_VOL_UP, KEY_VOL_DOWN, KEY_CLICK, KEY_DOUBLE_CLICK, KEY_TRIPLE_CLICK, KEY_LONG_PRESS,
     KEY_NAMES, DEFAULT_BINDINGS, log_midi as _log_midi
@@ -1026,7 +1031,19 @@ class HIDToMIDIDaemon:
                                     actual_state = None
 
                                     try:
-                                        while time.time() < poll_deadline:
+                                        # First read brings window to foreground - wait for GLM to repaint
+                                        # Without this delay, we may read stale pixel values
+                                        actual_state = self._power_controller.get_state(restore_window=False)
+                                        if actual_state == expected_state:
+                                            elapsed_ms = (time.time() - poll_start) * 1000
+                                            glm_controller.power = (actual_state == "on")
+                                            state_updated = True
+                                            logger.info(f"Power state changed to {actual_state.upper()} after {elapsed_ms:.0f}ms polling (was {'ON' if old_power else 'OFF'})")
+                                        else:
+                                            # Wait for GLM to finish rendering after window restore
+                                            time.sleep(POWER_PATTERN_RENDER_DELAY)
+
+                                        while not state_updated and time.time() < poll_deadline:
                                             # Don't restore window between polls - keep GLM visible
                                             actual_state = self._power_controller.get_state(restore_window=False)
                                             if actual_state == expected_state:
