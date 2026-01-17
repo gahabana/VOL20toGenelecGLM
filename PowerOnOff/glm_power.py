@@ -853,17 +853,24 @@ class GlmPowerController:
                 # Wait for GLM to repaint after window restore
                 time.sleep(render_delay)
 
-                # Move mouse to power button area to trigger repaint, then move away
-                # GLM doesn't repaint the button when restored from minimized;
-                # mouse movement over the button triggers the UI to refresh.
-                # IMPORTANT: Move mouse AWAY after triggering repaint to avoid
-                # hover effect that could change button color appearance.
+                # Click in neutral area above power button to force GLM to process
+                # its event queue and repaint. This mimics what happens in the HID
+                # path where clicking forces synchronous UI updates.
+                # Power button is at dy_from_top=80; click at dy=45 (above button,
+                # below window controls) in empty grey area.
                 pt = self._get_power_point(win)
-                win32api.SetCursorPos((pt.x, pt.y))
-                time.sleep(0.05)  # Brief pause for repaint
-                # Move mouse away from button (100px left) to avoid hover effect
+                neutral_y = win.rectangle().top + 45  # Above power button
+                win32api.SetCursorPos((pt.x, neutral_y))
+                time.sleep(0.02)
+                # Perform the click
+                win32api.mouse_event(win32con.MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
+                time.sleep(0.02)
+                win32api.mouse_event(win32con.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
+                time.sleep(0.1)  # Brief pause for GLM to process click and repaint
+
+                # Move mouse away from button area before reading
                 win32api.SetCursorPos((pt.x - 100, pt.y))
-                time.sleep(0.05)  # Brief pause after moving away
+                time.sleep(0.05)
 
                 # Log window rectangle and foreground status for diagnostics
                 r = win.rectangle()
