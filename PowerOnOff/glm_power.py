@@ -710,15 +710,20 @@ class GlmPowerController:
     ) -> Tuple[PowerState, Tuple[int, int, int], Point]:
         """Poll until desired state or timeout."""
         timeout = timeout or self.config.verify_timeout
-        deadline = time.time() + timeout
+        start_time = time.time()
+        deadline = start_time + timeout
         last = ("unknown", (0, 0, 0), Point(0, 0))
 
         while time.time() < deadline:
             last = self._read_state_internal(win)
             if last[0] == desired:
+                elapsed_ms = (time.time() - start_time) * 1000
+                self.logger.debug(f"Power state changed to {desired} after {elapsed_ms:.0f}ms polling")
                 return last
             time.sleep(self.config.poll_interval)
 
+        elapsed_ms = (time.time() - start_time) * 1000
+        self.logger.warning(f"Power state polling timed out after {elapsed_ms:.0f}ms (wanted {desired}, got {last[0]})")
         return last
 
     # =========================================================================
@@ -741,7 +746,7 @@ class GlmPowerController:
             GlmWindowNotFoundError: If GLM window not found.
         """
         with self._lock:
-            win = self._find_window()
+            win = self._find_window(use_cache=False)  # Fresh lookup for accurate state
 
             # Capture state before any focus changes
             saved_state = None
@@ -797,6 +802,123 @@ class GlmPowerController:
 
                 return state, rgb, (pt.x, pt.y)
             finally:
+                if saved_state:
+                    self._restore_window_state(win, saved_state)
+
+    def wait_for_state(
+        self,
+        desired: PowerState,
+        timeout: float = 3.0,
+        render_delay: float = 0.3,
+    ) -> Tuple[PowerState, float, bool]:
+        """
+        Wait for GLM power state to reach desired value.
+
+        Brings window to foreground, waits for render delay, then polls until
+        state matches desired or timeout. Minimizes window when done.
+
+        This is useful for detecting state changes triggered externally (e.g.,
+        RF remote) where we need to wait for GLM UI to update.
+
+        Args:
+            desired: Target state to wait for ("on" or "off")
+            timeout: Maximum time to wait in seconds (default 3.0)
+            render_delay: Time to wait after bringing window to foreground
+                         for GLM to repaint (default 0.3s)
+
+        Returns:
+            Tuple of (actual_state, elapsed_ms, matched)
+            - actual_state: The last state read ("on", "off", or "unknown")
+            - elapsed_ms: Time elapsed in milliseconds
+            - matched: True if actual_state == desired
+
+        Raises:
+            GlmWindowNotFoundError: If GLM window not found.
+        """
+        with self._lock:
+            win = self._find_window(use_cache=False)
+            start_time = time.time()
+
+            # Capture window state BEFORE any operations
+            # Only minimize at end if window was minimized before
+            saved_state = None
+            if self.steal_focus:
+                saved_state = self._capture_window_state(win)
+
+            try:
+                # Bring window to foreground - exactly like HID path does in set_state()
+                if self.steal_focus:
+                    self._ensure_foreground(win)
+
+                # Force GLM to re-render by resizing window. OpenGL/JUCE apps ignore
+                # RedrawWindow/WM_PAINT but MUST re-render when window size changes
+                # because the framebuffer dimensions change. Resize by 1 pixel and back.
+                hwnd = win.handle
+                r = win.rectangle()
+                SWP_NOZORDER = 0x0004
+                SWP_NOACTIVATE = 0x0010
+                # Resize +1 width
+                ctypes.windll.user32.SetWindowPos(
+                    hwnd, None,
+                    r.left, r.top, r.width() + 1, r.height(),
+                    SWP_NOZORDER | SWP_NOACTIVATE
+                )
+                time.sleep(0.05)
+                # Resize back to original
+                ctypes.windll.user32.SetWindowPos(
+                    hwnd, None,
+                    r.left, r.top, r.width(), r.height(),
+                    SWP_NOZORDER | SWP_NOACTIVATE
+                )
+                time.sleep(0.1)  # Brief pause for render to complete
+
+                # Log window state for diagnostics
+                r = win.rectangle()
+                hwnd = win.handle
+                fg_hwnd = ctypes.windll.user32.GetForegroundWindow()
+                is_fg = (hwnd == fg_hwnd)
+                is_minimized = bool(ctypes.windll.user32.IsIconic(hwnd))
+                self.logger.debug(
+                    f"wait_for_state: window rect=({r.left},{r.top},{r.right},{r.bottom}), "
+                    f"hwnd={hwnd}, is_foreground={is_fg}, is_minimized={is_minimized}, "
+                    f"waiting for {desired}, timeout={timeout}s"
+                )
+
+                # Poll until desired state or timeout - same as internal _wait_for_state()
+                deadline = start_time + timeout
+                last_state = "unknown"
+                poll_count = 0
+
+                while time.time() < deadline:
+                    state, rgb, pt = self._read_state_internal(win)
+                    last_state = state
+                    poll_count += 1
+
+                    # Log RGB values for diagnostics
+                    elapsed_now = (time.time() - start_time) * 1000
+                    self.logger.debug(
+                        f"wait_for_state poll #{poll_count}: state={state}, rgb={rgb}, "
+                        f"pt=({pt.x},{pt.y}), elapsed={elapsed_now:.0f}ms"
+                    )
+
+                    if state == desired:
+                        elapsed_ms = (time.time() - start_time) * 1000
+                        self.logger.debug(f"Power state changed to {desired} after {elapsed_ms:.0f}ms")
+                        if state != "unknown":
+                            self._last_known_state = state
+                        return state, elapsed_ms, True
+
+                    time.sleep(self.config.poll_interval)
+
+                # Timeout
+                elapsed_ms = (time.time() - start_time) * 1000
+                self.logger.warning(f"wait_for_state timed out after {elapsed_ms:.0f}ms (wanted {desired}, got {last_state})")
+                if last_state != "unknown":
+                    self._last_known_state = last_state
+                return last_state, elapsed_ms, False
+
+            finally:
+                # Restore window to previous state (only minimize if was minimized before)
                 if saved_state:
                     self._restore_window_state(win, saved_state)
 

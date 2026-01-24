@@ -5,13 +5,115 @@ Bridges a Fosi Audio VOL20 USB volume knob to Genelec GLM software via MIDI.
 Supports volume control, mute, dim, and power management with UI automation.
 """
 
+# v3.2.21 changes from v3.2.20:
+# 1. Relaxed RF power pattern timing: MAX_GAP 100ms→170ms (allows MIDI latency),
+#    PRE_GAP 200ms→120ms (allows RF power press shortly after volume change).
+# 2. Reduced HID power cooldown: 5s→3s (total lockout 5s instead of 7s).
+#
+# v3.2.20 changes from v3.2.19:
+# 1. Confirmed GLM bug: Power button visual only updates when clicked directly - RF remote
+#    changes internal state (sends MIDI) but doesn't trigger button repaint. User verified
+#    this via RDP observation. Reverting to v3.2.18 approach: trust MIDI pattern, skip UI.
+# 2. Re-enable post-startup minimize (v3.2.19 test showed it wasn't the issue).
+#
+# v3.2.19 changes from v3.2.18:
+# 1. TEST: Hypothesis that minimize/restore causes stale button. Disabled post-startup
+#    minimize. Re-enabled UI reading for RF path. If window stays visible, reading
+#    should work like it does at startup. RESULT: Failed - GLM bug confirmed.
+#
+# v3.2.18 changes from v3.2.17:
+# 1. Trust MIDI pattern for RF power detection: Skip UI verification entirely since GLM's
+#    power button doesn't repaint when power changes via RF remote. Just toggle internal
+#    state when valid MIDI pattern is detected. The triple-condition filter (max gap <100ms,
+#    total gaps <200ms, pre-gap >200ms) prevents false positives from volume changes.
+#    This makes RF detection instant (no 3s timeout) and reliable.
+#
+# v3.2.17 changes from v3.2.16:
+# 1. (Failed) Resize trick - also doesn't update GLM button visual. Tried v3.2.9-v3.2.17
+#    with: render delay, mouse hover, neutral clicks, RedrawWindow, window resize. None
+#    work because GLM/JUCE only updates button visual when you CLICK the button.
+#
+# v3.2.16 changes from v3.2.15:
+# 1. (Failed) Tried RedrawWindow - doesn't work for OpenGL apps, they ignore paint messages.
+#
+# v3.2.15 changes from v3.2.14:
+# 1. Simplify RF path to match HID path exactly: Removed render_delay, neutral click, and
+#    mouse movement from wait_for_state(). Now just does _ensure_foreground() + immediate
+#    poll loop - exactly what set_state() does for HID, which works perfectly. The extra
+#    delays and clicks we added (v3.2.7-v3.2.14) were unnecessary complexity.
+#
+# v3.2.14 changes from v3.2.13:
+# 1. Fix neutral click location: Clicking above power button at y=45 was hitting menu bar
+#    area. Now clicks 80 pixels to the LEFT of power button at the SAME HEIGHT (y=80).
+#    This ensures the click lands in empty grey area, forcing GLM repaint without hitting
+#    any interactive elements.
+#
+# v3.2.13 changes from v3.2.12:
+# 1. Use neutral click to force GLM repaint: Instead of just hovering over power button,
+#    now clicks in empty grey area above the power button (same x, but y=45 instead of 80).
+#    This forces GLM to process its event queue and repaint, mimicking HID path behavior.
+#    Mouse hover alone wasn't reliable; a click forces synchronous UI update.
+#
+# v3.2.12 changes from v3.2.11:
+# 1. Fix wait_for_state() always minimizing window: Previously it unconditionally minimized GLM
+#    window after reading, even if window was already in foreground (e.g., user clicked power
+#    button directly in GLM UI). Now properly captures/restores window state like get_state()
+#    and set_state() do - only minimizes if window was minimized before.
+#
+# v3.2.11 changes from v3.2.10:
+# 1. Fix RF remote power detection hover effect: Moving mouse to power button triggered repaint
+#    but left cursor on button, causing hover effect that showed green regardless of actual state.
+#    Now moves mouse away (100px left) after triggering repaint to read true button color.
+#
+# v3.2.10 changes from v3.2.9:
+# 1. Fix RF remote power detection: GLM doesn't repaint the power button when window is restored
+#    from minimized state. Added mouse movement to power button area after restore to trigger
+#    GLM's UI refresh. Without this, we read stale grey pixels even when power is actually ON.
+#
+# v3.2.9 changes from v3.2.8:
+# 1. Added diagnostic logging to wait_for_state() to investigate RF remote power detection issues.
+#    Now logs: window rectangle, foreground status, minimized status, and RGB values on each poll.
+#    This helps diagnose why we're reading OFF when speakers are actually ON.
+#
+# v3.2.8 changes from v3.2.7:
+# 1. Refactored RF remote power detection to use new wait_for_state() method in GlmPowerController.
+#    This method brings window to foreground, waits for render delay, polls efficiently using
+#    _read_state_internal() (no window-finding overhead per poll), then minimizes.
+#    Much cleaner than the custom polling loop and matches what set_state() does internally.
+#
+# v3.2.7 changes from v3.2.6:
+# 1. Add render delay after bringing GLM window to foreground for RF remote power detection.
+#    Without this delay, we read stale pixel values because GLM hasn't repainted yet.
+#    The HID path works because clicking forces synchronous UI update; RF remote is async.
+#
+# v3.2.6 changes from v3.2.5:
+# 1. Triple-condition power pattern filter: Added pre-gap check (>200ms) to ensure
+#    pattern is an isolated burst, not embedded within ongoing volume change traffic.
+#    Real power toggles have 200-2000+ms silence before; false positives have ~30ms.
+#
+# v3.2.5 changes from v3.2.4:
+# 1. Dual-condition power pattern filter: Instead of single 50ms max gap threshold,
+#    now uses both max single gap (100ms) AND total of all gaps (200ms).
+#    This allows occasional jitter (real toggles had ~70ms gaps) while still
+#    rejecting false positives (volume changes have 246-431ms total gaps).
+#
+# v3.2.4 changes from v3.2.3:
+# 1. Polling for RF remote power detection: Instead of fixed delay before UI read,
+#    now polls until state change is detected (up to 3s timeout, 150ms interval).
+#    RF remote → GLM path can take variable time (Power ON measured at 1329-2000+ms).
+#
+# v3.2.3 changes from v3.2.2:
+# 1. Timing-based power pattern filter: Real power toggles have consistent ~31ms gaps
+#    between MIDI messages, while false positives (volume changes) have ~130-150ms gaps.
+#    Patterns with any gap > 50ms are now rejected to prevent false positive detections.
+#
 # v3.2.2 changes from v3.2.0:
 # 1. Timing improvements: Added delays after RDP session detection and GLM restart
 #    to prevent "screen grab failed" errors when Windows display driver not ready.
 # 2. Session reconnect for RF remote: When power is toggled via GLM's RF remote,
 #    the MIDIReaderThread now reconnects the session (via tscon) before reading UI,
 #    preventing state desync from failed screen grabs.
-__version__ = "3.2.2"
+__version__ = "3.2.21"
 
 import time
 import signal
@@ -33,6 +135,8 @@ from midi_constants import (
     Action, ControlMode, GlmControl,
     GLM_VOLUME_ABS, GLM_VOL_UP_CC, GLM_VOL_DOWN_CC, GLM_MUTE_CC, GLM_DIM_CC, GLM_POWER_CC,
     POWER_PATTERN, POWER_PATTERN_WINDOW, POWER_PATTERN_MIN_SPAN, POWER_STARTUP_WINDOW,
+    POWER_PATTERN_MAX_GAP, POWER_PATTERN_MAX_TOTAL, POWER_PATTERN_PRE_GAP,
+    POWER_PATTERN_POLL_TIMEOUT, POWER_PATTERN_POLL_INTERVAL, POWER_PATTERN_RENDER_DELAY,
     CC_NAMES, ACTION_TO_GLM, CC_TO_ACTION,
     KEY_VOL_UP, KEY_VOL_DOWN, KEY_CLICK, KEY_DOUBLE_CLICK, KEY_TRIPLE_CLICK, KEY_LONG_PRESS,
     KEY_NAMES, DEFAULT_BINDINGS, log_midi as _log_midi
@@ -91,8 +195,8 @@ QUEUE_MAX_SIZE = 100  # Maximum queued events before backpressure
 
 # Power control timing (UI automation based)
 POWER_SETTLING_TIME = 2.0   # Block ALL commands during power settling
-POWER_COOLDOWN_TIME = 5.0   # Block power commands after settling ends
-POWER_TOTAL_LOCKOUT = POWER_SETTLING_TIME + POWER_COOLDOWN_TIME  # 7s total
+POWER_COOLDOWN_TIME = 3.0   # Block power commands after settling ends
+POWER_TOTAL_LOCKOUT = POWER_SETTLING_TIME + POWER_COOLDOWN_TIME  # 5s total
 
 # GLM volume initialization timing
 GLM_INIT_WAIT = 0.5  # seconds - wait for MIDI reader to connect
@@ -936,6 +1040,38 @@ class HIDToMIDIDaemon:
                         if len(seq) >= 5 and seq[-5:] == POWER_PATTERN:
                             time_span = self._rx_seq[-1][0] - self._rx_seq[-5][0]
                             if time_span >= POWER_PATTERN_MIN_SPAN:  # Not a buffer dump
+                                # Check timing gaps between consecutive messages
+                                # Triple-condition filter for robustness:
+                                # 1. No single gap > MAX_GAP (100ms) - allows occasional jitter
+                                # 2. Total of all gaps < MAX_TOTAL (200ms) - catches false positives
+                                # 3. Pre-gap before pattern > PRE_GAP (200ms) - ensures isolated burst
+                                # Real power toggles: isolated bursts with 200-2000+ms silence before
+                                # False positives: embedded in stream with ~30ms between messages
+                                pattern_times = [t for t, _ in self._rx_seq[-5:]]
+                                gaps = [pattern_times[i+1] - pattern_times[i] for i in range(4)]
+                                max_gap = max(gaps)
+                                total_gap = sum(gaps)
+
+                                # Check pre-gap: time between message before pattern and first pattern message
+                                # If buffer has only 5 messages, pattern is isolated (no prior message)
+                                if len(self._rx_seq) > 5:
+                                    pre_gap = self._rx_seq[-5][0] - self._rx_seq[-6][0]
+                                else:
+                                    pre_gap = float('inf')  # No prior message = isolated burst
+
+                                # Reject if any condition fails
+                                if max_gap > POWER_PATTERN_MAX_GAP or total_gap > POWER_PATTERN_MAX_TOTAL or pre_gap < POWER_PATTERN_PRE_GAP:
+                                    reason = []
+                                    if max_gap > POWER_PATTERN_MAX_GAP:
+                                        reason.append(f"max gap {max_gap*1000:.0f}ms > {POWER_PATTERN_MAX_GAP*1000:.0f}ms")
+                                    if total_gap > POWER_PATTERN_MAX_TOTAL:
+                                        reason.append(f"total {total_gap*1000:.0f}ms > {POWER_PATTERN_MAX_TOTAL*1000:.0f}ms")
+                                    if pre_gap < POWER_PATTERN_PRE_GAP:
+                                        reason.append(f"pre-gap {pre_gap*1000:.0f}ms < {POWER_PATTERN_PRE_GAP*1000:.0f}ms")
+                                    logger.debug(f"Power pattern rejected: {', '.join(reason)} (gaps: {[f'{g*1000:.0f}ms' for g in gaps]})")
+                                    self._rx_seq = []
+                                    continue
+
                                 # Skip pattern processing during startup/volume init
                                 if self._suppress_power_pattern:
                                     logger.debug("MIDI power pattern ignored (suppressed during init)")
@@ -950,52 +1086,13 @@ class HIDToMIDIDaemon:
                                     self._rx_seq = []
                                     continue
 
-                                # Power pattern detected - use it as trigger to read UI state
-                                # This is more reliable than inferring state from pattern heuristics
+                                # Power pattern detected - trust the MIDI pattern and toggle state
+                                # GLM bug: Power button visual doesn't update on RF remote toggle
+                                # (only updates when button is clicked directly). Verified via RDP observation.
                                 old_power = glm_controller.power
-                                state_updated = False
-
-                                if self._power_controller:
-                                    # Ensure session is connected before UI read
-                                    # (reconnect via tscon if RDP session is disconnected)
-                                    if ensure_session_connected:
-                                        ensure_session_connected(logger=logger)
-
-                                    try:
-                                        actual_state = self._power_controller.get_state()
-                                        if actual_state in ("on", "off"):
-                                            glm_controller.power = (actual_state == "on")
-                                            state_updated = True
-                                            if glm_controller.power != old_power:
-                                                logger.info(f"Power state read from UI: {actual_state.upper()} (was {'ON' if old_power else 'OFF'})")
-                                            else:
-                                                logger.debug(f"Power state confirmed from UI: {actual_state.upper()}")
-                                        else:
-                                            logger.warning(f"UI returned unknown power state: {actual_state}")
-                                    except Exception as e:
-                                        logger.warning(f"Failed to read power state from UI: {e}")
-
-                                # Fallback: if UI unavailable, use toggle heuristic
-                                if not state_updated:
-                                    if len(seq) == 5:
-                                        # Clean 5-message burst - toggle
-                                        if (self._last_pattern_time and
-                                            (now - self._last_pattern_time) < POWER_STARTUP_WINDOW):
-                                            # Second pattern within window = GLM startup
-                                            glm_controller.power = True
-                                            logger.info(f"GLM startup detected (fallback) - power synced to ON")
-                                            self._last_pattern_time = None
-                                        else:
-                                            glm_controller.power = not glm_controller.power
-                                            logger.info(f"Power toggle detected (fallback, now {'ON' if glm_controller.power else 'OFF'})")
-                                            self._last_pattern_time = now
-                                    else:
-                                        # Burst with extra messages - record for startup detection
-                                        logger.debug(f"Power pattern with {len(seq)} msgs (fallback) - recording for startup detection")
-                                        self._last_pattern_time = now
-
-                                if glm_controller.power != old_power:
-                                    glm_controller._notify_state_change()
+                                glm_controller.power = not old_power
+                                logger.info(f"RF power toggle detected (MIDI pattern) - now {'ON' if glm_controller.power else 'OFF'}")
+                                glm_controller._notify_state_change()
 
                                 self._rx_seq = []  # Clear after detection
 
