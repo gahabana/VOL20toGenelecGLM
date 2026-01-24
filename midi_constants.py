@@ -55,14 +55,14 @@ GLM_POWER_CC = 28     # System Power (momentary trigger, no MIDI feedback)
 POWER_PATTERN = [GLM_MUTE_CC, GLM_VOLUME_ABS, GLM_DIM_CC, GLM_MUTE_CC, GLM_VOLUME_ABS]
 POWER_PATTERN_WINDOW = 0.5  # seconds - max time window for pattern
 POWER_PATTERN_MIN_SPAN = 0.05  # seconds - min span (faster = buffer dump, ignore)
-POWER_PATTERN_MAX_GAP = 0.10  # seconds - max gap between any two consecutive messages (100ms)
+POWER_PATTERN_MAX_GAP = 0.17  # seconds - max gap between any two consecutive messages (170ms)
 POWER_PATTERN_MAX_TOTAL = 0.20  # seconds - max total of all 4 gaps combined (200ms)
-POWER_PATTERN_PRE_GAP = 0.20  # seconds - min gap before first message (200ms) to confirm isolated burst
+POWER_PATTERN_PRE_GAP = 0.12  # seconds - min gap before first message (120ms) to confirm isolated burst
 # Triple-condition filter: All three must be satisfied to detect power toggle.
-# 1. No single gap > MAX_GAP (100ms)
+# 1. No single gap > MAX_GAP (170ms) - allows for MIDI latency
 # 2. Total of all gaps < MAX_TOTAL (200ms)
-# 3. Pre-gap before pattern > PRE_GAP (200ms) - ensures isolated burst, not embedded in stream
-# Real power toggles: isolated bursts with 200-2000+ms silence before
+# 3. Pre-gap before pattern > PRE_GAP (120ms) - allows RF power shortly after volume change
+# Real power toggles: isolated bursts with 120-2000+ms silence before
 # False positives (volume changes): embedded in stream with ~30ms between messages
 POWER_PATTERN_POLL_TIMEOUT = 3.0  # seconds - max time to poll for state change after RF remote toggle
 POWER_PATTERN_POLL_INTERVAL = 0.15  # seconds - interval between UI reads while polling

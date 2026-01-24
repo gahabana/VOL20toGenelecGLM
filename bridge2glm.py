@@ -5,6 +5,11 @@ Bridges a Fosi Audio VOL20 USB volume knob to Genelec GLM software via MIDI.
 Supports volume control, mute, dim, and power management with UI automation.
 """
 
+# v3.2.21 changes from v3.2.20:
+# 1. Relaxed RF power pattern timing: MAX_GAP 100ms→170ms (allows MIDI latency),
+#    PRE_GAP 200ms→120ms (allows RF power press shortly after volume change).
+# 2. Reduced HID power cooldown: 5s→3s (total lockout 5s instead of 7s).
+#
 # v3.2.20 changes from v3.2.19:
 # 1. Confirmed GLM bug: Power button visual only updates when clicked directly - RF remote
 #    changes internal state (sends MIDI) but doesn't trigger button repaint. User verified
@@ -108,7 +113,7 @@ Supports volume control, mute, dim, and power management with UI automation.
 # 2. Session reconnect for RF remote: When power is toggled via GLM's RF remote,
 #    the MIDIReaderThread now reconnects the session (via tscon) before reading UI,
 #    preventing state desync from failed screen grabs.
-__version__ = "3.2.20"
+__version__ = "3.2.21"
 
 import time
 import signal
@@ -190,8 +195,8 @@ QUEUE_MAX_SIZE = 100  # Maximum queued events before backpressure
 
 # Power control timing (UI automation based)
 POWER_SETTLING_TIME = 2.0   # Block ALL commands during power settling
-POWER_COOLDOWN_TIME = 5.0   # Block power commands after settling ends
-POWER_TOTAL_LOCKOUT = POWER_SETTLING_TIME + POWER_COOLDOWN_TIME  # 7s total
+POWER_COOLDOWN_TIME = 3.0   # Block power commands after settling ends
+POWER_TOTAL_LOCKOUT = POWER_SETTLING_TIME + POWER_COOLDOWN_TIME  # 5s total
 
 # GLM volume initialization timing
 GLM_INIT_WAIT = 0.5  # seconds - wait for MIDI reader to connect
