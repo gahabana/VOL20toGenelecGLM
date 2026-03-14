@@ -734,6 +734,8 @@ def restart_midi_service():
     if not HAS_WIN32:
         return
 
+    import subprocess
+
     logger.info("Restarting Windows MIDI Service (midisrv) for virtual port detection...")
     try:
         result = subprocess.run(
