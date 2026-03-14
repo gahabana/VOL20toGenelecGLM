@@ -5,6 +5,11 @@ Bridges a Fosi Audio VOL20 USB volume knob to Genelec GLM software via MIDI.
 Supports volume control, mute, dim, and power management with UI automation.
 """
 
+# v3.2.22 changes from v3.2.21:
+# 1. Restart Windows MIDI Service (midisrv) at startup so LoopMIDI virtual ports
+#    are detected. Windows MIDI Services (KB5074105, rolled out Feb-Mar 2026) doesn't
+#    see virtual ports created before the service starts.
+#
 # v3.2.21 changes from v3.2.20:
 # 1. Relaxed RF power pattern timing: MAX_GAP 100ms→170ms (allows MIDI latency),
 #    PRE_GAP 200ms→120ms (allows RF power press shortly after volume change).
@@ -113,7 +118,7 @@ Supports volume control, mute, dim, and power management with UI automation.
 # 2. Session reconnect for RF remote: When power is toggled via GLM's RF remote,
 #    the MIDIReaderThread now reconnects the session (via tscon) before reading UI,
 #    preventing state desync from failed screen grabs.
-__version__ = "3.2.21"
+__version__ = "3.2.22"
 
 import time
 import signal
@@ -718,6 +723,44 @@ def prime_rdp_session() -> bool:
     except Exception as e:
         logger.error(f"RDP priming failed: {e}")
         return False
+
+def restart_midi_service():
+    """Restart Windows MIDI Service so LoopMIDI virtual ports are visible.
+
+    Windows MIDI Services (introduced in Windows 11 24H2) doesn't detect
+    virtual MIDI ports created by LoopMIDI before the service starts.
+    Restarting midisrv forces re-enumeration of all MIDI ports.
+    """
+    if not HAS_WIN32:
+        return
+
+    logger.info("Restarting Windows MIDI Service (midisrv) for virtual port detection...")
+    try:
+        result = subprocess.run(
+            ["net", "stop", "midisrv"],
+            capture_output=True, timeout=10,
+        )
+        if result.returncode != 0:
+            stderr = result.stderr.decode('utf-8', errors='ignore').strip()
+            # "not started" is fine — service may already be stopped
+            if "not started" not in stderr.lower() and "not running" not in stderr.lower():
+                logger.warning(f"net stop midisrv: {stderr}")
+
+        result = subprocess.run(
+            ["net", "start", "midisrv"],
+            capture_output=True, timeout=10,
+        )
+        if result.returncode == 0:
+            logger.info("Windows MIDI Service restarted successfully")
+        else:
+            stderr = result.stderr.decode('utf-8', errors='ignore').strip()
+            # "already been started" is fine
+            if "already" in stderr.lower():
+                logger.info("Windows MIDI Service was already running")
+            else:
+                logger.warning(f"net start midisrv: {stderr}")
+    except Exception as e:
+        logger.warning(f"Failed to restart MIDI service: {e}")
 
 def set_current_thread_priority(priority_level):
     """Set the priority of the current thread (Windows only)."""
@@ -1523,6 +1566,10 @@ if __name__ == "__main__":
         prime_rdp_session()
     else:
         logger.debug("RDP session already primed this boot, skipping")
+
+    # Restart Windows MIDI Service so LoopMIDI ports are visible
+    # (Windows MIDI Services doesn't detect virtual ports created before it starts)
+    restart_midi_service()
 
     daemon = HIDToMIDIDaemon(
         args.min_click_time,
