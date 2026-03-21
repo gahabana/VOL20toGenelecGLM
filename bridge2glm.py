@@ -22,7 +22,7 @@ from mido import Message, open_output, open_input
 
 # Import from extracted modules
 from config import parse_arguments
-from retry_logger import SmartRetryLogger, retry_logger, RETRY_LOG_INTERVALS
+from retry_logger import retry_logger
 from midi_constants import (
     Action, ControlMode, GlmControl,
     GLM_VOLUME_ABS, GLM_VOL_UP_CC, GLM_VOL_DOWN_CC, GLM_MUTE_CC, GLM_DIM_CC, GLM_POWER_CC,
@@ -840,6 +840,7 @@ class HIDToMIDIDaemon:
                 state = self._power_controller.get_state()
                 if state in ("on", "off"):
                     glm_controller.power = (state == "on")
+                    _notify_state_change()
                     logger.info(f"Power state synced from GLM UI after restart: {state.upper()}")
                 else:
                     logger.warning(f"Could not determine GLM power state after restart: {state}")

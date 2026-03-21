@@ -36,8 +36,6 @@ try:
         GlmPowerController,
         GlmPowerConfig,
         PowerState,
-        get_power_state,
-        set_power_state,
         get_display_diagnostics,
         is_console_session,
         get_current_session_id,
@@ -51,8 +49,6 @@ except ImportError:
     GlmPowerController = None
     GlmPowerConfig = None
     PowerState = None
-    get_power_state = None
-    set_power_state = None
     get_display_diagnostics = None
     is_console_session = None
     get_current_session_id = None
@@ -80,8 +76,6 @@ __all__ = [
     'GlmPowerController',
     'GlmPowerConfig',
     'PowerState',
-    'get_power_state',
-    'set_power_state',
     'get_display_diagnostics',
     'is_console_session',
     'get_current_session_id',

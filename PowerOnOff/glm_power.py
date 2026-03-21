@@ -1010,14 +1010,3 @@ class GlmPowerController:
             return True
         except GlmWindowNotFoundError:
             return False
-
-
-# Convenience function for simple usage
-def get_power_state() -> PowerState:
-    """Quick helper to read current power state."""
-    return GlmPowerController().get_state()
-
-
-def set_power_state(desired: Literal["on", "off"]) -> bool:
-    """Quick helper to set power state."""
-    return GlmPowerController().set_state(desired)
