@@ -17,6 +17,11 @@
 - Consider the impact on normal operation, not just edge case recovery
 - Prefer solutions that don't require restarting GLM during normal operation
 
+### Versioning
+- When committing more than one small change, **bump the version** in `bridge2glm.py` (`__version__` variable near the top of the file)
+- Use semantic patch increments: `3.2.22` → `3.2.23` for bug fixes/improvements, minor bump for new features
+- The version should reflect the actual state of the code — don't leave it stale across multiple changes
+
 ## Technical Context
 
 ### Known Issues (Resolved)

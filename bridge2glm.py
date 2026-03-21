@@ -5,7 +5,7 @@ Bridges a Fosi Audio VOL20 USB volume knob to Genelec GLM software via MIDI.
 Supports volume control, mute, dim, and power management with UI automation.
 """
 
-__version__ = "3.2.22"
+__version__ = "3.2.23"
 
 import time
 import signal
@@ -269,6 +269,21 @@ class GlmController:
         """Set the pending volume after sending a command."""
         with self._lock:
             self._pending_volume = target
+
+    def toggle_power_from_midi_pattern(self) -> bool:
+        """Toggle power state when RF remote MIDI pattern is detected.
+
+        Acquires the lock to prevent race conditions with other threads
+        modifying power state (e.g., consumer thread via UI automation).
+
+        Returns:
+            The new power state (True=ON, False=OFF).
+        """
+        with self._lock:
+            self.power = not self.power
+            new_power = self.power
+        self._notify_state_change()
+        return new_power
 
     def update_from_midi(self, cc: int, value: int) -> bool:
         """Update state from MIDI message. Returns True if state changed."""
@@ -1021,10 +1036,8 @@ class HIDToMIDIDaemon:
                                 # Power pattern detected - trust the MIDI pattern and toggle state
                                 # GLM bug: Power button visual doesn't update on RF remote toggle
                                 # (only updates when button is clicked directly). Verified via RDP observation.
-                                old_power = glm_controller.power
-                                glm_controller.power = not old_power
-                                logger.info(f"RF power toggle detected (MIDI pattern) - now {'ON' if glm_controller.power else 'OFF'}")
-                                glm_controller._notify_state_change()
+                                new_power = glm_controller.toggle_power_from_midi_pattern()
+                                logger.info(f"RF power toggle detected (MIDI pattern) - now {'ON' if new_power else 'OFF'}")
 
                                 self._rx_seq = []  # Clear after detection
 

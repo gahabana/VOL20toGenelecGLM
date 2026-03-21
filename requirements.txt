@@ -8,5 +8,10 @@ psutil
 fastapi
 uvicorn[standard]
 
+# Windows UI automation & power control
+pywinauto
+pillow
+pywin32
+
 # MQTT/Home Assistant (Phase 5)
 paho-mqtt
