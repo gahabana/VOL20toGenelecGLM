@@ -6,325 +6,206 @@
 
 ```
 VOL20toGenelecGLM/
-├── .planning/                    # GSD planning artifacts (generated, not committed)
-│   └── codebase/                # This analysis output
-├── .claude/                      # Claude Code context guidelines
-├── .git/                         # Version control
-├── PowerOnOff/                   # Power control & process management (Windows only)
-│   ├── __init__.py              # Public API exports
-│   ├── glm_power.py             # UI automation for power button
-│   ├── glm_manager.py           # Process lifecycle & watchdog
-│   └── exceptions.py            # Custom exception types
-├── api/                          # Network interfaces
-│   ├── __init__.py
-│   ├── rest.py                  # FastAPI server + WebSocket
-│   └── mqtt.py                  # MQTT client for Home Assistant
-├── glm_core/                     # Domain model
-│   ├── __init__.py              # Public API exports
-│   └── actions.py               # GlmAction dataclasses
-├── web/                          # Frontend assets
-│   ├── index.html               # Web UI (served by FastAPI)
-│   └── favicon.svg              # Browser icon
-├── __pycache__/                  # Compiled Python bytecode (generated)
-├── bridge2glm.py                # Main application entry point (1492 lines)
-├── config.py                    # CLI argument parsing & validation
-├── midi_constants.py            # MIDI CC mappings & enums
-├── acceleration.py              # Volume acceleration handler
-├── logging_setup.py             # Logging configuration
-├── retry_logger.py              # Retry-aware logging wrapper
-├── requirements.txt             # Python package dependencies
-├── README.md                    # User documentation
-├── CLAUDE.md                    # Claude Code guidelines for this project
-├── HANDOFF-v3.0.0.md            # Version history & known issues
-├── FUTURE_work.md               # Planned improvements
-├── .gitignore                   # Git ignore rules
-└── *.log                        # Log files (gitignored)
+├── bridge2glm.py          # Main entry point — daemon, GlmController, all threads
+├── config.py              # CLI argument parsing and validation
+├── acceleration.py        # Volume acceleration handler (knob speed → delta)
+├── midi_constants.py      # MIDI CC numbers, Action/ControlMode enums, key bindings
+├── logging_setup.py       # Async queue-based logging setup
+├── retry_logger.py        # SmartRetryLogger — throttled retry-loop logging
+│
+├── glm_core/
+│   ├── __init__.py        # Re-exports all action types
+│   └── actions.py         # GlmAction frozen dataclasses (SetVolume, SetPower, etc.)
+│
+├── PowerOnOff/
+│   ├── __init__.py        # Re-exports GlmPowerController, GlmManager, helpers
+│   ├── glm_power.py       # UI automation power control (pixel sampling, mouse click)
+│   ├── glm_manager.py     # GLM process lifecycle, watchdog, restart
+│   ├── exceptions.py      # GlmPowerError hierarchy
+│   └── INTEGRATION.md     # Integration notes for PowerOnOff module
+│
+├── api/
+│   ├── __init__.py        # Re-exports start_api_server, start_mqtt_client
+│   ├── rest.py            # FastAPI + WebSocket REST server
+│   └── mqtt.py            # MQTT client (paho) with HA Discovery
+│
+├── web/
+│   ├── index.html         # Single-page web UI (served by REST API at /)
+│   └── favicon.svg        # Web UI favicon
+│
+├── requirements.txt       # Python dependencies
+├── move_mesa_files.bat    # Windows batch script (OpenGL Mesa DLL management)
+├── CLAUDE.md              # Claude Code guidelines (checked in)
+├── README.md              # Project README
+├── FUTURE_work.md         # Backlog / planned features
+└── HANDOFF-v3.0.0.md      # Version 3.0.0 handoff notes
 ```
+
+---
 
 ## Directory Purposes
 
-**PowerOnOff/:**
-- Purpose: Windows-only power and process management for Genelec GLM
-- Contains: UI automation (pixel sampling + mouse clicks), process lifecycle, watchdog, custom exceptions
-- Key files: `glm_power.py` (1012 lines), `glm_manager.py` (655 lines)
-- Conditionally imported in `bridge2glm.py` (graceful fallback on non-Windows)
+**Root level (`.py` files):**
+- Purpose: Application entry point and flat utility modules
+- `bridge2glm.py` is the monolithic main file: contains `HIDToMIDIDaemon`, `GlmController`, all thread methods, RDP priming, MIDI service restart, console minimization, and `__main__` startup sequence
+- Utility modules (`acceleration.py`, `midi_constants.py`, `logging_setup.py`, `retry_logger.py`, `config.py`) are standalone with no inter-module imports beyond stdlib
 
-**api/:**
-- Purpose: Network interfaces for remote control and integration
-- Contains: FastAPI REST endpoints, WebSocket handler, MQTT client with Home Assistant discovery
-- Key files: `rest.py` (core server logic), `mqtt.py` (MQTT protocol)
-- Spawned as background threads from main application
+**`glm_core/`:**
+- Purpose: Pure domain model — what the system can do, independent of how
+- Contains: Frozen dataclass commands only. No Win32, no I/O, no state.
+- Key file: `glm_core/actions.py`
+- Import pattern: `from glm_core import SetVolume, AdjustVolume, SetMute, SetDim, SetPower, QueuedAction`
 
-**glm_core/:**
-- Purpose: Domain model and core abstractions
-- Contains: Immutable action dataclasses (SetVolume, AdjustVolume, SetMute, SetDim, SetPower, QueuedAction)
-- Key files: `actions.py` (all action definitions)
-- No dependencies outside Python stdlib; used by all layers
+**`PowerOnOff/`:**
+- Purpose: Windows-only UI automation and process management for GLM
+- `glm_power.py`: pixel-sampling power controller (requires pywinauto, Pillow, pywin32)
+- `glm_manager.py`: GLM process lifecycle + watchdog (requires psutil, pywinauto)
+- All imports are conditional (`try/except ImportError`) so the module loads on non-Windows without crashing
+- Availability flags: `POWER_CONTROL_AVAILABLE`, `GLM_MANAGER_AVAILABLE` exported from `__init__.py`
 
-**web/:**
-- Purpose: Frontend UI served by FastAPI static mount
-- Contains: HTML5 + JavaScript, WebSocket client, responsive control panel
-- Key files: `index.html`, `favicon.svg`
-- Served from FastAPI at `/` (default) or custom route
+**`api/`:**
+- Purpose: External control interfaces
+- `rest.py`: FastAPI server with WebSocket broadcast
+- `mqtt.py`: MQTT client with Home Assistant Discovery
+- Both modules take `action_queue` and `glm_controller` as constructor/factory arguments — no global state except module-level `_action_queue` / `_glm_controller` set by `create_app()`
 
-**Root Level (Main Application):**
-- `bridge2glm.py` (1492 lines): Main entry point, orchestrates all subsystems
-  - HID reader thread (polling VOL20 device)
-  - MIDI reader thread (listening for GLM feedback)
-  - Action consumer loop (processes queue, sends MIDI)
-  - Power control integration (UI automation fallback)
-  - Acceleration handling (velocity-based volume changes)
-  - Logging and CLI interface
+**`web/`:**
+- Purpose: Single-page web UI served statically by the REST API
+- `index.html`: complete self-contained SPA (HTML + CSS + JS inline)
+- Served at `GET /` by `api/rest.py`
 
-- `config.py`: Argument parsing with validation for:
-  - Device VID/PID (HID target device)
-  - Click timing (double-tap detection)
-  - Volume acceleration curve
-  - MIDI channel names
-  - API port, MQTT broker, GLM executable path
-
-- `midi_constants.py`: Immutable MIDI mappings:
-  - Action enum (VOL_UP, VOL_DOWN, MUTE, DIM, POWER)
-  - GlmControl dataclass (CC number, label, mode)
-  - GLM CC numbers (20-28 range)
-  - Power pattern detection constants
-
-- `acceleration.py`: AccelerationHandler class for velocity-sensitive volume
-  - Detects click speed, applies configurable acceleration curve
-  - Tracks click timing and button state
-
-- `logging_setup.py`: Logging initialization
-  - RotatingFileHandler for file logs
-  - QueueHandler + QueueListener for async I/O
-  - Configurable level (DEBUG, INFO, NONE)
-
-- `retry_logger.py`: Wrapper for retryable operations
-  - Exponential backoff logging
-  - Tracks retry attempts
+---
 
 ## Key File Locations
 
-**Entry Points:**
-- `bridge2glm.py` (line ~1450+): Main script execution
-  - Parses args, initializes subsystems, runs main loop
-  - `if __name__ == '__main__': setup_logging(...); main()`
+**Entry Point:**
+- `bridge2glm.py` line 1410: `if __name__ == "__main__":`
 
-**Configuration:**
-- `config.py` (lines 90-177): `parse_arguments()` function
-  - Returns namespace with all CLI options
-  - Validation rules for each argument
+**Domain Actions (add new commands here):**
+- `glm_core/actions.py`
 
-- `midi_constants.py` (lines 45-59): MIDI CC number definitions
-  - GLM_VOLUME_ABS = 20
-  - GLM_MUTE_CC = 23
-  - GLM_DIM_CC = 24
-  - GLM_POWER_CC = 28
+**MIDI CC Numbers and Key Bindings (change hardware mappings here):**
+- `midi_constants.py`
 
-**Core Logic:**
-- `glm_core/actions.py`: Domain action definitions (SetVolume, etc.)
-- `bridge2glm.py` (lines 200-400+): HID reader thread implementation
-- `bridge2glm.py` (lines 700-900+): MIDI reader thread (power pattern detection)
-- `bridge2glm.py` (lines 1000-1200+): Main consumer loop (action execution)
-- `PowerOnOff/glm_power.py` (lines 100-300+): Power button pixel sampling
-- `PowerOnOff/glm_manager.py` (lines 200-400+): Process watchdog thread
+**CLI Configuration (add new CLI arguments here):**
+- `config.py:parse_arguments()`
 
-**Testing:**
-- No automated test files in codebase
-- Manual testing via log inspection and `bridge2glm.log`
+**Power Button Color Thresholds (tune pixel detection here):**
+- `PowerOnOff/glm_power.py:GlmPowerConfig` dataclass (lines 375–402)
+
+**Watchdog Tuning (adjust GLM restart behavior here):**
+- `PowerOnOff/glm_manager.py:GlmManagerConfig` dataclass (lines 67–95)
+
+**State-to-External Serialization (change REST/MQTT state format here):**
+- REST: `bridge2glm.py:GlmController.get_state()` (returns the `dict` consumed by all APIs)
+- MQTT: `api/mqtt.py:MqttClient._publish_state()`
+
+**Thread Startup Sequence:**
+- `bridge2glm.py:HIDToMIDIDaemon.start()` (lines 1302–1369)
+
+**Consumer Dispatch Logic (add handling for new action types here):**
+- `bridge2glm.py:HIDToMIDIDaemon.consumer()` (lines 1054–1113)
+
+---
 
 ## Naming Conventions
 
 **Files:**
-- Snake case: `glm_manager.py`, `midi_constants.py`, `logging_setup.py`
-- Exception module: `exceptions.py` (by convention)
-- Main entry point: `bridge2glm.py` (descriptive)
-
-**Directories:**
-- Camel case / Descriptive: `PowerOnOff/`, `glm_core/`, `api/`, `web/`
-- Plural for collections: `api/` (multiple endpoints), `web/` (multiple assets)
+- `snake_case.py` throughout
+- Module names describe their primary concern: `glm_power.py`, `glm_manager.py`, `midi_constants.py`
 
 **Classes:**
-- Pascal case: `GlmPowerController`, `GlmManager`, `AccelerationHandler`, `MqttClient`
-- Exception classes: `GlmWindowNotFoundError`, `GlmStateUnknownError`
-- Config dataclasses: `GlmPowerConfig`, `GlmManagerConfig`
+- `PascalCase`: `GlmController`, `GlmPowerController`, `GlmManager`, `HIDToMIDIDaemon`, `MqttClient`
+- Config dataclasses suffixed `Config`: `GlmPowerConfig`, `GlmManagerConfig`
 
-**Functions:**
-- Snake case: `parse_arguments()`, `setup_logging()`, `main()`, `calculate_speed()`
-- Private functions (internal module use): `_send_to_glm()`, `_apply_websocket_suppression()`
+**Functions / Methods:**
+- `snake_case`
+- Private methods prefixed `_`: `_handle_power_action`, `_find_window`, `_classify_state`
+- Thread target methods named after thread: `hid_reader`, `midi_reader`, `consumer`
 
-**Variables:**
-- Module-level constants: ALL_CAPS: `MAX_EVENT_AGE`, `POWER_SETTLING_TIME`, `HID_READ_TIMEOUT_MS`
-- Instance attributes: snake_case: `self.last_button`, `self.last_time`
-- Thread names: Descriptive: `"HID Reader"`, `"MIDI Reader"`, `"API Server"`, `"MQTT Client"`
+**Constants:**
+- `UPPER_SNAKE_CASE` for module-level constants: `MAX_EVENT_AGE`, `POWER_SETTLING_TIME`, `GLM_MUTE_CC`
+- Availability flags: `HAS_WIN32`, `HAS_DEPS`, `POWER_CONTROL_AVAILABLE`, `GLM_MANAGER_AVAILABLE`
 
-**Types & Enums:**
-- Action enum: `Action.VOL_UP`, `Action.MUTE`, `Action.POWER`
-- ControlMode enum: `ControlMode.MOMENTARY`, `ControlMode.TOGGLE`
-- PowerState: `"on"`, `"off"`, `"unknown"` (string literals, not enum)
+**Thread Names:**
+- `PascalCaseThread` or `PascalCaseWordThread`: `HIDReaderThread`, `MIDIReaderThread`, `ConsumerThread`, `APIServerThread`, `LoggingThread`, `GLMWatchdog`
+
+---
 
 ## Where to Add New Code
 
-**New Feature (e.g., new GLM control like "Scene Recall"):**
-1. Add action class to `glm_core/actions.py`:
-   ```python
-   @dataclass(frozen=True)
-   class SetScene:
-       scene_id: int  # 0-127
-   ```
+**New controllable GLM parameter (e.g., Bass EQ level):**
+1. Add frozen dataclass to `glm_core/actions.py`: `@dataclass(frozen=True) class SetBass: ...`
+2. Export from `glm_core/__init__.py`
+3. Add `elif isinstance(action, SetBass)` handler in `bridge2glm.py:HIDToMIDIDaemon.consumer()`
+4. Add MIDI CC constant to `midi_constants.py` if needed
+5. Add REST endpoint in `api/rest.py` following existing pattern
+6. Add MQTT topic handler in `api/mqtt.py:MqttClient._on_message()`
 
-2. Add MIDI constant to `midi_constants.py`:
-   ```python
-   GLM_SCENE_RECALL_CC = 29  # Your chosen CC number
-   ```
+**New hardware input device:**
+1. Add a new reader thread method on `HIDToMIDIDaemon` following `hid_reader` pattern
+2. Register thread in `__init__` and `start()` / `stop()`
+3. Map device events to `GlmAction` objects and `self.queue.put(QueuedAction(...))`
 
-3. Add to Action enum in `midi_constants.py`:
-   ```python
-   SCENE_RECALL = "SceneRecall"
-   ```
+**New external API (e.g., gRPC):**
+1. Create `api/grpc.py` following the structure of `api/rest.py` or `api/mqtt.py`
+2. Accept `action_queue` and `glm_controller` as constructor arguments
+3. Register `glm_controller.add_state_callback()` for state push notifications
+4. Start in `HIDToMIDIDaemon.start()` analogous to the existing API/MQTT start blocks
 
-4. Add handler in `bridge2glm.py` action consumer (main loop):
-   ```python
-   elif isinstance(action, SetScene):
-       _send_to_glm(GLM_SCENE_RECALL_CC, action.scene_id)
-   ```
+**New CLI argument:**
+- Add to `config.py:parse_arguments()`, pass through `HIDToMIDIDaemon.__init__` args
 
-5. Add REST endpoint in `api/rest.py`:
-   ```python
-   @app.post("/api/actions/scene/{scene_id}")
-   async def recall_scene(scene_id: int):
-       action = SetScene(scene_id=scene_id)
-       action_queue.put(QueuedAction(action, time.time()))
-       return {"status": "queued"}
-   ```
+**New Win32 / Windows-specific functionality:**
+- Place in `PowerOnOff/` package with conditional imports guarded by `try/except ImportError`
+- Export availability flag from `PowerOnOff/__init__.py` (e.g., `MY_FEATURE_AVAILABLE`)
+- Check flag in `bridge2glm.py` before use
 
-6. Add MQTT topic handler in `api/mqtt.py` (on_message callback):
-   ```python
-   elif payload_dict.get("action") == "recall_scene":
-       action = SetScene(scene_id=payload_dict["scene_id"])
-       self._action_queue.put(QueuedAction(action, time.time()))
-   ```
+**Tests (currently none — see CONCERNS.md):**
+- Co-locate as `test_<module>.py` or create `tests/` directory
+- `glm_core/actions.py` and `acceleration.py` are pure Python with no Win32 deps — test these first
 
-**New Input Adapter (e.g., OSC protocol from external app):**
-1. Create `api/osc.py` with OSCServer class
-2. In main `bridge2glm.py`, import and start OSC server thread:
-   ```python
-   from api.osc import OscServer
-   osc_server = OscServer(action_queue)
-   osc_thread = threading.Thread(target=osc_server.start, daemon=True)
-   osc_thread.start()
-   ```
-3. OSCServer.on_message() creates QueuedAction and queues it (same pattern as MQTT)
-
-**New Component/Module (e.g., Advanced State Manager):**
-1. Create `state_manager.py` in root or new `core/` directory
-2. Define class:
-   ```python
-   class GlmStateManager:
-       def __init__(self):
-           self.volume = 79
-           self.mute = False
-           self.power = "unknown"
-
-       def update(self, action: GlmAction):
-           # Sync with action execution
-           pass
-   ```
-3. Instantiate in main `bridge2glm.py` and pass to threads needing state
-4. No separate directory needed unless it has 5+ related files
-
-**Utilities (e.g., MIDI validation helper):**
-- Add to `midi_constants.py` if MIDI-related
-- Add to `config.py` if config-related
-- Create standalone `utils.py` only if >50 lines and used by multiple modules
+---
 
 ## Special Directories
 
-**__pycache__/:**
-- Purpose: Generated Python bytecode cache
-- Generated: Yes (automatic, by Python interpreter)
-- Committed: No (in .gitignore)
-- Safe to delete: Yes (will be regenerated)
+**`.planning/`:**
+- Purpose: GSD planning documents (codebase maps, phase plans)
+- Generated: No (hand-edited and agent-written)
+- Committed: Yes
 
-**.planning/codebase/:**
-- Purpose: GSD analysis artifacts (this file, ARCHITECTURE.md, etc.)
-- Generated: Yes (by GSD analysis tools)
-- Committed: Yes (in git, tracked)
-- Updates: Regenerate when architecture changes
+**`__pycache__/`, `api/__pycache__/`:**
+- Purpose: Python bytecode cache
+- Generated: Yes
+- Committed: No (in `.gitignore`)
 
-**.claude/:**
-- Purpose: Claude Code context and instructions
-- Generated: No (hand-written project guidelines)
-- Committed: Yes (in git, tracked)
-- Updates: Manually edited project-wide preferences
-
-**.git/:**
-- Purpose: Version control metadata
-- Generated: Yes (by git)
-- Committed: Not applicable
-- Safe to delete: Only by `git reset --hard` (destructive)
+**`web/`:**
+- Purpose: Static web UI assets served by REST API
+- Generated: No
+- Committed: Yes
 
 ---
 
 ## Dual Perspective Analysis
 
-### Senior Developer Perspective vs. macOS App Architect Perspective
+### Senior Developer Perspective
 
-**AGREEMENT:**
-- Both perspectives see the **clear module separation**: `PowerOnOff/`, `api/`, `glm_core/` are well-organized
-- Both appreciate **single entry point** (`bridge2glm.py`) that orchestrates all subsystems
-- Both recognize **immutable actions** in `glm_core/` as the right choice for a queue-based architecture
-- Both view the **conditional imports** (Windows-only graceful fallback) as pragmatic
-- Both see `.planning/` directory as appropriate for generated artifacts (separate from source)
+**What the structure does well:**
+- `glm_core/actions.py` is a clean dependency sink — it depends on nothing, so any module can import it without circular risk
+- `PowerOnOff/` package boundary cleanly separates Windows-only, import-optional code from the always-importable core. The `try/except ImportError` + availability flag pattern is consistently applied.
+- Module-level constants in `midi_constants.py` are the single source of truth for all protocol details; they're not scattered across files.
 
-**DIVERGENCE:**
+**What to watch:**
+- `bridge2glm.py` handles too many responsibilities. The natural next refactor would extract `GlmController` into `glm_core/controller.py` (it has no Win32 deps), and move RDP/MIDI service startup helpers into `PowerOnOff/` or a new `windows_init.py` module.
+- The module-level `glm_controller` singleton in `bridge2glm.py` (line 407) is imported by nothing outside the file (it's accessed by `api/rest.py` and `api/mqtt.py` via constructor injection, not import). This is correct but would become a problem if `bridge2glm.py` were split.
 
-| Senior Developer | macOS App Architect |
-|------------------|---------------------|
-| **Modularity:** Layout is clean; good cohesion within each module (HID, MIDI, API all separate). | **Bundle Structure:** No macOS app bundle (`.app` directory). Python script + assets sitting flat. Would need `Info.plist`, `Contents/` structure, code signing setup. |
-| **Entry Point:** Single `bridge2glm.py` is clear and obvious. Easy to trace execution flow. | **Application Lifecycle:** No `AppDelegate` or lifecycle hooks. Python script runs indefinitely via loop—works but not macOS-idiomatic. Would expect app delegate + quit handler + preferences window. |
-| **Reusability:** `glm_core/`, `PowerOnOff/`, `api/` could be imported as libraries in other projects. Good boundaries. | **Packaging:** No setup.py, pyproject.toml, or pip-installable structure. Can't `pip install` this package. On macOS, would want: signed `.app` with embedded Python, installable via DMG or Homebrew. |
-| **Growth Path:** Adding new adapters (OSC, HTTP server) is straightforward—add to `api/`, import in `bridge2glm.py`. | **System Integration:** No `.plist` files for LaunchAgent/Daemon. No code signing certificate. No Gatekeeper-approved installer. Won't install cleanly on macOS beyond user's own machine. |
-| **Testing:** Missing unit tests, but code structure supports them well (actions are testable dataclasses). | **Persistence:** No macOS-native preferences storage (NSUserDefaults, System Preferences pane). CLI args only; no GUI for settings. |
-| | **Accessibility:** No Accessibility Framework (NSAccessibility) integration. Pixel sampling (`PowerOnOff/glm_power.py`) is fragile across display scaling and Dark Mode. Would use AXUIElement API if staying on macOS. |
+### Senior Windows Desktop App Architect Perspective
 
-**Translation to macOS:**
-1. **Directory layout** would become:
-   ```
-   VOL20toGenelecGLM.app/
-   ├── Contents/
-   │   ├── MacOS/
-   │   │   └── glm_bridge (executable launcher)
-   │   ├── Resources/
-   │   │   ├── glm_core/
-   │   │   ├── api/
-   │   │   ├── PowerOnOff/  (would use Accessibility API instead)
-   │   │   ├── web/
-   │   │   └── icon.icns
-   │   └── Info.plist
-   └── [source code same as above]
-   ```
-
-2. **Entry point** would be a compiled launcher (Swift/Objective-C shim) that:
-   - Ensures Python runtime bundled with app
-   - Calls `bridge2glm.py` with correct PYTHONPATH
-   - Handles app lifecycle (quit, reopen, etc.)
-
-3. **Configuration** would use:
-   - `~/Library/Preferences/com.genelec.glm-bridge.plist` for persistent settings
-   - System Preferences pane (if needed) instead of CLI args
-
-4. **Process supervision** would use:
-   - `~/Library/LaunchAgents/com.genelec.glm-bridge.plist` if running as user agent
-   - Or rely on macOS Finder's persistent app launch
-
-5. **Power control** would use:
-   - Core MIDI instead of `mido` (native macOS MIDI)
-   - Accessibility API instead of pixel sampling
-   - AppleScript if Genelec GLM supports it
-
-**Senior Developer Assessment:** Code structure is excellent for cross-platform maintainability. Clean module boundaries, good separation of concerns. Would grow well.
-
-**macOS Architect Assessment:** Application works on macOS (with proper Python environment) but is not packaged or distributed as a native macOS app. Missing app bundle, code signing, preferences integration, native framework usage (Core MIDI, Accessibility). Treating it as "just a Python script" limits user experience and system integration.
+**File placement rationale:**
+- `move_mesa_files.bat` moves Mesa OpenGL DLLs. This is a deployment concern: Mesa is needed on headless VMs where the QXL/VirtIO display driver doesn't expose hardware OpenGL. The .bat lives at root but is not part of the Python runtime.
+- Log files are written to the same directory as `bridge2glm.py` (`os.path.dirname(os.path.abspath(__file__))`). On a VM with a restricted user account, this directory must be writable. If run from `Program Files`, this will fail silently (RotatingFileHandler will raise at startup).
+- `%TEMP%\rdp_primed.flag` for per-boot RDP priming state is correct — `%TEMP%` is per-user and persists across logons but is writable by the user. Boot timestamp comparison handles the case where `%TEMP%` is not cleared on reboot.
+- No Registry keys are read or written by the Python code. All configuration is CLI args, Windows Credential Manager (via `keyring`), and the flag file.
 
 ---
 

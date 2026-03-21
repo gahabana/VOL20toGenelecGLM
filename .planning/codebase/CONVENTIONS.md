@@ -2,503 +2,214 @@
 
 **Analysis Date:** 2026-03-21
 
-## Dual Perspective Analysis
-
-### Senior Developer Perspective
-This codebase demonstrates strong adherence to Python best practices with comprehensive docstrings, clear separation of concerns, and explicit error handling via custom exceptions. The use of dataclasses for domain models, Pydantic for API validation, and enums for constants shows modern Python idioms. Threading is carefully managed with locks and event synchronization. Code organization around logical domains (actions, power control, MIDI) promotes maintainability.
-
-### macOS App Architect Perspective
-From a system integration standpoint, the approach differs significantly from native Cocoa/AppKit patterns. Instead of leveraging NSThread or GCD (Grand Central Dispatch), the code uses Python's threading module directly. macOS-native approaches would use Objective-C frameworks for system integration, delegation patterns, and run loop integration. However, the Windows-focused architecture (pywinauto, ctypes, win32 APIs) and Python's cross-platform nature make the current approach pragmatic for this Windows desktop bridge application. The explicit state management (via `GlmController`) mirrors AppKit's Model-View-Controller separation, though without platform-native persistence or lifecycle hooks.
-
-**Convergence:** Both perspectives agree on explicit state management, comprehensive error handling, and clear function/class responsibilities.
-
-**Divergence:** macOS perspective would prefer native system frameworks; the developer perspective focuses on Python-idiomatic solutions that work cross-platform.
-
----
-
 ## Naming Patterns
 
-### Files
-- **Module files:** snake_case (e.g., `glm_manager.py`, `retry_logger.py`, `glm_power.py`)
-- **Package directories:** snake_case (e.g., `PowerOnOff/`, `api/`, `glm_core/`)
-- **Constants files:** descriptive snake_case (e.g., `midi_constants.py`)
+**Files:**
+- `snake_case.py` for all modules: `bridge2glm.py`, `glm_power.py`, `glm_manager.py`, `retry_logger.py`, `logging_setup.py`, `midi_constants.py`, `acceleration.py`
+- Subpackages use `snake_case` directories: `PowerOnOff/`, `glm_core/`, `api/`
+- Constants modules named by domain: `midi_constants.py`, not `constants.py`
 
-Examples: `bridge2glm.py` (main entry), `config.py` (configuration parsing), `logging_setup.py` (logging initialization)
+**Classes:**
+- `PascalCase` throughout: `GlmController`, `GlmPowerController`, `GlmManager`, `GlmManagerConfig`, `GlmPowerConfig`, `SmartRetryLogger`, `AccelerationHandler`
+- Config dataclasses suffix with `Config`: `GlmManagerConfig`, `GlmPowerConfig`
+- Exception classes suffix with `Error`: `GlmPowerError`, `GlmWindowNotFoundError`, `GlmStateUnknownError`, `GlmStateChangeFailedError`
+- Action dataclasses use imperative verbs: `SetVolume`, `AdjustVolume`, `SetMute`, `SetDim`, `SetPower`
 
-### Functions and Methods
-- **Public methods:** snake_case, descriptive verb phrases
-  - `_wait_for_cpu_calm()` - clarifies the wait purpose
-  - `_get_main_window_handle()` - specific about what's retrieved
-  - `ensure_on()`, `ensure_off()` - imperative action names
-- **Private methods:** Leading underscore + snake_case (e.g., `_start_glm()`, `_find_glm_process()`)
-- **Callback/handler methods:** Descriptive suffix (_callback, _handler, _thread)
-  - `reinit_callback` - called after GLM restart
-  - `log_listener_thread()` - logging thread target
-  - `_watchdog_loop()` - background monitoring loop
+**Functions and Methods:**
+- `snake_case` for all functions and methods
+- Private methods prefixed with `_`: `_find_window`, `_ensure_foreground`, `_click_point`, `_watchdog_loop`
+- Boolean-returning query methods prefixed with `is_` or `has_`: `is_alive`, `is_responding`, `is_available`, `has_valid_volume`
+- Boolean-returning state checks: `needs_rdp_priming`, `is_console_session`, `is_session_disconnected`
+- Side-effectful setters prefixed with `set_` or `ensure_`: `set_state`, `ensure_on`, `ensure_off`, `ensure_session_connected`
 
-### Variables
-- **Class-level state:** Descriptive, use leading underscore for private (e.g., `_process`, `_hwnd`, `_lock`, `_running`)
-- **Local variables:** Concise, context-clear names
-  - `hwnd` - Windows window handle (domain-specific abbreviation, acceptable given platform context)
-  - `proc` - process object (common abbreviation)
-  - `elapsed` - time measurements
-  - `parsed` - after parsing input
-- **Configuration/constants:** UPPER_CASE or camelCase
-  - `MAX_EVENT_AGE`, `RETRY_DELAY`, `HID_READ_TIMEOUT_MS` (global timing constants)
-  - `cpu_threshold`, `watchdog_interval` (dataclass config fields use snake_case)
+**Variables:**
+- `snake_case` for all locals and instance attributes
+- Private instance state prefixed with `_`: `_process`, `_hwnd`, `_running`, `_lock`, `_window_cache`
+- Module-level constants in `SCREAMING_SNAKE_CASE`: `MAX_EVENT_AGE`, `RETRY_DELAY`, `POWER_SETTLING_TIME`, `HID_READ_TIMEOUT_MS`
+- Boolean flags named positively: `_volume_initialized`, `_power_settling`, `cpu_gating_enabled`
+- Descriptive variable names throughout (no abbreviations in public APIs)
 
-### Types and Classes
-- **Exception classes:** PascalCase + "Error" suffix
-  - `GlmPowerError` - base exception
-  - `GlmWindowNotFoundError` - specific failure case
-  - `GlmStateUnknownError` - state determination failed
-- **Data classes:** PascalCase
-  - `GlmManagerConfig` - immutable configuration container
-  - `SetVolume`, `AdjustVolume`, `SetMute`, `SetDim`, `SetPower` - domain actions (frozen dataclasses)
-- **Enums:** PascalCase class, UPPER_CASE members
-  - `Action.VOL_UP`, `Action.POWER` (logical system actions)
-  - `ControlMode.MOMENTARY`, `ControlMode.TOGGLE` (control behavior modes)
-- **Main classes:** PascalCase, domain-specific prefixes
-  - `GlmManager` - manages GLM process lifecycle
-  - `GlmController` - tracks GLM state
-  - `GlmPowerController` - UI automation for power control
-  - `SmartRetryLogger` - intelligent retry logging
+**Enums:**
+- `PascalCase` class names, `SCREAMING_SNAKE_CASE` members: `Action.VOL_UP`, `ControlMode.MOMENTARY`
 
----
+**Type Aliases:**
+- `PascalCase`: `PowerState = Literal["on", "off", "unknown"]`, `GlmAction = Union[...]`
 
 ## Code Style
 
-### Formatting
-- **Tool:** No explicit formatter configured (no `.prettierrc`, `black`, or `autopep8` config found)
-- **De facto style:** PEP 8 compliant with 4-space indentation
-- **Line length:** ~100-120 characters (implicit, no configuration file)
-- **Imports:**
-  - Standard library first
-  - Third-party packages next (typing, dataclasses, threading, etc.)
-  - Platform-conditional imports wrapped in try/except blocks
-  - Relative imports within package (e.g., `from PowerOnOff import ...`)
+**Formatting:**
+- No `.prettierrc`, no `pyproject.toml` formatter config detected
+- PEP 8 style followed consistently
+- 4-space indentation
+- Single blank line between methods, double blank line between top-level definitions
+- Horizontal section dividers using `# ===========...` (80 chars) to separate logical groups within files
 
-### Module Structure
-- **Docstrings:** Module-level docstring (PEP 257 style) at the top
-  ```python
-  """GLM Manager - Process management and watchdog for Genelec GLM application.
+**Type Annotations:**
+- Used consistently on all public method signatures
+- `Optional[X]` preferred over `X | None` (Python 3.9 compat style)
+- `from __future__ import annotations` used in `glm_manager.py` and `glm_power.py`
+- Return types always annotated on public methods
+- `Literal` used for constrained string types: `Literal["on", "off"]`, `Literal["DEBUG", "INFO", "NONE"]`
 
-  Replaces the functionality of minimize-glm.newer.ps1 PowerShell script:
-  - CPU gating before startup
-  - Start GLM with AboveNormal priority
-  - ...
-  """
-  ```
-- **Logging setup:** Module-level logger created immediately
-  ```python
-  logger = logging.getLogger(__name__)
-  ```
-- **Conditional dependencies:** Try/except import blocks with fallback flags
-  ```python
-  try:
-      import psutil
-      HAS_DEPS = True
-  except ImportError:
-      HAS_DEPS = False
-      psutil = None
-  ```
-
----
-
-## Linting and Type Hints
-
-### Type Hints
-- **Usage:** Comprehensive type hints on function signatures and return types
-- **Pattern:**
-  ```python
-  def validate_click_times(values: str) -> Tuple[float, float]:
-      """Function description."""
-  ```
-- **Complex types:** Imported from `typing` module
-  - `Optional[T]` for nullable values
-  - `Union[T1, T2, ...]` for discriminated types
-  - `Callable[[ArgTypes], ReturnType]` for callbacks
-  - `Dict[K, V]`, `List[T]`, `Tuple[T, ...]` for collections
-- **No Mypy/Pyright config found** - types are for developer clarity, not enforced at build time
-
-### Comments and Docstrings
-- **Docstrings:** Triple-quoted PEP 257 style, present on classes and most public functions
-- **Docstring format:**
-  ```python
-  def start_power_transition(self, target_state: bool):
-      """Mark the start of a power transition.
-
-      Called when power command is initiated. Blocks all commands during settling.
-      """
-  ```
-- **Parameter documentation:** Args/Returns format in docstrings where complex
-- **Inline comments:** Minimal; used only for non-obvious logic
-  - Examples: `# Cached process is dead, clear caches`, `# Auto-end settling if timeout`
-- **Section comments:** Single-line comments marking logical sections
-  ```python
-  # ==============================================================================
-  # POWER TRANSITION MANAGEMENT
-  # ==============================================================================
-  ```
-
----
+**Linting:**
+- No `.flake8`, `.pylintrc`, or `ruff.toml` detected — no enforced linting config
 
 ## Import Organization
 
-### Order
-1. **Python standard library** (logging, os, sys, threading, time, typing, etc.)
-2. **Third-party packages** (hid, mido, psutil, fastapi, pydantic, etc.)
-3. **Conditional platform imports** (wrapped in try/except, pywinauto, win32api, ctypes)
-4. **Local relative imports** (from glm_core, from config, from PowerOnOff)
+**Order (observed):**
+1. `from __future__ import annotations` (when present)
+2. Standard library: `logging`, `os`, `threading`, `time`, `subprocess`, `queue`
+3. Third-party: `psutil`, `hid`, `mido`, `fastapi`, `pydantic`
+4. Conditional/platform imports wrapped in `try/except ImportError` blocks
+5. Local package imports: `from glm_core import ...`, `from config import ...`
 
-### Example from `bridge2glm.py`
-```python
-import time
-import signal
-import sys
-import os
-import threading
-import queue
-from queue import Queue
-from typing import Dict, Optional, List, Callable
-import hid
-
-from glm_core import SetVolume, AdjustVolume, SetMute, SetDim, SetPower, QueuedAction
-from mido import Message, open_output, open_input
-
-from config import parse_arguments
-from retry_logger import retry_logger
-from midi_constants import (...)
-```
-
-### Path Aliases
-- No import path aliases configured (no `sys.path` manipulation or `__init__.py` path setup)
-- Relative imports use package structure directly
-
----
-
-## Error Handling
-
-### Exception Hierarchy
-**Base exception:** `GlmPowerError` (in `PowerOnOff/exceptions.py`)
-- Allows catching all GLM-related errors with a single except clause
-- Domain-specific, not using generic `Exception`
-
-**Specific exceptions:**
-- `GlmWindowNotFoundError` - UI automation target not found (Windows-specific)
-- `GlmStateUnknownError` - Pixel sampling failed to determine power state
-  - Carries context: `rgb` (sampled color), `point` (pixel location)
-- `GlmStateChangeFailedError` - Power state change failed after retries
-  - Carries context: `desired` state, `actual` state observed
-
-### Error Handling Patterns
-
-**Pattern 1: Try/Except for Resource Cleanup**
-```python
-try:
-    # Acquire resource / perform operation
-    listener = QueueListener(log_queue, file_handler, console_handler)
-    listener.start()
-except Exception as e:
-    logger.error(f"Failed to start listener: {e}")
-    return False
-finally:
-    # Cleanup if needed
-```
-
-**Pattern 2: Graceful Degradation with Conditional Dependencies**
+**Conditional Import Pattern (Windows-only deps):**
 ```python
 try:
     import psutil
+    import ctypes
+    from ctypes import wintypes
     HAS_DEPS = True
 except ImportError:
     HAS_DEPS = False
     psutil = None
 
-# Later:
-if not HAS_DEPS:
-    logger.error("GLM Manager requires psutil (Windows only)")
-    return False
+try:
+    from pywinauto import Desktop
+    HAS_PYWINAUTO = True
+except ImportError:
+    HAS_PYWINAUTO = False
+    Desktop = None
 ```
+All Windows-specific code is guarded by `HAS_DEPS`, `HAS_WIN32_DEPS`, `HAS_PYWINAUTO`, or `IS_WINDOWS` flags set at import time. Methods check these flags at entry and return safe defaults.
 
-**Pattern 3: Retry with Smart Logging**
-```python
-while self._running:
-    try:
-        if not self.is_alive():
-            logger.warning("Watchdog: GLM process not found. Restarting.")
-            self._restart_glm()
-            continue
-    except Exception as e:
-        logger.error(f"Watchdog loop error: {e}")
+**Path Aliases:**
+- None. Relative imports used within packages: `from .exceptions import ...`
 
-    time.sleep(self.config.watchdog_interval)
-```
+## Error Handling
 
-**Pattern 4: Return Tuples for Multi-value Status**
-```python
-def can_accept_command(self) -> tuple:
-    """Check if any command can be accepted.
+**Patterns:**
+- Custom exception hierarchy rooted at `GlmPowerError` in `PowerOnOff/exceptions.py`:
+  - `GlmWindowNotFoundError` — window lookup failure
+  - `GlmStateUnknownError(rgb, point)` — pixel classification failure, carries diagnostic data
+  - `GlmStateChangeFailedError(desired, actual)` — retry exhaustion, carries intent vs. result
+- Public API methods raise typed exceptions; callers can catch specifically
+- Internal/private methods catch `Exception` broadly and log at `debug` or `warning` level, returning safe fallback values
+- Windows API calls (`ctypes.windll.*`) always wrapped in `try/except Exception`
+- `subprocess` calls catch `subprocess.TimeoutExpired` separately from `Exception`
+- IO operations on files (flag file, credential manager) catch `Exception` with `pass` or `logger.warning`
 
-    Returns (allowed, wait_time, reason).
-    """
-    if not self._power_settling:
-        return True, 0, None
-
-    elapsed = time.time() - self._power_transition_start
-    if elapsed < POWER_SETTLING_TIME:
-        wait = POWER_SETTLING_TIME - elapsed
-        return False, wait, "power_settling"
-
-    return True, 0, None
-```
-
-### Assertion Policy
-- **Not used** for production error handling
-- Error conditions are explicitly checked and exceptions/returns used
-
----
+**Return-code convention:**
+- Boolean returns (`True`/`False`) for operations that can fail non-fatally: `_start_glm`, `reconnect_to_console`, `_post_minimize`
+- `None` returns for optional lookups: `_find_glm_process`, `get_credential_from_manager`
+- Raise exceptions for caller-actionable failures in public API
 
 ## Logging
 
-### Framework
-- **Standard library:** `logging` module (no external logging framework)
-- **Format:** Centralized format string with thread, module, function, line number
-  ```python
-  LOG_FORMAT = '%(asctime)s [%(levelname)s] %(threadName)s %(module)s:%(funcName)s:%(lineno)d - %(message)s'
-  ```
-- **Setup:** `logging_setup.py` provides `setup_logging()` function with rotating file handler
+**Framework:** Python standard `logging` module with `QueueHandler`/`QueueListener` for async thread-safe delivery (`logging_setup.py`).
 
-### Logging Patterns
-
-**Pattern 1: Informational Milestones**
-```python
-logger.info("========== GlmManager.start() BEGIN ==========")
-logger.info(f"Watchdog thread started")
-logger.info("========== GlmManager.start() END ==========")
+**Log Format (centralized):**
 ```
-
-**Pattern 2: Warning with Context**
-```python
-logger.warning(
-    f"Watchdog: GLM NOT responding. "
-    f"Streak={self._non_responsive_count}/{self.config.max_non_responsive}."
-)
+%(asctime)s [%(levelname)s] %(threadName)s %(module)s:%(funcName)s:%(lineno)d - %(message)s
 ```
+Defined as `LOG_FORMAT` constant in both `logging_setup.py` and `glm_manager.py` (duplication noted in CONCERNS.md).
 
-**Pattern 3: Debug for Verbose Details**
-```python
-logger.debug(f"Found GLM main window: PID={self._process.pid} Handle={hwnd}")
-logger.debug(f"Error finding GLM window: {e}")
-```
+**Patterns:**
+- Each module obtains its own logger: `logger = logging.getLogger(__name__)`
+- `GlmPowerController` accepts an injected `logger` parameter (testability)
+- `reconnect_to_console` and `ensure_session_connected` accept optional `logger` parameter
+- `logger.info` for major state transitions and lifecycle events
+- `logger.debug` for per-operation internals (pixel coordinates, handle values, MIDI bytes)
+- `logger.warning` for recoverable failures (minimize failed, CPU check error, tscon failed)
+- `logger.error` for unrecoverable failures (GLM not found, start failed)
+- Long operations use BEGIN/END markers: `"========== GlmManager.start() BEGIN =========="` / `"========== GlmManager.start() END =========="`
+- Timing instrumentation in hot paths: `f"[find={t1-t0:.3f}s, focus={t2-t1:.3f}s, read={t3-t2:.3f}s]"`
+- `SmartRetryLogger` (`retry_logger.py`) throttles repetitive retry messages with exponential milestones (2s, 10s, 1m, 10m, 1h, 1d)
+- `WebSocketErrorFilter` suppresses expected WebSocket disconnect noise
 
-**Pattern 4: Smart Retry Logging (Throttled)**
-```python
-# Use SmartRetryLogger to avoid log spam
-if retry_logger.should_log("hid_connect"):
-    logger.warning(f"HID connection failed {retry_logger.format_retry_info('hid_connect')}")
-```
-
-### Log Levels
-- **DEBUG:** Detailed information (window handle found, config values, intermediate states)
-- **INFO:** Significant milestones (process started, state transitions, initialization complete)
-- **WARNING:** Recoverable issues (connection retries, timeouts, non-responsive processes)
-- **ERROR:** Failures that affect functionality (missing executable, process crash)
-- **CRITICAL:** System-level failures (not explicitly used in codebase)
-
-### Thread-Safe Logging
-- Uses `QueueHandler` and `QueueListener` for thread-safe async logging
-- All threads (HID reader, MIDI reader, watchdog, etc.) can safely call `logger.info()` etc.
-- No custom thread-local state needed; Python logging handles it
-
----
+**Rotation:**
+- `RotatingFileHandler` with 4 MB max, 5 backup files
+- Log thread runs as non-daemon (`daemon=False`) to flush on shutdown
 
 ## Comments
 
-### When to Comment
-- **Why, not what:** Comments explain intent, not repeat code
-  - Bad: `count = count + 1  # Increment count`
-  - Good: `# Reset non-responsive streak (process recovered)`
-- **Non-obvious logic:** Timing windows, retry logic, pixel sampling thresholds
-  - Example: `# Cached handle is still valid` (explains why we use cached value)
-- **Gotchas and platform-specific behavior:**
-  - Example: `# Note: Don't minimize here - let caller do it after reinit_callback`
-  - Example: `# ShowWindow returns previous visibility state, not success/failure`
-- **Section headers:** Separate logical groups with comment blocks
+**When to Comment:**
+- Module-level docstrings on every file explaining purpose, requirements, and usage example
+- Class docstrings explain thread safety contracts (e.g., `GlmPowerController` documents lock semantics)
+- Method docstrings on all public methods with `Args:`, `Returns:`, `Raises:` sections
+- Inline comments on non-obvious Win32 behavior: `# Alt key trick to allow SetForegroundWindow to work`, `# SW_MINIMIZE (6) minimizes the window`
+- Constants annotated with unit and purpose: `cpu_threshold: float = 10.0  # % CPU considered "idle enough"`
+- `NOTE:` comments mark intentional design decisions to prevent well-meaning regressions
 
-### Comment Style
-- Single-line comments use `#` with space
-- Multiple-line comments use `"""` docstrings (for module/class/function docs, not inline)
-- Avoid obsolete/dead code comments; delete the code instead
-
-### JSDoc/Docstring Format
-- **Module:** Module-level docstring at top describing purpose, requirements, usage
-- **Classes:** Single-line description + detailed docstring if complex
-- **Public methods/functions:**
-  - Summary line
-  - Longer description if needed
-  - Args section with types and meanings
-  - Returns section with return type and meaning
-  - Raises section if exceptions are documented
-
-Example:
-```python
-def _wait_for_window_stable(self) -> int:
-    """
-    Wait for GLM main window handle to stabilize.
-
-    GLM's window handle can change during startup (splash screen → main window).
-    This method polls until the handle is stable, confirming GLM has fully started.
-
-    Returns:
-        The stable window handle, or 0 if stabilization failed/timed out.
-    """
-```
-
----
+**Docstring style:** Google-style (Args/Returns/Raises sections).
 
 ## Function Design
 
-### Size Guidelines
-- **Typical range:** 20-50 lines (methods)
-- **Maximum:** ~100 lines before considering split (e.g., `_wait_for_window_stable`)
-- **Large methods:** Used when coherent logic (not arbitrary line split)
-  - Example: `_start_glm()` does sequential startup steps without useful intermediate boundaries
+**Size:** Methods tend to be focused; complex orchestration methods (`set_state`, `_watchdog_loop`) are ~60-80 lines with clear phase comments.
 
-### Parameter Patterns
-- **Positional:** Limited to required parameters (usually 1-2)
-- **Keyword-only:** Configuration or optional parameters
-  - Example: `block_until_ready: bool = True` in `start()`
-- **Callback parameters:** Optional, nullable
-  - Example: `reinit_callback: Optional[Callable[[int], None]] = None`
-- **Return values:**
-  - Simple success/failure: `bool`
-  - Multi-value status: `tuple` (allowed, used, e.g., `can_accept_command()`)
-  - Complex results: Dataclass or `dict` (API responses use Pydantic models)
+**Parameters:**
+- Config objects (`GlmPowerConfig`, `GlmManagerConfig`) used to avoid long parameter lists
+- Optional parameters default to `None` with `Optional[X]` annotation
+- Callbacks injected as `Optional[Callable[...]]` for testability
 
-### Function Naming Clarity
-- **Action verbs:** `start()`, `stop()`, `ensure_on()`, `minimize()`
-- **Query verbs:** `is_alive()`, `is_responding()`, `can_accept_command()`
-- **Internal state changes:** `_restart_glm()`, `_kill_glm()`, `_set_priority()`
-- **Callbacks/handlers:** Suffix with purpose (e.g., `reinit_callback`, `log_listener_thread`)
-
----
+**Return Values:**
+- Documented in docstrings
+- Tuples used for multi-value returns: `(state, rgb, point)`, `(allowed, wait_time, reason)`
+- Named tuple alternatives not used — plain tuples with documented semantics
 
 ## Module Design
 
-### Exports
-- **Convention:** Package `__init__.py` files explicitly export public classes/functions
-- **Example:** `PowerOnOff/__init__.py` exports:
-  ```python
-  from .glm_power import GlmPowerController
-  from .glm_manager import GlmManager, GlmManagerConfig
-  from .exceptions import GlmPowerError, GlmWindowNotFoundError, GlmStateUnknownError, GlmStateChangeFailedError
-  ```
-- **Benefit:** Clear public API, allows internal reorganization
+**Exports:**
+- `__init__.py` files define public surface: `PowerOnOff/__init__.py` re-exports `GlmPowerController`, `GlmManager`, `GlmManagerConfig`, availability flags
+- `glm_core/__init__.py` re-exports action dataclasses
 
-### Barrel Files
-- **Used:** `PowerOnOff/__init__.py`, `api/__init__.py`, `glm_core/__init__.py`
-- **Purpose:** Centralize imports for package-level API
-- **Pattern:** Import and re-export from submodules
+**Dataclasses:**
+- `frozen=True` on immutable value objects: `SetVolume`, `AdjustVolume`, `SetMute`, `SetDim`, `SetPower`, `Point`, `GlmControl`
+- Mutable state holders use plain `@dataclass`: `WindowState`, `QueuedAction`
+- Config objects use `@dataclass` (mutable, intentionally): `GlmManagerConfig`, `GlmPowerConfig`
 
-### Domain Separation
-- **`glm_core/`:** Pure domain actions (SetVolume, SetMute, etc.) - independent of UI/API
-- **`PowerOnOff/`:** Windows-specific process/power management (GlmManager, GlmPowerController)
-- **`api/`:** HTTP/WebSocket/MQTT interfaces (FastAPI, Pydantic models)
-- **Root level:** Entry point (`bridge2glm.py`), configuration (`config.py`), logging setup
+**Singleton pattern:**
+- `glm_controller = GlmController()` at module level in `bridge2glm.py` — global instance
+- `retry_logger = SmartRetryLogger()` at module level in `retry_logger.py` — global instance
 
-### Thread Safety
-- **Pattern:** Private `_lock = threading.Lock()` for shared mutable state
-- **Usage:** Explicit `with self._lock:` blocks protecting state reads and writes
-- **Example:**
-  ```python
-  def can_accept_command(self) -> tuple:
-      with self._lock:
-          if not self._power_settling:
-              return True, 0, None
-          # ...
-  ```
+## Dual Perspective Analysis
 
-### Constants
-- **Global constants:** Module-level, UPPER_CASE
-  - Timing: `MAX_EVENT_AGE`, `RETRY_DELAY`, `POWER_SETTLING_TIME`
-  - Hardware: `HID_READ_TIMEOUT_MS`, `QUEUE_MAX_SIZE`
-  - MIDI: `GLM_VOLUME_ABS`, `GLM_MUTE_CC` (in `midi_constants.py`)
-- **Configuration constants:** Dataclass fields, camelCase/snake_case
-  - Example: `GlmManagerConfig.cpu_threshold`, `watchdog_interval`
+### Senior Developer View
 
----
+**Strengths:**
+- Consistent naming and docstring coverage is high
+- Custom exception hierarchy with diagnostic payload (rgb, point) is well-designed
+- `SmartRetryLogger` is a reusable, well-abstracted utility
+- Frozen dataclasses for action types enforce immutability correctly
+- Dependency injection (`logger`, `config`, `reinit_callback`) makes key classes testable in isolation
 
-## SOLID Principles and DRY
+**Issues:**
+- `LOG_FORMAT` string is duplicated in `logging_setup.py` (line 19) and `glm_manager.py` (line 38) — violates DRY
+- `glm_controller` global in `bridge2glm.py` makes unit testing harder; no dependency injection at the bridge level
+- `bridge2glm.py` exceeds 500 lines and contains multiple responsibilities (HID reader, MIDI consumer, RDP priming, thread management) — violates Single Responsibility
+- `get_display_diagnostics` has inline `import os` inside function body (lines 287-288) — inconsistent with top-level imports elsewhere
+- `reconnect_to_console` also has inline `import subprocess`, `import shutil`, `import time` inside function body
+- `can_accept_command` and `can_accept_power_command` in `GlmController` duplicate the time-elapsed logic with slightly different thresholds — DRY violation
+- No `pyproject.toml` or `setup.py` — project is not installable as a package
 
-### Single Responsibility
-- **`GlmController`:** Tracks GLM state and notifies callbacks (single responsibility: state management)
-- **`GlmManager`:** Process lifecycle and watchdog (single responsibility: process management)
-- **`GlmPowerController`:** UI automation for power (single responsibility: power state verification)
-- **Separation:** Each class has one reason to change
+### Senior Windows Desktop App Architect View
 
-### Open/Closed
-- **Configuration via dataclass:** `GlmManagerConfig` allows extensibility without modifying class
-- **Callbacks:** `reinit_callback` pattern allows external behavior injection
-- **State callbacks:** `add_state_callback()` allows observers without coupling
+**Strengths:**
+- `ctypes.windll.user32.IsHungAppWindow(hwnd)` used correctly for hung-window detection (correct Win32 API, avoids SendMessage timeout hack)
+- `ctypes.windll.kernel32.WTSGetActiveConsoleSessionId()` and `ProcessIdToSessionId` used correctly for session identity
+- `WTSEnumerateSessionsW` with proper `WTS_SESSION_INFO` ctypes structure and `WTSFreeMemory` cleanup in `finally` block — correct resource management
+- `ShowWindow(hwnd, SW_MINIMIZE)` with `IsIconic` verification, then `PostMessageW(WM_SYSCOMMAND, SC_MINIMIZE)` fallback — correct escalation for JUCE apps
+- `ctypes.WINFUNCTYPE` used correctly for `EnumDisplayMonitors` callback — correct calling convention for Win32 callbacks
+- Alt-key trick before `SetForegroundWindow` is the correct workaround for `FOREGROUNDLOCKTIMEOUT` restriction
+- `psutil.ABOVE_NORMAL_PRIORITY_CLASS` used via psutil wrapper (correct constant, avoids raw `SetPriorityClass`)
+- `subprocess.CREATE_NO_WINDOW` flag suppresses console windows from child processes correctly
+- pywinauto `backend="win32"` specified explicitly (correct for non-UIA apps like JUCE)
 
-### Liskov Substitution
-- Not heavily used (limited inheritance hierarchy)
-- Custom exceptions inherit from `GlmPowerError`, allowing unified error handling
-
-### Interface Segregation
-- **Small interfaces:** Each class exposes minimal public API
-  - `GlmManager.start()`, `stop()`, `is_alive()`, `is_responding()`
-  - Clients don't depend on internal details
-
-### Dependency Inversion
-- **Dependency injection:** Configuration passed to constructors
-  - Example: `GlmManager(config=GlmManagerConfig(...))`
-- **Optional dependencies:** Callbacks are optional, graceful degradation if absent
-  - Example: `reinit_callback` only called if provided
-
-### DRY (Don't Repeat Yourself)
-- **Validation functions:** `validate_volume_increases()`, `validate_click_times()`, `validate_device()` centralized in `config.py`
-- **Constants:** All MIDI mappings in `midi_constants.py` (single source of truth)
-- **Logging format:** Centralized in `LOG_FORMAT` constant (reused across all handlers)
-- **Retry logic:** `SmartRetryLogger` encapsulates exponential backoff (shared by all retry loops)
-
----
-
-## Testability
-
-### Design for Testing
-- **Dependency injection:** Configuration passed to constructors
-- **Optional dependencies:** Can disable features for testing (HAS_DEPS flags)
-- **Separable concerns:**
-  - State management (`GlmController`) separate from process management (`GlmManager`)
-  - Validation logic (`config.py` functions) separate from parsing
-- **Callbacks:** Allow test code to inject custom behavior
-
-### Challenges (Current State)
-- **Windows-specific:** Process management, UI automation heavily tied to Windows APIs
-- **External dependencies:** HID device, MIDI ports, network APIs not mocked
-- **No test framework found:** No pytest, unittest, or equivalent configured
-- **No integration tests:** Manual testing appears to be primary approach
-
----
-
-## Dual Perspective Summary
-
-| Aspect | Senior Developer | macOS Architect |
-|--------|-----------------|------------------|
-| **Type hints** | Good practice, enforced | Helpful but not native Objective-C pattern |
-| **Threading** | Python threading with locks | Would use GCD, NSThread, or async/await |
-| **Error handling** | Custom exception hierarchy | Native NSError pattern with error codes |
-| **State management** | Explicit with callbacks | KVO (Key-Value Observing) or Combine |
-| **Configuration** | Dataclasses, argparse | NSUserDefaults, property lists |
-| **Logging** | Rotating file handler, thread-safe | OSLog framework with privacy controls |
-| **Platforms** | Windows-focused pragmatism | Would be Cocoa/AppKit native |
-
-**Key alignment:** Both value explicit state management, clear separation of concerns, and comprehensive error handling.
-
-**Key difference:** The developer perspective optimizes for Python cross-platform code; the macOS perspective would leverage native frameworks for system integration, lifecycle management, and platform-idiomatic patterns.
-
----
-
-*Convention analysis: 2026-03-21*
+**Issues:**
+- No HRESULT checking on `ctypes.windll` calls — `PostMessageW`, `SetForegroundWindow`, `ShowWindow` return values are sometimes ignored or only checked implicitly. Win32 functions return 0 on failure; `GetLastError()` is never called to get the actual Win32 error code.
+- `WTS_SESSION_INFO` ctypes struct defines `pWinStationName` as `wintypes.LPWSTR` — this is technically correct but the field is never used; no memory lifetime concern here, but worth documenting.
+- No COM initialization (`CoInitializeEx`) before pywinauto usage — `Desktop(backend="win32")` internally uses COM; if called from a thread not initialized as STA/MTA, behavior is undefined. Pywinauto handles this internally, but there is no explicit apartment model documentation or assertion.
+- `ImageGrab.grab(all_screens=True)` (Pillow) requires the process to be in the active console session with a valid display context. No guard checks `is_console_session()` before calling it — a disconnect during `get_state()` could silently return wrong pixel data.
+- `win32api.SetCursorPos` / `win32api.mouse_event` use the legacy `mouse_event` API (deprecated since Windows 2000) rather than `SendInput` — `SendInput` is the correct modern API and respects `UIPI` (User Interface Privilege Isolation) correctly.
+- `keybd_event` (VK_ESCAPE, VK_MENU) also uses legacy API — should use `SendInput` with `INPUT` structures.
+- No Windows Event Log integration — significant errors (GLM crash, session disconnect) only go to file log; Windows Event Log (`win32evtlog`) would allow monitoring via standard Windows tools.

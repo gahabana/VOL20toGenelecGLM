@@ -4,383 +4,247 @@
 
 ## Pattern Overview
 
-**Overall:** Event-driven MIDI bridge with multi-input adapter pattern, process supervision, and system integration via UI automation.
+**Overall:** Multi-threaded Producer/Consumer bridge with UI Automation sidecar
 
 **Key Characteristics:**
-- HID input → domain action transformation (adapter pattern)
-- Central action queue with stale event filtering
-- Conditional platform-specific features (Windows only for power control, process management)
-- Multi-threaded architecture with input isolation and graceful thread shutdown
-- Dual-path control for power (MIDI toggle + UI automation state enforcement)
-- Watchdog process supervision for GLM application lifecycle
+- A single bounded `queue.Queue` decouples all input sources (HID hardware, REST API, MQTT) from the single consumer that executes GLM commands
+- Domain actions (`glm_core/actions.py`) are the shared lingua franca — every input adapter creates them, the consumer dispatches them
+- Two parallel control paths exist for power: MIDI CC 28 (toggle only, legacy) and pywinauto pixel-sampling UI automation (explicit on/off with verification); the UI automation path is authoritative
+- The Windows session/display layer is treated as an explicit concern: WTS session state, tscon reconnection, RDP priming, and console-session detection are first-class operations, not afterthoughts
+
+---
 
 ## Layers
 
-**Input Adapters Layer:**
-- Purpose: Consume physical/network inputs and emit domain actions
-- Location: `bridge2glm.py` (HID reader thread), `api/rest.py` (REST endpoints), `api/mqtt.py` (MQTT subscriber)
-- Contains: Protocol-specific parsing, validation, rate limiting
-- Depends on: `glm_core` actions, `config` for parameters
-- Used by: Central action queue (coordination)
+**Entry Point / Startup (`bridge2glm.py:__main__`):**
+- Purpose: Parse CLI args, run one-time boot-time operations (RDP priming, MIDI service restart), construct and wire all components, install SIGINT handler, block main thread
+- Location: `bridge2glm.py` lines 1410–1492
+- Depends on: `config.py`, `logging_setup.py`, all subsystems
+- Used by: Nothing (top of call graph)
 
-**Domain Model Layer:**
-- Purpose: Define system capabilities independent of input/output
+**Configuration Layer (`config.py`):**
+- Purpose: Validates and parses all CLI arguments; defines all tuneable parameters including HID VID/PID, MIDI channel names, click timing, volume acceleration curve, API port, MQTT settings, GLM path
+- Location: `config.py`
+- Contains: `parse_arguments()`, `validate_*` functions
+- Depends on: `argparse`, stdlib only
+- Used by: `bridge2glm.py:__main__`
+
+**Domain Actions (`glm_core/actions.py`):**
+- Purpose: Frozen dataclasses representing what the system should do, independent of input source. `QueuedAction` wraps any action with a timestamp for stale-event filtering.
 - Location: `glm_core/actions.py`
-- Contains: `SetVolume`, `AdjustVolume`, `SetMute`, `SetDim`, `SetPower`, `QueuedAction`
-- Depends on: Nothing (pure dataclasses)
-- Used by: All input adapters and action consumer
+- Contains: `SetVolume`, `AdjustVolume`, `SetMute`, `SetDim`, `SetPower`, `QueuedAction`, `GlmAction` union type
+- Depends on: stdlib only
+- Used by: all input adapters (HID, REST, MQTT) and the consumer
 
-**MIDI Control Layer:**
-- Purpose: Translate domain actions to MIDI messages for GLM
-- Location: `bridge2glm.py` (MIDI output, `_send_to_glm()` and related functions)
-- Contains: CC mapping, MIDI message construction, channel management
-- Depends on: `mido` library, `midi_constants.py` for CC numbers
-- Used by: Action consumer thread
+**State Tracker (`bridge2glm.py:GlmController`):**
+- Purpose: Single source of truth for GLM state (volume, mute, dim, power). Tracks pending volume to allow command accumulation before GLM confirms. Manages power transition / settling / cooldown state machine. Fires registered callbacks on state change (used by REST WebSocket and MQTT).
+- Location: `bridge2glm.py` lines 110–403
+- Key state: `volume` (0–127), `mute`, `dim`, `power`, `_pending_volume`, `_power_settling`, `_power_transition_start`
+- Thread safety: All mutable state protected by `threading.Lock()`
+- Used by: Consumer thread (writes), MIDI reader thread (writes via `update_from_midi`), REST API (reads), MQTT (reads)
 
-**UI Automation / Power Layer (Windows only):**
-- Purpose: Verify and enforce power state via pixel sampling and mouse automation
-- Location: `PowerOnOff/glm_power.py`
-- Contains: Power button detection, pixel color sampling, mouse click synthesis, display diagnostics
-- Depends on: `pywinauto`, `PIL`, Windows API (`win32api`, `ctypes`)
-- Used by: Power command handler in `bridge2glm.py` (conditional, fallback to MIDI)
+**HID Input Thread (`bridge2glm.py:HIDToMIDIDaemon.hid_reader`):**
+- Purpose: Reads raw USB HID reports from the Fosi Audio VOL20 knob. Maps physical keycodes to `Action` enum via configurable `DEFAULT_BINDINGS`. Applies `AccelerationHandler` for volume. Enqueues `QueuedAction` objects.
+- Thread name: `HIDReaderThread`
+- Win32 priority: `THREAD_PRIORITY_HIGHEST`
+- Device: opened by VID/PID (`0x07d7, 0x0000` default). Blocking read with 1000 ms timeout for clean shutdown.
+- Reconnect: auto-retry with `SmartRetryLogger` throttling
 
-**Process Supervision Layer (Windows only):**
-- Purpose: Lifecycle management and watchdog for GLM application
+**MIDI Reader Thread (`bridge2glm.py:HIDToMIDIDaemon.midi_reader`):**
+- Purpose: Reads MIDI CC messages from GLM's MIDI output port. Updates `GlmController` state from CC 20 (volume), 23 (mute), 24 (dim). Also performs MIDI pattern detection for power state: detects the 5-message burst `[MUTE, VOL, DIM, MUTE, VOL]` that GLM emits on power toggle from RF remote.
+- Thread name: `MIDIReaderThread`
+- Win32 priority: `THREAD_PRIORITY_ABOVE_NORMAL`
+- Blocking iteration over `mido` input port
+
+**Consumer Thread (`bridge2glm.py:HIDToMIDIDaemon.consumer`):**
+- Purpose: Dequeues `QueuedAction` objects and executes them. Discards events older than `MAX_EVENT_AGE` (2.0 s). Enforces power settling and cooldown lockouts. Dispatches to volume handlers (absolute CC 20, or fallback CC 21/22), MIDI action sender, or UI automation power handler.
+- Thread name: `ConsumerThread`
+- Win32 priority: `THREAD_PRIORITY_ABOVE_NORMAL`
+- Power execution: calls `GlmPowerController.set_state()` in-line (blocking; by design, power takes time)
+
+**UI Automation Layer (`PowerOnOff/glm_power.py:GlmPowerController`):**
+- Purpose: Deterministic power state control via pixel sampling + synthesized mouse click. Finds GLM's JUCE window (`JUCE_.*` class, "GLM" in title), restores it to foreground, reads median RGB of a fixed screen patch at the power button, classifies as "on"/"off"/"unknown", clicks if needed, verifies with polling. Restores window state (minimize, focus) after operation.
+- Key Win32 APIs: `ImageGrab` (GDI screen capture), `win32api.SetCursorPos`, `win32api.mouse_event`, `ctypes.windll.user32.SetForegroundWindow`, `IsIconic`, `IsHungAppWindow`
+- Thread safety: protected by `threading.Lock()`
+- Session guards: calls `ensure_session_connected()` before UI automation to detect and recover from disconnected RDP sessions (using `WTSEnumerateSessionsW` and `tscon`)
+
+**GLM Process Manager (`PowerOnOff/glm_manager.py:GlmManager`):**
+- Purpose: Full lifecycle management of the `GLMv5.exe` process. CPU gating at initial start (waits for `psutil.cpu_percent` < 10%). Starts GLM via `subprocess.Popen`, sets `ABOVE_NORMAL_PRIORITY_CLASS`. Waits for JUCE window handle to stabilize (polls until same HWND seen `stable_handle_count` times). Runs background watchdog thread checking liveness (`psutil`) and responsiveness (`IsHungAppWindow`). Restarts GLM after exit or hang (>30 s non-responsive). Calls `reinit_callback` after restart so power controller can re-bind to new window.
+- Thread name: `GLMWatchdog` (daemon thread)
 - Location: `PowerOnOff/glm_manager.py`
-- Contains: CPU gating at startup, process monitoring, hang detection, auto-restart logic
-- Depends on: `psutil`, `pywinauto`, Windows API
-- Used by: Main script initialization (via `if GLM_MANAGER_AVAILABLE`)
 
-**Configuration & Constants Layer:**
-- Purpose: Centralize parameters, MIDI mappings, and CLI argument parsing
-- Location: `config.py`, `midi_constants.py`, `acceleration.py`
-- Contains: Argument validation, MIDI CC numbers, action enums, acceleration curves
-- Depends on: `argparse`
-- Used by: All layers (global configuration)
+**REST API (`api/rest.py`):**
+- Purpose: FastAPI + uvicorn server in a dedicated thread with its own asyncio event loop. Exposes `/api/state`, `/api/volume`, `/api/volume/adjust`, `/api/mute`, `/api/dim`, `/api/power`, `/api/health`, `/ws/state`. Reads state from `GlmController`, submits `QueuedAction` objects to shared queue. WebSocket endpoint broadcasts state changes pushed via `asyncio.run_coroutine_threadsafe` from `GlmController` callbacks.
+- Thread name: `APIServerThread` (daemon thread)
+- Cross-thread broadcast: `_broadcast_state_sync` → `asyncio.run_coroutine_threadsafe` → `_api_event_loop`
+- Serves static web UI from `web/`
 
-**Logging & Diagnostics Layer:**
-- Purpose: Structured logging with queue-based async handler, telemetry
-- Location: `logging_setup.py`, `retry_logger.py`
-- Contains: Log format standardization, rotating file handlers, retry tracking
-- Depends on: Python `logging` module
-- Used by: All layers
+**MQTT Client (`api/mqtt.py:MqttClient`):**
+- Purpose: paho-mqtt client; subscribes to `glm/set/{volume,mute,dim,power}`, enqueues `QueuedAction` on message. Publishes state on `glm/state` (retained). Publishes HA MQTT Discovery configs for Home Assistant entity auto-creation. Registers as `GlmController` state callback to publish on every state change.
+- Thread model: `loop_start()` runs paho's background thread
+
+**Logging (`logging_setup.py`, `retry_logger.py`):**
+- Purpose: Async queue-based logging via `QueueListener`; prevents lock contention in hot paths. Dedicated `LoggingThread` (non-daemon; ensures final messages flush on exit) set to `THREAD_PRIORITY_IDLE`. `SmartRetryLogger` throttles retry-loop messages using absolute-time milestones to avoid log spam without hiding persistent failures.
+
+---
 
 ## Data Flow
 
-**Volume Control Flow (User Rotation):**
+**HID Knob → GLM Volume:**
+1. VOL20 USB HID report arrives at `HIDReaderThread`
+2. Physical keycode mapped via `DEFAULT_BINDINGS` → `Action.VOL_UP/DOWN`
+3. `AccelerationHandler.calculate_speed()` returns delta
+4. `AdjustVolume(delta=N)` wrapped in `QueuedAction` → `queue.put()`
+5. `ConsumerThread` dequeues; checks stale-event age and power-settling lockout
+6. `_handle_adjust_volume`: reads `GlmController.get_volume_if_valid()` for pending/confirmed volume; calculates absolute target; calls `GlmController.send_volume_absolute()` → `mido` CC 20 → LoopMIDI virtual port → GLM
+7. GLM confirms by sending CC 20 back on its output port
+8. `MIDIReaderThread` receives CC 20; calls `GlmController.update_from_midi()` which clears `_pending_volume` and fires state callbacks
+9. State callbacks notify REST WebSocket clients and MQTT broker
 
-```
-1. HID Reader Thread (bridge2glm.py):
-   - Read VOL20 device via python-hid
-   - Decode button press (KEY_VOL_UP, KEY_VOL_DOWN, KEY_CLICK, etc.)
-   - Detect click patterns to identify intent (single click, double, long press)
+**Power Toggle (UI Automation Path):**
+1. Click on VOL20 → `SetPower(state=None)` enqueued
+2. Consumer dispatches to `_handle_power_action()`
+3. `GlmController.start_power_transition()` — begins 2 s settling lockout; notifies all callbacks with `power_transitioning: true`
+4. `ensure_session_connected()` checks WTS session state; runs `tscon` if disconnected
+5. `GlmPowerController.set_state(desired, verify=True)` — finds JUCE window, restores to foreground, reads pixel, clicks if needed, polls until verified
+6. Consumer waits for remainder of `POWER_SETTLING_TIME` (2 s)
+7. `GlmController.end_power_transition(success, actual_state)` — clears settling flag; fires callbacks
+8. 3 s additional cooldown blocks further power commands (`POWER_TOTAL_LOCKOUT = 5 s`)
 
-2. Acceleration Calculation:
-   - AccelerationHandler.calculate_speed() applies velocity-based acceleration
-   - Faster rotation = larger delta (1→3 steps based on volume_increases_list)
+**Remote RF Power Toggle (MIDI Pattern Detection):**
+1. GLM emits 5-message burst: `[MUTE, VOL, DIM, MUTE, VOL]` within ~150 ms when power is toggled via RF remote
+2. `MIDIReaderThread` maintains a sliding window of recent `(timestamp, cc)` tuples
+3. Triple-condition filter: max single gap < 170 ms, total gap < 200 ms, pre-gap > 120 ms
+4. On match: `glm_controller.power = not old_power` (in-place toggle, bypasses UI automation path since RF remote clicked the physical button directly)
 
-3. Action Creation:
-   - Create AdjustVolume(delta=N) or SetVolume(target=N)
-   - Wrap in QueuedAction(action, timestamp=now)
+**State → External Systems:**
+1. Any state change fires `GlmController._notify_state_change()`
+2. REST: `_broadcast_state_sync` schedules `_broadcast_to_all` on uvicorn's asyncio event loop
+3. MQTT: `MqttClient.on_state_change` calls `_publish_state` which publishes JSON to `glm/state` (retained)
 
-4. Queue Submission:
-   - Submit to thread-safe queue.Queue (max 100 items)
-   - If queue full, apply backpressure (skip/drop events)
-
-5. Consumer Thread (bridge2glm.py main loop):
-   - Pop QueuedAction from queue
-   - Filter stale events (>2 seconds old)
-   - Send MIDI: CC 21 (vol up) or CC 22 (vol down)
-   - Log via retry_logger
-
-6. GLM MIDI Handler:
-   - GLM receives MIDI CC and updates volume
-   - GLM outputs CC 20 (absolute volume) on every change
-
-7. MIDI Reader Thread (bridge2glm.py):
-   - Capture GLM's CC 20 feedback
-   - Update local state (for REST API and MQTT)
-```
-
-**Power Control Flow (Power Toggle):**
-
-```
-1. HID Input:
-   - Detect KEY_TRIPLE_CLICK on VOL20 power button
-   - Create SetPower(state=None) for toggle
-
-2. Power Pattern Detection:
-   - MIDI reader monitors for MUTE→VOL→DIM→MUTE→VOL pattern
-   - Pattern indicates GLM power state change (fires 150ms window)
-   - Timestamp checked to distinguish power event from normal volume changes
-
-3. Action Consumer:
-   - Receives SetPower action
-   - MIDI attempt: Send CC 28 (power toggle) if available
-   - UI Automation fallback (if GlmPowerController available):
-     * If state=None: Already sent MIDI, done
-     * If state=True/False: Call controller.set_state() to enforce
-
-4. UI Automation Verification:
-   - Sample power button color at fixed window coordinates
-   - Median of 5 samples to reduce noise
-   - "on"=green, "off"=red, "unknown"=neither
-   - If mismatch with desired state: Click power button at computed coords
-   - Retry up to 3 times with 500ms wait
-
-5. Power Settling:
-   - Block ALL incoming commands for 2 seconds (POWER_SETTLING_TIME)
-   - Then block power-specific commands for 3 more seconds
-   - Total 5-second lockout to prevent race conditions
-
-6. State Feedback:
-   - REST API and MQTT publish power state
-   - Web UI displays button state (green/red/unknown)
-```
-
-**REST API & WebSocket Flow:**
-
-```
-1. FastAPI Server (api/rest.py):
-   - Listens on configurable port (default 8080)
-   - POST /api/actions/<action_name> → create GlmAction → queue
-   - GET /api/state → return current state (volume, mute, dim, power)
-
-2. WebSocket Handler:
-   - Connected clients subscribe to state changes
-   - On any state update (HID/MQTT/REST), broadcast to all clients
-   - Graceful disconnect handling with error suppression
-
-3. Web Frontend (web/index.html):
-   - React-like component state (volume slider, power/mute/dim toggles)
-   - WebSocket listener updates UI in real-time
-   - User clicks → POST /api/actions/... → queued → executed
-```
-
-**MQTT Flow (Home Assistant Integration):**
-
-```
-1. MQTT Client (api/mqtt.py):
-   - Connect to broker with optional TLS and auth
-   - Publish to glm/state/{entity} on any state change
-
-2. Home Assistant Discovery:
-   - Publish MQTT Discovery payloads to homeassistant/number/glm/volume/config
-   - HA automatically creates entities (slider, buttons, binary sensors)
-
-3. HA → GLM Commands:
-   - HA publishes to glm/command/{entity}
-   - MQTT client creates GlmAction and queues
-   - Follows same execution path as HID/REST
-
-4. State Sync:
-   - On startup, query GLM volume (vol+1, vol-1, read response)
-   - Publish initial state to HA
-   - From then on, event-driven updates
-```
-
-**GLM Process Lifecycle (if GLM_MANAGER_AVAILABLE):**
-
-```
-1. Startup:
-   - Check if GLM already running (psutil)
-   - If not running:
-     * CPU gating: Wait for system CPU <10% (max 5 min)
-     * Start GLMv5.exe with AboveNormal priority
-     * Stabilize window handle (pywinauto Desktop lookup)
-     * Minimize window non-blocking (WM_SYSCOMMAND)
-
-2. Watchdog Thread:
-   - Monitors GLM process handle every 1 second
-   - Detects hangs (process still exists but unresponsive)
-   - On hang: Log, trigger reinit callback (if set), restart GLM
-
-3. Shutdown:
-   - Stop watchdog thread
-   - Don't kill GLM (user can close manually or GLM auto-stops)
-```
-
-**State Management:**
-
-- **HID State:** `last_button`, `last_time`, `first_time` (in AccelerationHandler)
-- **MIDI State:** Current volume, mute, dim, power (updated from GLM CC feedback)
-- **Power State:** Cached in GlmPowerController (last known on/off/unknown)
-- **Queue State:** Python `queue.Queue` with timestamp filtering
-- **Thread State:** Event flags for graceful shutdown (`shutdown_event`)
+---
 
 ## Key Abstractions
 
-**Action Dataclass Hierarchy:**
-- Purpose: Domain-level command representation independent of input method
-- Examples: `SetVolume(target=79)`, `AdjustVolume(delta=2)`, `SetPower(state=True)`
-- Pattern: Frozen dataclasses (immutable, hashable) for thread safety
+**`GlmAction` union (`glm_core/actions.py`):**
+- Purpose: Type-safe representation of every command the system can execute. Frozen dataclasses — immutable once created.
+- Examples: `SetVolume(target=79)`, `AdjustVolume(delta=2)`, `SetPower(state=None)` (toggle), `SetPower(state=True)` (explicit on)
+- Pattern: Command pattern. All input sources produce these; consumer is the single handler.
 
-**Adapter Pattern (Input → Action):**
-- Purpose: Isolate protocol-specific logic from domain logic
-- Examples:
-  - HID adapter (bridge2glm.py lines 200-300+): Button codes → Actions
-  - REST adapter (api/rest.py): JSON payloads → Actions
-  - MQTT adapter (api/mqtt.py): Topic messages → Actions
-- Pattern: Each adapter creates `QueuedAction(action, timestamp)` and submits
+**`GlmController` (`bridge2glm.py`):**
+- Purpose: Stateful model of GLM's observable state. Dual update paths: MIDI feedback (ground truth) and optimistic pending-volume tracking. Observer pattern via `_state_callbacks` list.
+- Pattern: Observable state model with optimistic concurrency for volume.
 
-**Stale Event Filtering:**
-- Purpose: Prevent delayed inputs from affecting state (graceful backpressure)
-- Location: Consumer loop in bridge2glm.py (check `MAX_EVENT_AGE = 2.0s`)
-- Pattern: Timestamp comparison at consumption time, not submission
+**`GlmPowerConfig` / `GlmManagerConfig` dataclasses:**
+- Purpose: All magic numbers and timeouts are configurable via dataclass fields with documented defaults. No scattered constants inside methods.
+- Examples: `GlmPowerConfig.dx_from_right`, `GlmManagerConfig.watchdog_interval`
 
-**Power State Pattern (Dual-Path):**
-- Purpose: Achieve reliable power control despite MIDI-only protocol limitation
-- MIDI Path: CC 28 (toggle only, no feedback)
-- UI Path: Pixel sampling + mouse clicks (explicit on/off with verification)
-- Pattern: Try MIDI first, fall back to UI automation if power state mismatch detected
+**`PowerOnOff/exceptions.py`:**
+- Hierarchy: `GlmPowerError` → `GlmWindowNotFoundError`, `GlmStateUnknownError` (carries `rgb` + `point`), `GlmStateChangeFailedError` (carries `desired` + `actual`)
+- Pattern: Rich exceptions with diagnostic payload; callers can introspect failure reason without string parsing.
 
-**Process Watchdog Pattern:**
-- Purpose: Auto-recovery from GLM hangs without user intervention
-- Location: `PowerOnOff/glm_manager.py`, watchdog thread
-- Pattern: Spawn daemon thread, poll process handle, trigger reinit callback on hang
+---
 
 ## Entry Points
 
-**Main Entry Point:**
-- Location: `bridge2glm.py` (executed as `python bridge2glm.py`)
-- Triggers: Manual invocation or scheduled startup (via Task Scheduler on Windows)
-- Responsibilities:
-  * Parse CLI arguments
-  * Setup logging
-  * Start GLM manager (if enabled)
-  * Initialize GlmPowerController (if available)
-  * Start HID reader thread
-  * Start MIDI reader thread
-  * Start API server (FastAPI in background thread)
-  * Start MQTT client (if configured)
-  * Main consumer loop: Dequeue actions, execute, handle errors
+**`bridge2glm.py` (`__main__` block):**
+- Location: `bridge2glm.py` line 1410
+- Triggers: `python bridge2glm.py [args]` or Windows Task Scheduler at boot
+- Responsibilities: Parse args → setup logging → RDP priming → restart MIDI service → construct `HIDToMIDIDaemon` → install signal handler → `daemon.start()` → block main thread
 
-**HID Reader Thread:**
-- Location: `bridge2glm.py`, spawned in `__main__`
-- Triggers: Application startup
-- Responsibilities: Poll VOL20 device, pattern recognition, queue actions
+**REST API (`/api/` endpoints):**
+- Location: `api/rest.py`
+- Triggers: HTTP requests on port 8080 (default)
+- Responsibilities: Validate input → enqueue `QueuedAction` → return immediately (fire-and-forget)
 
-**MIDI Reader Thread:**
-- Location: `bridge2glm.py`, spawned in `__main__`
-- Triggers: Application startup
-- Responsibilities: Listen for GLM state feedback, detect power patterns, update state
+**MQTT (`glm/set/+` topics):**
+- Location: `api/mqtt.py`
+- Triggers: MQTT messages from Home Assistant or other brokers
+- Responsibilities: Parse payload → enqueue `QueuedAction`
 
-**API Server Thread:**
-- Location: `api/rest.py`, spawned via `start_api_server()`
-- Triggers: If `--api_port > 0`
-- Responsibilities: Serve HTTP endpoints, handle WebSocket connections
-
-**MQTT Client Thread:**
-- Location: `api/mqtt.py`, spawned via `MqttClient(...).connect_and_loop()`
-- Triggers: If `--mqtt_broker` specified
-- Responsibilities: Publish state, subscribe to commands, handle HA discovery
-
-**GLM Manager Watchdog Thread:**
-- Location: `PowerOnOff/glm_manager.py`, spawned in `GlmManager.start()`
-- Triggers: If `--glm_manager` and `GLM_MANAGER_AVAILABLE`
-- Responsibilities: Monitor process, detect hangs, auto-restart
+---
 
 ## Error Handling
 
-**Strategy:** Graceful degradation with per-layer isolation and retry logic.
+**Strategy:** Fail-soft with automatic reconnection. No subsystem crash propagates to others.
 
 **Patterns:**
+- HID/MIDI connection failures: `SmartRetryLogger`-throttled warnings; thread loops with `RETRY_DELAY` sleep. Never crashes.
+- Power control failures: `GlmPowerError` subclasses caught in `_handle_power_action`; `end_power_transition(success=False)` always called (in `try/finally`-equivalent logic) to unblock the settling lockout.
+- GLM process crash/hang: `GlmManager` watchdog detects via `psutil.is_running()` and `IsHungAppWindow`; kills and restarts. `reinit_callback` re-binds power controller to new HWND.
+- UI automation state unknown: retries with `retries=2` default; raises `GlmStateChangeFailedError` if all retries fail.
+- Stale events: `ConsumerThread` discards `QueuedAction` objects older than `MAX_EVENT_AGE = 2.0 s`. Prevents backlog replay after transient outages.
+- Queue backpressure: `queue.Queue(maxsize=QUEUE_MAX_SIZE)` — HID reader will block if consumer is stalled; bounded to prevent unbounded memory growth.
 
-- **HID Device Errors:**
-  - Retry with `retry_logger` (exponential backoff 2s)
-  - If persistent: Log warning, continue (won't crash main loop)
-
-- **MIDI Channel Errors:**
-  - Exception caught, logged, consumer loop continues
-  - Queue remains intact for next command
-
-- **Power Control Errors:**
-  - UI automation failure: Log error, fall back to MIDI toggle
-  - Window not found: Log as "unknown" state, don't crash
-  - Custom exceptions: `GlmWindowNotFoundError`, `GlmStateUnknownError`, `GlmStateChangeFailedError`
-
-- **API/WebSocket Errors:**
-  - WebSocket disconnect: Caught, client removed from set
-  - HTTP 400: Bad payload, return 400 with error message
-  - Suppressed warnings: `WebSocketErrorFilter` (lines in api/rest.py)
-
-- **Process Management Errors:**
-  - GLM not found: Log, don't crash watchdog
-  - Process start failure: Retry (with CPU gating), log after max retries
-  - Session issues (RDP): Handled by `ensure_session_connected()` in glm_power.py
-
-- **Queue Overflow:**
-  - If queue full (max 100): Skip incoming events (backpressure)
-  - Consumer processes queue as fast as MIDI allows
+---
 
 ## Cross-Cutting Concerns
 
 **Logging:**
-- Centralized format (thread name, module, function, line number, timestamp)
-- Setup in `logging_setup.py` with RotatingFileHandler
-- Async queue-based handler (`QueueHandler`, `QueueListener`) to avoid blocking
-- Level configurable via `--log_level` (DEBUG/INFO/NONE)
+- Format: `%(asctime)s [%(levelname)s] %(threadName)s %(module)s:%(funcName)s:%(lineno)d - %(message)s`
+- All threads log thread name; enables log-based thread activity tracing
+- Async queue (`QueueHandler` + `QueueListener`) offloads I/O to `LoggingThread`
+- WebSocket disconnect noise suppressed via `WebSocketErrorFilter` applied at root logger and all handlers
 
-**Validation:**
-- CLI arguments: Type checking and range validation in `config.py`
-- MIDI values: Clamped to 0-127 before sending
-- Volume deltas: Limited by acceleration curve (max 3-5 per click)
-- Timestamps: Filtered for stale events (>2 seconds)
+**Thread Priority (Win32):**
+- Main process: `ABOVE_NORMAL_PRIORITY_CLASS` (via `psutil.nice`)
+- `HIDReaderThread`: `THREAD_PRIORITY_HIGHEST` — ensures hardware input is never missed
+- `ConsumerThread` + `MIDIReaderThread`: `THREAD_PRIORITY_ABOVE_NORMAL` — balanced send/receive
+- `LoggingThread`: `THREAD_PRIORITY_IDLE` — never steals cycles from control path
+- GLM process: `ABOVE_NORMAL_PRIORITY_CLASS` — set by `GlmManager` after startup
 
-**Authentication:**
-- MQTT: Optional username/password from CLI args
-- REST API: No auth (assumes local network or VPN)
-- Windows credentials: Stored in Windows Credential Manager for RDP priming
+**Session / Display Awareness:**
+- `is_console_session()`: uses `ProcessIdToSessionId` + `WTSGetActiveConsoleSessionId`
+- `is_session_disconnected()`: uses `WTSEnumerateSessionsW` to check session state
+- `ensure_session_connected()`: called before every UI automation operation; runs `tscon` (direct or via psexec for elevation) to reconnect disconnected RDP session to console display
 
-**Platform Detection:**
-- `IS_WINDOWS = sys.platform == 'win32'`
-- Conditional imports for Windows-only deps (psutil, pywinauto, win32process)
-- Graceful fallback on non-Windows (no power control, no process management)
-
-**Thread Safety:**
-- Action queue: `queue.Queue` (thread-safe by design)
-- State dict: No locks needed (each value set once, never modified)
-- MIDI channels: Single writer per direction (one thread sends, one reads)
-- Power controller: Lock not needed (reads only, no concurrent state changes)
+**Shutdown:**
+- `daemon.stop()` sets `_stop_event`, puts sentinel `None` on queue, stops MQTT, closes MIDI/HID
+- `LoggingThread` is non-daemon (ensures final log messages flush before process exits)
+- `GlmManager` watchdog stops without killing GLM (intentional — GLM continues running)
 
 ---
 
 ## Dual Perspective Analysis
 
-### Senior Developer Perspective vs. macOS App Architect Perspective
+### Senior Developer Perspective
 
-**AGREEMENT:**
-- Both perspectives recognize the **adapter pattern** as well-implemented (HID, REST, MQTT all feed the same action queue)
-- Both appreciate the **separation of concerns**: actions, MIDI protocol, UI automation, and process management are cleanly layered
-- Both see the **stale event filtering** (2-second timeout) as a pragmatic anti-pattern mitigation
-- Both view the **conditional imports** as correct for cross-platform compatibility
-- Both recognize the **thread-per-input-source** model as appropriate for this workload (HID polling, MQTT blocking receive, WebSocket long-polling)
+**Strengths:**
+- The `GlmAction` command pattern is a clean seam. Adding a new control (e.g., Bass EQ) requires: add a dataclass to `glm_core/actions.py`, add a `elif isinstance(action, NewAction)` arm to the consumer, and add a queue.put call to whichever adapter needs it. Nothing else changes.
+- `GlmController.get_volume_if_valid()` is a well-designed atomic read combining `_volume_initialized` check and effective-volume selection in one lock acquisition — avoids TOCTOU race.
+- `GlmStateChangeFailedError` carries structured diagnostic data (`rgb`, `point`, `desired`, `actual`) rather than embedding it in the message string — testable and introspectable.
+- `SmartRetryLogger` absolute-milestone throttling is elegant: first failure always logged, then 2s, 10s, 1min, 10min, 1hr, 1day. Never silent, never spammy.
 
-**DIVERGENCE:**
+**Weaknesses / Coupling:**
+- `GlmController` is a module-level singleton (`glm_controller = GlmController()` at line 407 of `bridge2glm.py`). The MQTT client, REST API, and consumer all access it as a global. This makes testing and future multi-GLM scenarios harder.
+- `bridge2glm.py` is still a 1500-line file. `GlmController`, `HIDToMIDIDaemon`, RDP priming, MIDI service restart, console minimization, and logging setup all coexist. The classes are well-structured, but the module boundary is blurred.
+- Power settling state (`_power_settling`, `_power_transition_start`) lives inside `GlmController` but is checked by the consumer, REST, and MQTT — this is reasonable but means `GlmController` conflates "GLM state" with "our command throttling state."
+- No unit tests currently exist. The pixel-sampling classification in `_classify_state` (hardcoded RGB thresholds) is especially fragile without tests.
 
-| Senior Developer | macOS App Architect |
-|------------------|---------------------|
-| **Modularity:** Code is well-modularized into `glm_core/`, `PowerOnOff/`, `api/`. Good separation. | **Runtime Model:** Application is architected as a background daemon/agent loop, not a macOS-idiomatic lifecycle model. No AppKit integration, no Cocoa event loop, no application delegate pattern. |
-| **Testability:** Frozen dataclasses (actions) enable unit testing without mocking. Queue-based design allows test injection. | **System Integration:** Python MIDI library (`mido`) requires low-level port discovery—works on Windows/Linux but fragile on macOS where Core MIDI is the native API. HID via `python-hid` also sidestepped macOS native frameworks. |
-| **Scalability:** Central queue bottleneck if HID/MQTT/REST rates spike, but acceptable for a volume controller. | **Resource Management:** Multi-threaded design (HID thread, MIDI thread, API thread, MQTT thread, Watchdog thread = 5+ threads) is higher overhead than event-driven single-threaded or async/await model. No runloop integration means threads can't coordinate on macOS' unified event system. |
-| **Error Handling:** Per-layer error boundaries with logging is standard; good resilience. | **Process Supervision:** Replicating GLM watchdog in Python (psutil polling every 1s) is crude compared to macOS' `launchd` mechanism for process supervision and auto-restart with exponential backoff. On macOS, would use plist + `defaults write` to set up system-level daemon supervision. |
-| **Coupling:** MIDI constants tightly coupled in `midi_constants.py` but reasonable given MIDI spec immutability. | **UI Automation:** Dependency on `pywinauto` + pixel color sampling is Windows-only and fragile. macOS equivalent would be using Accessibility API (`AXUIElement`) or controlling Genelec GLM via AppleScript if available. Pixel sampling is not reliable across display scaling/themes. |
-| | **Threading Model:** Python GIL means threads can't truly parallelize CPU work, only I/O. On macOS, would prefer `OperationQueue` or `DispatchQueue` for better CPU utilization and priority management. Current approach works but is not idiomatic. |
-| | **CLI/Config:** Argument parsing is fine for CLI, but macOS app would use Info.plist, NSUserDefaults, or a preferences window instead of CLI args. No user-facing config UI here. |
+### Senior Windows Desktop App Architect Perspective
 
-**Translation to macOS:**
-If this were ported to macOS:
-1. Replace `python-hid` with IOKit USB HID framework or Core HID
-2. Replace `mido` with Core MIDI API (direct Objective-C or Swift)
-3. Replace `pywinauto` pixel sampling with Accessibility API (NSAccessibility) to read GLM UI state
-4. Replace watchdog polling with `launchd` plist for daemon auto-restart
-5. Replace multi-threaded design with `DispatchQueue` (GCD) for async, non-blocking I/O
-6. Use `CFRunLoop` or Cocoa event loop to integrate all I/O sources
-7. Package as agent (LaunchAgent if user-level) with System Preferences for configuration
+**Thread Model:**
+- Python `threading.Thread` objects are standard OS threads (not lightweight fibers). All Win32 thread priority APIs (`SetThreadPriority` via `win32process`) work correctly. There are no COM apartment concerns because no COM objects are used — pywinauto uses Win32 APIs directly.
+- The asyncio event loop for the REST/WebSocket server runs in its own thread (`APIServerThread`). Cross-thread coroutine scheduling via `asyncio.run_coroutine_threadsafe` is the correct pattern for bridging synchronous callbacks (from `GlmController`) into an async event loop.
 
-**Senior Developer Assessment:** Architecture is sound, maintainable, and well-separated. MIDI/HID bridges benefit from being platform-independent. The queue-based design is robust.
+**UI Automation:**
+- Using pywinauto with `backend="win32"` and window class regex `JUCE_.*` is correct and robust for JUCE-based apps. The Alt-key trick before `SetForegroundWindow` (lines 527–536 of `glm_power.py`) correctly works around the Windows foreground lock restriction that prevents non-foreground processes from stealing focus.
+- Pixel sampling via `ImageGrab.grab` (GDI-based `BitBlt`) is a valid approach when the target app has no accessible COM/UIA elements. The `all_screens=True` parameter handles multi-monitor setups. The median-of-patch approach is resilient to single noisy pixels.
+- `IsHungAppWindow` (used in `GlmManager.is_responding`) is the correct Win32 API for detecting hung GUI applications — it uses the same 5-second threshold as Task Manager.
 
-**macOS Architect Assessment:** Application is fully functional on Windows but not idiomatic for macOS. Would require significant rearchitecture to integrate with system frameworks and follow macOS app lifecycle patterns. Currently works but doesn't leverage macOS' native system integration (Core MIDI, Accessibility API, launchd).
+**WTS Session Management:**
+- `WTSEnumerateSessionsW` → session state check → `tscon session_id /dest:console` is the correct sequence for reconnecting a disconnected RDP session to the console display. The psexec fallback for SYSTEM-level elevation is appropriate when the script doesn't run as Administrator.
+- The RDP priming mechanism (FreeRDP connect/disconnect before GLM starts, tracked by `%TEMP%\rdp_primed.flag` with boot timestamp) addresses a real Windows display driver initialization order problem with OpenGL apps on headless VMs.
+
+**Process Management:**
+- `subprocess.Popen` + `psutil.Process(popen.pid)` for GLM lifecycle is correct. Using `psutil.ABOVE_NORMAL_PRIORITY_CLASS` with `proc.nice()` is the proper cross-version way to set process priority class.
+- `IsWindow(hwnd)` before `IsHungAppWindow(hwnd)` (line 239 of `glm_manager.py`) correctly handles the case where the HWND has been destroyed between cache and use.
+
+**Gaps from Windows Architect Perspective:**
+- No Windows Event (kernel object) is used for inter-thread synchronization — Python `threading.Event` is used instead. This is fine functionally, but means thread state cannot be observed from external tools (Process Monitor, etc.).
+- No Job Object wraps the GLM process. If bridge2glm.py crashes, GLM keeps running as an orphan — the next invocation reuses it (by design), but unintended orphan accumulation is possible.
+- The MIDI service restart (`net stop/start midisrv`) requires the process to run elevated or as a service account with service control permissions. This is undocumented in CLI help.
+- `GetConsoleWindow()` + `ShowWindow(hwnd, SW_MINIMIZE)` for console minimization (lines 425–432) can fail silently if the process has no console window (e.g., started with `pythonw.exe`).
 
 ---
 

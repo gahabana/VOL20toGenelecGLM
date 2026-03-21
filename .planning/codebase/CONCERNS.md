@@ -2,497 +2,238 @@
 
 **Analysis Date:** 2026-03-21
 
-**Analyzed by:** Senior Developer + macOS App Architect perspectives
+---
+
+## Perspective 1: Senior Developer
+
+### SD-1: Global Mutable State — GlmController Singleton
+
+**Issue:** `glm_controller` is a module-level singleton instantiated at the top of `bridge2glm.py` (line 407). It is mutated directly by the `midi_reader` thread (`glm_controller.power = not old_power`, line 1025) bypassing the class's own locking methods. The `_notify_state_change()` private method is also called directly from outside the class (line 1027).
+
+- **Files:** `bridge2glm.py:407`, `bridge2glm.py:1024-1027`, `bridge2glm.py:843-844`
+- **Impact:** Race condition between `midi_reader` thread direct assignment and `consumer` thread calling `update_from_midi`. The lock is bypassed for RF-remote power toggle detection, meaning a simultaneous MIDI update could see a half-updated state. Also couples bridge logic directly to controller internals.
+- **Fix approach:** Route RF power detection through `glm_controller.set_power_from_midi_pattern(new_state)` — a new public method that acquires the lock and calls `_notify_state_change()` internally.
 
 ---
 
-## Tech Debt
+### SD-2: Password Exposed in Process Arguments
 
-### 1. Hardcoded Platform Paths and Dependencies
+**Issue:** In `prime_rdp_session()`, the RDP password from Credential Manager is passed directly on the `wfreerdp` command line: `/p:` + `password` (`bridge2glm.py:564`). On Windows, command-line arguments of running processes are visible to any user with access to `WMI` or `tasklist /v`.
 
-**Files:** `PowerOnOff/glm_manager.py` (line 71), `PowerOnOff/glm_power.py` (line 54), `config.py` (line 163)
-
-**Issue:**
-- `glm_path` defaults to `r"C:\Program Files (x86)\Genelec\GLMv5\GLMv5.exe"` (hardcoded)
-- Process name hardcoded as `"GLMv5"` with `.exe` extension
-- All Windows-specific paths and registry operations are tightly coupled to implementation
-- No abstraction layer for platform detection or configuration
-
-**Impact:**
-- Code is not testable without a Windows environment with exact GLM installation
-- Maintenance burden if Genelec changes install paths or naming
-- Makes cross-platform porting impossible without significant refactoring
-
-**Fix approach:**
-- Extract platform-specific paths to configuration file or environment variables
-- Create a `Platform` abstraction class with Windows/Linux/macOS implementations
-- Move hardcoded paths to `config.py` with environment variable overrides
-
-**Severity:** Medium (doesn't break functionality but limits flexibility)
+- **Files:** `bridge2glm.py:563-565`
+- **Impact:** The RDP password for the local account is visible in process listings for the ~3–10 seconds the FreeRDP process is alive. Any process running as the same user can read it via `psutil.Process.cmdline()`.
+- **Fix approach:** Use FreeRDP's `/from-stdin` flag or a temporary credential file that is immediately deleted. Alternatively, use `wfreerdp /v:localhost /u:USERNAME /cert:ignore /sec:nla` with credential manager passthrough via `/credentials-delegation:1` (no `/p:` flag) — FreeRDP picks up Credential Manager credentials automatically when no `/p:` is given and NLA is used.
 
 ---
 
-### 2. Inconsistent Exception Handling Patterns
+### SD-3: MQTT Password in CLI Arguments
 
-**Files:** `PowerOnOff/glm_manager.py` (multiple), `PowerOnOff/glm_power.py` (multiple), `api/rest.py` (lines 176-182)
+**Issue:** `--mqtt_pass` is accepted as a CLI argument (`config.py:149`). On Windows, process command lines are world-readable via WMI. The password also ends up in `ps` output on any process listing.
 
-**Issue:**
-- Bare `except Exception:` blocks that catch too broadly:
-  - `glm_manager.py:254` catches all exceptions in `is_responding()`, assumes responding on any error
-  - `glm_power.py:415-416` silently passes on window lookup failure
-  - `api/rest.py:343-344` logs and continues without raising for API errors
-- No consistent error recovery strategy (some retry, some fail silently, some propagate)
-- Custom exception classes defined but not used consistently (`GlmStateUnknownError`, `GlmWindowNotFoundError`)
-
-**Impact:**
-- Silent failures mask real bugs (e.g., "window not found" treated as "not responding yet")
-- Difficult to debug because root cause is swallowed
-- Logging doesn't distinguish between expected transient errors and unexpected system errors
-
-**Fix approach:**
-- Replace broad `except Exception` with specific exception types
-- Create exception hierarchy: `GlmError` → `GlmTransientError` (retry) vs `GlmFatalError` (stop)
-- Use `GlmWindowNotFoundError`, `GlmStateUnknownError` consistently
-- Log at WARNING/ERROR level with context when catching exceptions
-
-**Severity:** High (leads to silent failures and hard-to-debug issues)
+- **Files:** `config.py:149`, `bridge2glm.py:750`
+- **Impact:** MQTT broker password visible in process list, shell history, and any task manager / WMI query.
+- **Fix approach:** Read MQTT credentials from Windows Credential Manager (same pattern as RDP credentials) or from an environment variable. Keep `--mqtt_user` for the username but remove `--mqtt_pass` from CLI.
 
 ---
 
-### 3. Global Logger Reassignment Anti-Pattern
+### SD-4: REST API Has No Authentication
 
-**Files:** `bridge2glm.py` (line 98), `logging_setup.py` (entire module), `PowerOnOff/glm_manager.py` (line 40)
+**Issue:** The FastAPI server binds to `0.0.0.0:8080` by default with no authentication (`api/rest.py:388`). Any process or device on the local network can call `/api/power` to toggle the speakers.
 
-**Issue:**
-- Module-level `logger = logging.getLogger(__name__)` is reassigned inside `setup_logging()` using `global` keyword
-- This pattern breaks at module import time before logging is configured
-- Makes early-startup errors unloggable
-
-**Impact:**
-- Import-time errors before `setup_logging()` is called have no log destination
-- Hard to trace initialization issues
-- Violates Python logging best practices
-
-**Fix approach:**
-- Keep module-level logger as-is (never reassign)
-- Call `setup_logging()` before any imports that need logging
-- OR use lazy logger initialization with `logging.getLogger(__name__)` at first use
-
-**Severity:** Low (startup only, but makes debugging startup issues harder)
+- **Files:** `api/rest.py:388-468`, `config.py:139`
+- **Impact:** On a home network or VM with bridged networking, any device can control the speakers. The power endpoint is especially sensitive since toggling the Genelec amplifiers repeatedly could damage them.
+- **Fix approach:** Add an optional `--api_key` CLI argument. Inject a FastAPI dependency that checks `Authorization: Bearer <key>` or an `X-API-Key` header. Default to localhost-only binding (`127.0.0.1`) unless explicitly set to `0.0.0.0`.
 
 ---
 
-### 4. Missing Thread Cleanup and Resource Leaks
+### SD-5: No Tests Whatsoever
 
-**Files:** `PowerOnOff/glm_manager.py` (line 194-195), `bridge2glm.py` (daemon threads), `api/rest.py` (line 464)
+**Issue:** There are zero test files in the repository — no `tests/` directory, no `*.test.py`, no `*.spec.py`, no pytest config, no test framework in `requirements.txt`.
 
-**Issue:**
-- `GlmManager.stop()` joins watchdog thread with 10-second timeout, may not wait long enough if watchdog is in long sleep
-- All background threads are daemon threads (true), but no cleanup of thread-local state
-- No proper cleanup in `finally` blocks for exception cases
-- WebSocket clients set is managed with threading.Lock but no protection during iteration in some cases
-
-**Impact:**
-- Abrupt shutdown may leave stale process/window handles cached
-- Resource leaks if exception occurs during operation (e.g., window handles not released)
-- Potential race conditions in client list iteration during concurrent disconnect
-
-**Fix approach:**
-- Use context managers (`__enter__`/`__exit__`) for resource cleanup
-- Add `finally` blocks to all critical sections to ensure cleanup runs
-- Use `threading.RLock()` for reentrant operations instead of `Lock()`
-- Implement proper shutdown sequence: signal threads → wait for completion → cleanup resources
-
-**Severity:** Medium (long-running services can gradually leak resources)
+- **Files:** Entire codebase
+- **Impact:** The power state machine (`GlmController`), acceleration logic (`AccelerationHandler`), MIDI pattern detection (the 5-message burst filter in `bridge2glm.py:972-1029`), and pixel-color classification (`GlmPowerController._classify_state`) are all untested. Regressions in any of these are invisible until runtime.
+- **Fix approach:** Start with pure-logic unit tests: `AccelerationHandler.calculate_speed`, `GlmController` state machine (lock behavior, power settling timer), `_classify_state` with known RGB tuples, and the MIDI pattern filter gap logic. These require no Windows APIs.
 
 ---
 
-### 5. Incomplete Error States in Power Control
+### SD-6: Hardcoded GLM Executable Path
 
-**Files:** `PowerOnOff/glm_power.py` (lines 656-675), `PowerOnOff/glm_manager.py` (line 256)
+**Issue:** The GLM path `C:\Program Files (x86)\Genelec\GLMv5\GLMv5.exe` is hardcoded as defaults in both `GlmManagerConfig` (`PowerOnOff/glm_manager.py:71`) and `config.py:163`. The process name `GLMv5` is also hardcoded (`glm_manager.py:72`).
 
-**Issue:**
-- `_classify_state()` returns "unknown" for ~5% of valid states (color threshold detection too strict)
-- `is_responding()` returns True if process not cached (line 248-249), should return False
-- No handling for partial/corrupted state reads (e.g., one monitor disconnects during screenshot)
-- Fallback nudge sampling (line 689) tries alternative point but no max retry limit
-
-**Impact:**
-- Power state reads fail intermittently (~5% of requests based on color thresholds)
-- Watchdog may incorrectly think GLM is responding when it's actually not
-- Cascading failures: unknown state → retry forever → eventual timeout
-- Screenshot may hang if monitor is disconnected
-
-**Fix approach:**
-- Increase tolerance in color classification thresholds or use statistical method (median vs single sample)
-- Return False in `is_responding()` when process not cached or state indeterminate
-- Add timeout to screenshot operations
-- Implement max retries (e.g., 3) for fallback nudge before giving up
-
-**Severity:** High (intermittent power control failures)
+- **Files:** `PowerOnOff/glm_manager.py:71-72`, `config.py:163`
+- **Impact:** Every GLM version upgrade requires a code or config change. No error message distinguishes "wrong path" from "GLM not installed."
+- **Fix approach:** Auto-detect via Windows Registry (`HKLM\SOFTWARE\WOW6432Node\Genelec\GLM`) or a `glob` of `C:\Program Files*\Genelec\GLM*\GLM*.exe`. Emit a clear error if not found and `--glm_path` was not specified.
 
 ---
 
-## Known Bugs
+### SD-7: Power State Initialized Optimistically to `True`
 
-### 1. Window Handle Cache Invalidation Race Condition
+**Issue:** `GlmController.__init__` sets `self.power = True` (`bridge2glm.py:118`). If GLM is actually off when the script starts and `GlmPowerController.get_state()` fails (window not found, display issue), the controller silently keeps `power=True`.
 
-**Files:** `PowerOnOff/glm_power.py` (lines 467-475), `PowerOnOff/glm_manager.py` (line 238-245)
-
-**Symptoms:**
-- Occasionally "GLM window not found" when window is actually visible
-- More likely when window is minimized/restored rapidly or during RDP session transitions
-
-**Root Cause:**
-- `_window_cache` is checked and used across multiple method calls without atomicity
-- Between cache check (line 467) and actual use (line 471), window may be destroyed and recreated
-- `_hwnd` cached in `GlmManager` becomes invalid after window hide/show
-
-**Files:** `PowerOnOff/glm_power.py:467-475`, `PowerOnOff/glm_manager.py:238-245`
-
-**Trigger:**
-- Minimize GLM → try to set power → window cache miss → find new window → cache → use cached → window destroyed in meantime
-
-**Workaround:** None (will retry on next call)
-
-**Fix approach:**
-- Use atomic window lookup + operation (don't cache across method boundaries)
-- Add generation counter to window handle: `(hwnd, generation)` tuple
-- Invalidate cache on any exception from window operation
-
-**Severity:** High (intermittent failures under normal operation)
+- **Files:** `bridge2glm.py:118`, `bridge2glm.py:1321-1332`
+- **Impact:** The REST API and MQTT will report `power: true` even when the speakers are physically off, until the first successful UI read or MIDI pattern. Home Assistant automations keyed on power state will malfunction.
+- **Fix approach:** Initialize `self.power = None` (unknown). Reflect `"unknown"` in `get_state()` output. Only set `True`/`False` after a confirmed UI read or MIDI pattern.
 
 ---
 
-### 2. RDP Session Priming May Not Run on Fast Boot
+### SD-8: `requirements.txt` Missing Several Runtime Dependencies
 
-**Files:** `bridge2glm.py` (RDP priming logic not fully visible in first 100 lines)
+**Issue:** `requirements.txt` lists only `hidapi`, `mido`, `python-rtmidi`, `psutil`, `fastapi`, `uvicorn[standard]`, `paho-mqtt`. The code also imports `pywinauto`, `pillow`, `pywin32`, and `keyring` — all required for the core feature set on Windows.
 
-**Symptoms:**
-- High CPU usage persists after RDP disconnect on some boots
-- RDP priming doesn't seem to execute even though it should
-
-**Root Cause:**
-- Priming flag `%TEMP%\rdp_primed.flag` uses boot timestamp
-- System time change or fast reboot may cause flag to be treated as "already primed this boot"
-- No logging of priming execution in early startup
-
-**Impact:** High CPU after RDP disconnect (the original issue that was supposedly fixed)
-
-**Fix approach:**
-- Use Windows event log or registry to track priming instead of timestamp-based flag
-- Add explicit logging at start of priming: "RDP session priming started"
-- Add verification that priming actually executed
-
-**Severity:** High (reintroduces the original high CPU issue)
+- **Files:** `requirements.txt`
+- **Impact:** A fresh `pip install -r requirements.txt` on a new Windows machine will fail at runtime with `ImportError` on first use of power control or RDP priming.
+- **Fix approach:** Add `pywinauto`, `pillow`, `pywin32`, `keyring` to `requirements.txt`. Consider splitting into `requirements.txt` (core) and `requirements-windows.txt` (Windows-only extras), or use a `[windows]` extras_require in a `pyproject.toml`.
 
 ---
 
-## Security Considerations
+### SD-9: Stale Action Dropping is Silent to the Caller
 
-### 1. Window Focus Stealing and Input Injection
+**Issue:** The consumer silently discards queued actions older than `MAX_EVENT_AGE = 2.0s` (`bridge2glm.py:1071-1073`). REST API and MQTT callers receive a `200 OK` when they submit an action, then the action may be silently dropped if the consumer is backlogged.
 
-**Files:** `PowerOnOff/glm_power.py` (lines 503-545)
-
-**Risk:**
-- `_ensure_foreground()` uses Alt key trick to bypass Windows security and allow `SetForegroundWindow`
-- This makes the application vulnerable to input injection while focus is being stolen
-- `keybd_event()` can be intercepted by malware running in same session
-- No validation that Alt key injection succeeded before using SetForegroundWindow
-
-**Current mitigation:**
-- No input validation; script assumes it owns the desktop
-- Runs with user privileges (good), not admin (good)
-
-**Recommendations:**
-- Add brief delay after Alt key press to ensure foreground window focus actually changed
-- Validate that focus changed by checking result of `GetForegroundWindow()` before proceeding
-- Consider using `BringWindowToTop()` + `ShowWindow(SW_RESTORE)` as more direct alternative
-- Log when focus stealing occurs for audit trail
-
-**Severity:** Medium (requires malware in same session, but could enable input hijacking)
+- **Files:** `bridge2glm.py:1071-1073`, `bridge2glm.py:84`
+- **Impact:** A REST API client sending a power command during a brief queue backup gets `{"status": "ok"}` but the command is never executed. No feedback loop exists.
+- **Fix approach:** Either use a smaller `MAX_EVENT_AGE` for power commands (which are user-initiated and time-sensitive), or return a `202 Accepted` with a status token that the client can poll. At minimum, log the stale drop at WARNING level with the action type.
 
 ---
 
-### 2. Windows Credential Manager Dependency
+### SD-10: `_reinit_power_controller` Accesses Global `glm_controller` Directly
 
-**Files:** `PowerOnOff/glm_power.py` (lines 185-262, RDP priming credential read)
+**Issue:** `HIDToMIDIDaemon._reinit_power_controller` directly references the module-level `glm_controller` singleton and calls its private `_notify_state_change()` method (`bridge2glm.py:843-844`). The daemon also calls `_notify_state_change()` directly from the midi_reader at line 1027.
 
-**Risk:**
-- Script expects credentials in Windows Credential Manager
-- No validation that credentials were successfully retrieved before using them
-- If credentials are missing, FreeRDP fails silently and RDP priming doesn't execute
-- No error reporting if credential lookup fails
-
-**Current mitigation:**
-- Credentials are encrypted by Windows DPAPI (good)
-- Script doesn't hard-code credentials (good)
-
-**Recommendations:**
-- Log explicitly when reading credentials from Credential Manager
-- Raise error if credentials not found (rather than fail silently in FreeRDP)
-- Test credential existence before attempting RDP connection
-- Document how to verify credentials are stored: `cmdkey /list:localhost`
-
-**Severity:** Medium (causes silent failure of RDP priming)
+- **Files:** `bridge2glm.py:843-844`, `bridge2glm.py:1027`
+- **Impact:** Tight coupling; private API leakage. If `GlmController` is refactored, these call sites are invisible to the type checker and easy to miss.
+- **Fix approach:** Expose `glm_controller.notify_power_changed(new_state)` as a public method that sets `self.power` and calls `_notify_state_change()` internally.
 
 ---
 
-### 3. Pixel Sampling for Power State Detection
+## Perspective 2: Senior Windows Desktop App Architect
 
-**Files:** `PowerOnOff/glm_power.py` (lines 639-654)
+### WA-1: Pixel-Color Power Detection Breaks with DPI Scaling and Themes
 
-**Risk:**
-- Power state determined from screen pixel color (brightness and green channel)
-- No validation that screenshot captured correct region
-- If window is off-screen or hidden, screenshot captures wrong area
-- Malware could spoof power state by rendering similar colors in other windows
+**Issue:** `GlmPowerController` determines power state by sampling a 9×9 pixel patch at a fixed offset from the window's right edge (`dx_from_right=28`, `dy_from_top=80` in `PowerOnOff/glm_power.py:392-394`). The color thresholds (`off_max_brightness=95`, `on_min_green=110`) are hardcoded.
 
-**Current mitigation:**
-- Window coordinates validated before screenshot (lines 551-555)
-- Fallback nudge sampling if first sample is ambiguous
-
-**Recommendations:**
-- Verify window is visible before sampling: `IsWindowVisible(hwnd)`
-- Validate screenshot captured expected window (e.g., check corners for window borders)
-- Add integrity check: if power state doesn't match GLM's MIDI reports, log warning
-- Consider using MIDI power feedback as primary, pixel sampling as verification only
-
-**Severity:** Low (would require coordinated attack, but power state is critical)
+- **Files:** `PowerOnOff/glm_power.py:376-403`, `PowerOnOff/glm_power.py:656-675`
+- **Impact:**
+  - At 125% or 150% DPI scaling (common on HiDPI displays or RDP sessions with custom resolution), the pixel offset `(right - 28, top + 80)` hits the wrong pixel — likely the window chrome or an adjacent control. The method silently returns `"unknown"` and the system fails to control power.
+  - Windows High Contrast mode or any future GLM skin change breaks the RGB thresholds.
+  - The fallback `nudge_x=8` shifts 8 pixels left, but this is also a pixel-distance that scales with DPI.
+  - `ImageGrab.grab(all_screens=True)` uses virtual-screen coordinates; if GLM is on a secondary monitor, DPI-per-monitor awareness can cause coordinate mismatches.
+- **Fix approach (near-term):** Query `GetDpiForWindow(hwnd)` at runtime and scale `dx_from_right` and `dy_from_top` proportionally. Log actual DPI on each operation.
+- **Fix approach (long-term):** Switch to UI Automation (UIA) accessibility tree to find the power button element by `AutomationId` or `Name`, then query its `Toggle.ToggleState` property. This is DPI-immune and theme-immune. `pywinauto` already wraps COM UIA; use `backend="uia"` instead of `"win32"`.
 
 ---
 
-## Performance Bottlenecks
+### WA-2: `tscon` Session Hardcoded to Session 1
 
-### 1. Excessive Window Finding in Power Controller
+**Issue:** `prime_rdp_session()` calls `tscon 1 /dest:console` with session ID hardcoded to `1` (`bridge2glm.py:593-597`). The `reconnect_to_console()` function in `glm_power.py` correctly uses the dynamic session ID, but the priming function does not.
 
-**Files:** `PowerOnOff/glm_power.py` (lines 453-501)
-
-**Problem:**
-- `get_state()` does fresh window lookup every call (line 749: `use_cache=False`)
-- Window finding uses `Desktop(backend="win32").windows(class_name_re=r"JUCE_.*")` which enumerates ALL windows
-- For each call, enumerates all JUCE windows, filters, validates PIDs
-- Default cache TTL is 5 seconds, but many calls happen faster than that
-
-**Impact:**
-- 50-100ms per `get_state()` call just to find window
-- If called 10x/sec, that's 500-1000ms of window enumeration per second
-- Especially noticeable when volume slider is adjusted rapidly
-
-**Current measurements:** Not profiled, but logically expensive
-
-**Improvement path:**
-- Increase cache TTL to 10-30 seconds (window won't move)
-- Cache by PID instead of recreating on each call
-- Use `FindWindow()` by class name instead of `EnumWindows()` if possible
-- Batch multiple operations: get state, set state, restore in single window find
-
-**Severity:** Medium (noticeable latency on repeated operations)
+- **Files:** `bridge2glm.py:593-597`
+- **Impact:** On a machine where the user's interactive session is session 2 (e.g., the machine has had multiple login/logout cycles or a service session is session 1), `tscon 1 /dest:console` reconnects the wrong session. The RDP priming "succeeds" but leaves the actual user session disconnected. GLM is running in the wrong session context.
+- **Fix approach:** After killing FreeRDP, enumerate WTS sessions with `WTSEnumerateSessionsW` to find the newly-connected RDP session by state `WTSConnected`, then pass that session ID to `tscon`. Alternatively, use `get_current_session_id()` (already implemented in `glm_power.py`) before priming to know which session to reconnect.
 
 ---
 
-### 2. Blocking Screenshot on Every Power Check
+### WA-3: Subprocess Handle Leak During RDP Priming on FreeRDP Hang
 
-**Files:** `PowerOnOff/glm_power.py` (lines 639-654)
+**Issue:** In `prime_rdp_session()`, `proc.terminate()` is called followed by `proc.wait(timeout=2)`. If FreeRDP does not terminate within 2 seconds, `proc.kill()` is called (`bridge2glm.py:584-588`). However, `proc` (the `subprocess.Popen` object) is never explicitly closed after `kill()`. On Windows, `Popen` objects hold an OS handle to the child process until the Python object is garbage-collected.
 
-**Problem:**
-- `ImageGrab.grab(bbox=..., all_screens=True)` blocks waiting for all display drivers to respond
-- If RDP is disconnected or monitor is unplugged, screenshot may hang for several seconds
-- No timeout on screenshot operation
-- Called from watchdog thread (blocks watchdog monitoring)
-
-**Impact:**
-- Watchdog becomes unresponsive during power state check
-- If screenshot hangs, entire monitoring loop stalls
-- Can appear as "GLM not responding" when really it's the screenshot that hung
-
-**Improvement path:**
-- Add timeout to screenshot: `ImageGrab.grab()` with thread + timeout wrapper
-- Check monitor count before screenshot; skip if disconnected
-- Move screenshot to separate thread with timeout fallback
-- Cache screenshot results for 100ms to avoid redundant grabs
-
-**Severity:** Medium (manifests as false "not responding" on monitor changes)
+- **Files:** `bridge2glm.py:583-607`
+- **Impact:** Minor handle leak per boot (since priming runs once per boot flag). However, if priming is ever triggered multiple times due to flag corruption, handles accumulate. More critically, `subprocess.run(["query", "session"], ...)` is called in a polling loop up to 20 times (`bridge2glm.py:570-578`) — each `subprocess.run` creates, waits, and returns a `CompletedProcess` whose handles are released, but only after GC. Under CPython this is fine; under PyPy it would leak.
+- **Fix approach:** Use `proc` as a context manager (`with subprocess.Popen(...) as proc:`) which calls `proc.__exit__()` → `proc.communicate()` or `proc.wait()` and then closes handles. For the polling `subprocess.run` calls, they are already safe as `CompletedProcess` has no lingering OS handles under CPython.
 
 ---
 
-### 3. CPU Polling in Watchdog Loop
+### WA-4: `IsHungAppWindow` is Unreliable for Detecting JUCE/OpenGL Apps
 
-**Files:** `PowerOnOff/glm_manager.py` (lines 571-617)
+**Issue:** `GlmManager.is_responding()` uses `ctypes.windll.user32.IsHungAppWindow(hwnd)` to detect if GLM has frozen (`glm_manager.py:252`). `IsHungAppWindow` returns true only when the window's message queue hasn't been pumped for 5 seconds (`GHND_TIMEOUT`). JUCE OpenGL apps pump their message queue normally but do all heavy work on the render thread — a stuck render thread is invisible to `IsHungAppWindow`.
 
-**Problem:**
-- Watchdog checks `is_alive()` and `is_responding()` in tight loop every 5 seconds
-- Each check enumerates processes via psutil, does window handle validation
-- No exponential backoff when GLM is unresponsive
-- If GLM crashes and restarts, watchdog continues polling max delay
-
-**Impact:**
-- 5-10% CPU usage just for monitoring (on single core)
-- Spikes when checking responsiveness (IsHungAppWindow is expensive)
-- Not a critical issue but noticeable on low-power systems
-
-**Improvement path:**
-- Use Windows WaitForInputIdle or similar event-based monitoring instead of polling
-- Implement exponential backoff: start at 1s, back off to 10s if responsive
-- Cache process handle and use `WaitForSingleObject(hProcess, WAIT_TIMEOUT)` to detect exit
-
-**Severity:** Low (acceptable for monitoring daemon)
+- **Files:** `PowerOnOff/glm_manager.py:222-256`
+- **Impact:** If GLM's OpenGL render thread hangs (e.g., due to the display driver issue described in `CLAUDE.md`), `IsHungAppWindow` returns false (not hung) because the message queue is still pumped. The watchdog never detects the freeze and never restarts GLM.
+- **Fix approach:** Supplement `IsHungAppWindow` with CPU usage monitoring: if GLM's CPU usage is at or near 100% for `max_non_responsive * watchdog_interval` seconds, treat it as hung. `psutil.Process.cpu_percent()` is already available. Alternatively, send `WM_NULL` with `SendMessageTimeout(hwnd, WM_NULL, 0, 0, SMTO_ABORTIFHUNG, 5000, ...)` — this is more reliable than `IsHungAppWindow`.
 
 ---
 
-## Fragile Areas
+### WA-5: UI Automation Runs in Consumer Thread — Contends with MIDI Processing
 
-### 1. Multi-Step Power State Change Sequence
+**Issue:** `_handle_power_action()` runs UI automation (window restore, Alt-key simulation, screenshot grab, mouse click) directly inside the `consumer` thread (`bridge2glm.py:1128-1182`). This blocks the consumer for up to `POWER_SETTLING_TIME (2s) + verify_timeout (3s) = 5s` while MIDI messages continue arriving.
 
-**Files:** `PowerOnOff/glm_power.py` (lines 808-916)
-
-**Fragility:**
-- Power state change requires: focus → read state → click → poll → restore focus (5 steps)
-- Each step can fail independently
-- If step 3 (click) succeeds but step 4 (poll) times out, state is unknown
-- Restore focus (step 5) runs in finally block but may fail silently
-
-**Why fragile:**
-- No transaction semantics (can't rollback if mid-way failure)
-- State becomes inconsistent: hardware changed but software doesn't know
-- Thread safety: another thread might grab focus between operations
-
-**Safe modification:**
-- Wrap entire sequence in lock (already has `self._lock`, good)
-- Add pre/post state validation before/after to detect partial state
-- Log state before + after for audit trail
-- Test with intentional injection of failures between steps
-
-**Test coverage gaps:**
-- No test for "click succeeds but polling times out"
-- No test for "window closes during operation"
-- No test for concurrent get_state + set_state calls
-
-**Severity:** High (can cause power state desynchronization)
+- **Files:** `bridge2glm.py:1128-1182`, `PowerOnOff/glm_power.py:808-916`
+- **Impact:** During a 5-second power operation, the consumer queue accumulates HID and REST events. After the operation completes, stale events (>2s) are dropped and fresh ones are processed. The `QUEUE_MAX_SIZE=100` limit acts as a safety valve, but the fundamental design is that a single slow operation blocks all other command processing.
+- **Fix approach:** Move UI automation to a dedicated `PowerControlThread`. Submit power actions to a separate single-slot power queue. The consumer thread enqueues power actions and immediately resumes processing other actions. The power thread handles the slow UI operation and updates `glm_controller` state when done.
 
 ---
 
-### 2. Hardcoded Window Finding by Title Pattern
+### WA-6: `SetForegroundWindow` via Alt-key Trick is Fragile
 
-**Files:** `PowerOnOff/glm_manager.py` (line 403), `PowerOnOff/glm_power.py` (line 478)
+**Issue:** `GlmPowerController._ensure_foreground()` uses a well-known hack: synthesizing Alt key events to allow `SetForegroundWindow` to succeed from a background process (`glm_power.py:527-538`). It also synthesizes Escape before Alt to dismiss overlays.
 
-**Fragility:**
-- Window finding uses hardcoded patterns:
-  - JUCE window class: `r"JUCE_.*"` (regex)
-  - Title filter: `"GLM" in title` (simple substring)
-- If Genelec changes JUCE window class name or title format, code breaks silently
-- No fallback if pattern doesn't match (returns hwnd=0, caller treats as "not ready yet")
-
-**Why fragile:**
-- Tight coupling to internal Genelec implementation details
-- No version detection (assuming GLMv5, but what if GLMv6?)
-- Pattern is undocumented and could change anytime
-
-**Safe modification:**
-- Document why these patterns work (what Genelec uses)
-- Add fallback patterns (e.g., also check for "Genelec" in title)
-- Add version detection and different patterns per version
-- Test on fresh GLM install to verify patterns still match
-
-**Test coverage gaps:**
-- No test with GLMv4 or hypothetical GLMv6
-- No test with customized window titles
-- No test when multiple JUCE windows exist
-
-**Severity:** Medium (would require Genelec update to break, but then code is broken)
+- **Files:** `PowerOnOff/glm_power.py:503-556`
+- **Impact:**
+  - Sending VK_ESCAPE (`0x1B`) dismisses whatever dialog or application happens to have focus at the moment of the power command (e.g., a browser address bar, a game prompt). This is a user-visible side effect.
+  - The Alt-key trick is deliberately exploiting a Windows bug/quirk documented to be unreliable. Microsoft's UIPI (User Interface Privilege Isolation) can block it.
+  - If the user is typing when a power command arrives, the injected keystrokes corrupt the input.
+- **Fix approach:** Use `AllowSetForegroundWindow(ASFW_ANY)` or `LockSetForegroundWindow(LSFW_UNLOCK)` from a thread with appropriate privileges, without synthetic key injection. Even better: don't bring GLM to foreground at all. Use `PrintWindow(hwnd, hdc, PW_RENDERFULLCONTENT)` to capture the window contents without focus, then use `SendMessage` (not `PostMessage`) for the click to avoid needing foreground status.
 
 ---
 
-### 3. RDP Priming Dependency Chain
+### WA-7: `ImageGrab.grab` Captures Entire Screen Region — Breaks Under RDP
 
-**Files:** `bridge2glm.py` (RDP priming logic)
+**Issue:** `GlmPowerController._get_patch_median_rgb()` uses `PIL.ImageGrab.grab(bbox=..., all_screens=True)` to capture a pixel patch (`glm_power.py:647`). Under RDP sessions, `ImageGrab.grab` often returns a black rectangle because the display surface is a remote frame buffer and screen capture APIs don't work across session boundaries.
 
-**Fragility:**
-- RDP priming depends on:
-  1. FreeRDP installed (`wfreerdp.exe` in PATH)
-  2. Windows Credential Manager with `localhost` credentials
-  3. NLA enabled on RDP-Tcp
-  4. Admin privileges or psexec available
-  5. Network stack working (for RDP loopback)
-
-- If ANY dependency is missing, RDP priming silently fails
-- No explicit error reporting which dependency failed
-- Fallback behavior unclear (does GLM start anyway? With high CPU?)
-
-**Why fragile:**
-- Many external dependencies
-- Silent failure mode makes troubleshooting hard
-- Setup is manual and error-prone (documented in CLAUDE.md)
-
-**Safe modification:**
-- Add explicit checks for each dependency at startup:
-  ```python
-  if not which("wfreerdp"):
-      logger.error("FreeRDP not found in PATH - RDP priming disabled")
-  if not check_credentials_exist("localhost"):
-      logger.error("No credentials for localhost - RDP priming will fail")
-  ```
-- Log explicitly: "RDP priming started", "RDP priming succeeded", "RDP priming failed"
-- Fall back gracefully: continue GLM startup even if priming fails
-- Add `--skip-rdp-priming` flag for headless environments
-
-**Test coverage gaps:**
-- No test without FreeRDP installed
-- No test without Credential Manager entries
-- No test on non-admin user account
-
-**Severity:** High (makes recovery from RDP disconnect unreliable)
+- **Files:** `PowerOnOff/glm_power.py:639-654`
+- **Impact:** When the bridge is accessed via RDP and the user runs a power command before the session is fully reconnected to console (or if `ensure_session_connected` returns `True` prematurely), `ImageGrab.grab` returns all-black pixels. `_classify_state` returns `"unknown"`. The power command is effectively a no-op with no error to the user.
+- **Current mitigation:** `ensure_session_connected` checks WTS session state before UI automation. This mitigates but does not eliminate the risk.
+- **Fix approach:** After calling `ensure_session_connected`, validate that `ImageGrab.grab` returns a non-black frame before attempting classification. Alternatively, use `win32gui.GetWindowDC(hwnd)` + `BitBlt` to capture directly from the window's device context — this works regardless of session/RDP state as long as the window is not occluded.
 
 ---
 
-## Test Coverage Gaps
+### WA-8: `wtsapi32.WTSEnumerateSessionsW` Memory Not Always Freed
 
-### 1. Power State Detection Accuracy
+**Issue:** In `is_session_disconnected()`, `WTSFreeMemory(ppSessionInfo)` is called in a `finally` block (`glm_power.py:149`). However, the call to `WTSEnumerateSessionsW` passes `ctypes.byref(ppSessionInfo)` — if the function fails and leaves `ppSessionInfo` as a null pointer, `WTSFreeMemory(NULL)` is called. On Windows, `WTSFreeMemory(NULL)` is documented as a no-op, so this is safe. But the outer `try/except Exception: return False` at line 154 swallows all errors including access violations, making debugging difficult.
 
-**Files:** `PowerOnOff/glm_power.py` (entire module)
-
-**Untested:**
-- Power state classification with edge-case colors (near boundaries)
-- Fallback nudge sampling when first point is ambiguous
-- Screenshot capture when monitors are disconnected
-- Behavior with HDR displays or unusual color profiles
-
-**Risk:** Power state reads fail intermittently in edge cases
-
-**Priority:** High (critical functionality)
+- **Files:** `PowerOnOff/glm_power.py:128-155`
+- **Impact:** Low risk of leak (Windows handles NULL gracefully), but any WTS API failure is silently swallowed. If `wtsapi32.dll` is not loaded (unusual but possible in Session 0), the call raises `AttributeError` which is caught by `except Exception` and returns `False` — causing `ensure_session_connected` to think the session is connected when it cannot be determined.
+- **Fix approach:** Catch `AttributeError` and `OSError` explicitly. Log the specific error. Add a check that `ppSessionInfo` is non-null before passing to `WTSFreeMemory`.
 
 ---
 
-### 2. Window Handle Lifecycle
+### WA-9: `tscon` Requires Elevation — Failure Mode is Silent
 
-**Files:** `PowerOnOff/glm_manager.py`, `PowerOnOff/glm_power.py`
+**Issue:** `reconnect_to_console()` first tries `tscon` directly, then falls back to `psexec -s` (`glm_power.py:217-252`). If neither works, it logs a warning and returns `False`. The caller (`ensure_session_connected`) returns `False`. The caller of that (`_handle_power_action`) logs an error and returns early without performing the power operation.
 
-**Untested:**
-- Window handle becomes invalid after minimize/restore
-- Cached handle validation across operations
-- Multiple JUCE windows existing simultaneously
-- Window destruction while operation in progress
-
-**Risk:** Stale window handle causes operations to fail
-
-**Priority:** High (core functionality)
+- **Files:** `PowerOnOff/glm_power.py:185-262`, `bridge2glm.py:1156-1160`
+- **Impact:** If the script is not running as Administrator and `psexec` is not installed, all UI-automation-based power commands silently fail after logging one warning. The REST API returns `200 OK` for the submitted action (because it was enqueued successfully) but the operation never executes.
+- **Fix approach:** Emit a startup warning (not a per-command warning) if the privilege check fails so the operator knows at boot time. Return a proper error from `_handle_power_action` that causes the REST API to return `503` rather than the optimistic `200 OK` from queue submission. Document the elevation requirement prominently.
 
 ---
 
-### 3. Exception Scenarios
+### WA-10: No Windows Event Log Integration
 
-**Files:** All modules
+**Issue:** All logging goes to a rotating file and console. Critical events (GLM restart, power state change failure, RDP session reconnect failure) are not written to the Windows Application Event Log.
 
-**Untested:**
-- MIDI connection drops during operation
-- GLM crashes mid-operation (watchdog restart)
-- RDP disconnect during power state check
-- Configuration file missing or corrupted
-- Thread startup failure
+- **Files:** `logging_setup.py`, `bridge2glm.py:673-736`
+- **Impact:** When the script is running as a Windows Service or Task Scheduler job (headless), the console is not visible and the log file location may not be obvious. System administrators have no way to monitor health via standard Windows tools (`eventvwr.exe`, `wevtutil`, `Get-EventLog`).
+- **Fix approach:** Add a `logging.handlers.NTEventLogHandler` for CRITICAL and ERROR levels. This is a one-line addition to `setup_logging`. The handler writes to the Windows Application Event Log under a configurable source name (e.g., `"GLMBridge"`).
 
-**Risk:** Undefined behavior when error conditions occur
+---
 
-**Priority:** Medium (affects reliability)
+### WA-11: No Job Object — Orphaned GLM Process on Bridge Crash
+
+**Issue:** GLM is launched via `subprocess.Popen([self.config.glm_path], ...)` in `GlmManager._start_glm()` (`glm_manager.py:336-342`). No Windows Job Object is created. If the Python bridge process crashes (not a clean `stop()`), GLM continues running with no parent.
+
+- **Files:** `PowerOnOff/glm_manager.py:334-344`
+- **Impact:** After a bridge crash, GLM remains running but unmonitored. On the next bridge start, `_find_glm_process()` detects the existing GLM and logs "Reusing" (`glm_manager.py:330`), but the watchdog starts fresh. If GLM's window handle has changed since it was "reused," `is_responding()` may silently use a stale handle forever.
+- **Fix approach:** Use `CreateJobObject` + `AssignProcessToJobObject` with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` so GLM is automatically killed when the bridge process terminates for any reason. Alternatively, since GLM is a user-facing audio app that the user may want to persist, at minimum detect the "reuse" case and refresh the window handle cache immediately.
+
+---
+
+### WA-12: Thread Priority Escalation Without Reversion
+
+**Issue:** `hid_reader` thread is set to `THREAD_PRIORITY_HIGHEST` and `consumer` / `midi_reader` to `THREAD_PRIORITY_ABOVE_NORMAL` (`bridge2glm.py:883`, `bridge2glm.py:948`, `bridge2glm.py:1056`). The main process is also escalated to `ABOVE_NORMAL_PRIORITY_CLASS` (`bridge2glm.py:413`). There is no mechanism to revert priority if, for example, the HID device is not found and the thread is sleeping in a retry loop.
+
+- **Files:** `bridge2glm.py:410-416`, `bridge2glm.py:883`, `bridge2glm.py:948`, `bridge2glm.py:1056`
+- **Impact:** The HID reader thread at `THREAD_PRIORITY_HIGHEST` sleeping in a 2-second retry loop still yields CPU normally when sleeping, so this is low risk in practice. However, if any tight loop exists in those threads (e.g., an exception that doesn't sleep), HIGHEST-priority spinning would starve all normal-priority threads. The Windows scheduler's starvation prevention mitigates this after ~4s.
+- **Fix approach:** Lower HID reader to `ABOVE_NORMAL` (same as consumer) during the retry/sleep phase. Only escalate to HIGHEST when a device is connected and actively reading. Use `set_current_thread_priority` to lower before `time.sleep(RETRY_DELAY)` in the reconnect path.
 
 ---
 
@@ -500,60 +241,58 @@
 
 ### Where Both Perspectives Agree (Critical)
 
-**1. Exception Handling is Too Permissive (SHARED CONCERN)**
-- **Developer view:** Silent failures make debugging impossible, violated error handling patterns
-- **Architect view:** Exception swallowing leads to cascade failures, hard to diagnose production issues
-- **Agreement:** This is the #1 code quality issue. Fix by making exception handling explicit and specific.
-- **Impact:** Would fix intermittent power control failures
-- **Effort:** Medium (requires systematic review of all exception handlers)
-- **Fix first?** YES - enables better reliability for all downstream components
+| Issue | SD ref | WA ref | Why it matters |
+|-------|--------|--------|----------------|
+| Power state detection is fragile / unreliable | SD-7 | WA-1, WA-7 | The entire power control feature is built on pixel sampling that breaks under DPI scaling, RDP, and theme changes. Both perspectives identify this as the most fragile subsystem. |
+| UI automation blocks the consumer thread | SD-9 | WA-5 | A 5-second blocking operation in the same thread that handles HID and REST events is a design problem both perspectives flag. |
+| `tscon` failure is silently swallowed after queue accept | SD-9 | WA-9 | REST API returns `200 OK` when enqueuing, but the action may never execute. Both perspectives flag the false success signal. |
 
-**2. Window Handle Cache Invalidation (SHARED CONCERN)**
-- **Developer view:** Race condition violates thread safety contract
-- **Architect view:** Cache invalidation is notoriously hard; this pattern is fragile on Windows UI thread model
-- **Agreement:** Current caching strategy is error-prone. Replace with per-operation caching or atomic window lookup.
-- **Impact:** Eliminates intermittent "window not found" errors
-- **Effort:** Medium (refactor window lookup + caching strategy)
-- **Fix first?** YES - affects reliability under normal operation
+### What the Senior Developer Would Fix First
 
-**3. RDP Priming Silent Failures (SHARED CONCERN)**
-- **Developer view:** No error reporting makes troubleshooting impossible
-- **Architect view:** RDP session management is session-specific; silent failure means high CPU persists
-- **Agreement:** Add explicit logging and dependency checks at startup
-- **Impact:** Resolves high CPU issue when RDP dependencies are missing
-- **Effort:** Low (mostly logging + conditional checks)
-- **Fix first?** YES - fast win that solves known production issue
+1. **SD-5 (No Tests)** — Every other fix is harder to validate without a test harness. Start with unit tests for `AccelerationHandler`, `GlmController` state machine, and `_classify_state`.
+2. **SD-2 / SD-3 (Credentials in CLI/process args)** — Security issues with direct customer impact. Quick wins.
+3. **SD-1 (Global singleton + lock bypass)** — The `glm_controller.power = not old_power` direct assignment is a data race. Fix before any other state machine work.
 
----
+### What the Windows Architect Would Fix First
 
-### Where Perspectives Diverge
+1. **WA-1 (DPI-aware pixel detection)** — The pixel sampling approach is fundamentally fragile. The highest-leverage fix is switching to `GetDpiForWindow` scaling in the short term and UIA accessibility API in the medium term. This eliminates WA-7 (ImageGrab under RDP) simultaneously.
+2. **WA-2 (tscon session 1 hardcoded)** — High risk of reconnecting the wrong session; one-line fix with significant reliability improvement.
+3. **WA-5 (UI automation in consumer thread)** — Architectural change: dedicate a `PowerControlThread` to avoid blocking MIDI/HID processing during power transitions.
 
-**Developer Priority: Code Quality**
-- Focus: Exception handling, test coverage, logging clarity
-- Would fix next: Inconsistent exception patterns → structured logging → comprehensive testing
-- Rationale: Good code is easier to maintain and debug
+### Disagreement
 
-**Architect Priority: Platform Reliability**
-- Focus: Platform-specific risks, process lifecycle, session management
-- Would fix next: RDP session priming → window handle lifecycle → platform abstraction
-- Rationale: Platform integration is the unique risk (not pure Python code)
+The Senior Developer would defer WA-10 (Windows Event Log) and WA-11 (Job Objects) as nice-to-haves for a personal/home project. The Windows Architect considers them prerequisites for reliable headless operation, especially since the application is designed to run unattended on a VM.
 
-**Synthesis Recommendation:**
-- **Immediate (Week 1):** Fix exception handling + RDP priming logging (both agree this is critical)
-- **Short-term (Week 2-3):** Fix window handle caching + add platform abstraction layer (arch concerns)
-- **Medium-term (Month 1):** Add comprehensive test coverage + structured logging (dev concerns)
-- **Long-term (Month 2+):** Consider macOS/Linux platform support if desired
+The Windows Architect would accept the current pixel-based approach with DPI scaling as a pragmatic near-term fix (WA-1). The Senior Developer would push for eliminating pixel-based detection entirely in favor of MIDI state (already available for mute/dim/volume) — noting that if GLM's power button has no MIDI feedback, a state-verified click via `SendMessage` to the known HWND is more reliable than a pixel snapshot.
 
 ---
 
-### Severity Summary
+## Tech Debt Summary
 
-| Severity | Category | Count | Examples |
-|----------|----------|-------|----------|
-| **Critical** | Intermittent failures, silent errors | 3 | Exception handling, window cache race, RDP priming |
-| **High** | Reliability/security issues | 5 | Incomplete error states, focus stealing, fragile sequences |
-| **Medium** | Performance/maintainability | 5 | Hardcoded paths, resource leaks, window enumeration cost |
-| **Low** | Quality/documentation | 3 | Logger anti-pattern, log levels, monitoring polling |
+| ID | Area | Severity | Effort |
+|----|------|----------|--------|
+| SD-1 | Global state / lock bypass | High | Low |
+| SD-2 | Password in process args | High | Low |
+| SD-3 | MQTT password in CLI | Medium | Low |
+| SD-4 | No REST API auth | Medium | Medium |
+| SD-5 | No tests | High | High |
+| SD-6 | Hardcoded GLM path | Low | Low |
+| SD-7 | Power state init optimistic | Medium | Low |
+| SD-8 | Incomplete requirements.txt | Medium | Low |
+| SD-9 | False `200 OK` on stale drop | Medium | Medium |
+| SD-10 | Private method leakage | Low | Low |
+| WA-1 | DPI-fragile pixel detection | High | Medium |
+| WA-2 | tscon session ID hardcoded | High | Low |
+| WA-3 | Subprocess handle leak | Low | Low |
+| WA-4 | IsHungAppWindow unreliable | Medium | Medium |
+| WA-5 | UI automation in consumer thread | Medium | High |
+| WA-6 | SetForegroundWindow via Alt hack | Medium | Medium |
+| WA-7 | ImageGrab fails under RDP | High | Medium |
+| WA-8 | WTS memory / error swallow | Low | Low |
+| WA-9 | tscon privilege failure silent | Medium | Low |
+| WA-10 | No Windows Event Log | Low | Low |
+| WA-11 | No Job Object for GLM | Low | Medium |
+| WA-12 | Thread priority not reverted | Low | Low |
 
 ---
 

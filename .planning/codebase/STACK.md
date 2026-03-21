@@ -5,119 +5,95 @@
 ## Languages
 
 **Primary:**
-- Python 3.x - Core application, HID-to-MIDI bridge, REST API, MQTT client, process management, power control via UI automation
+- Python 3.13 - All application code (confirmed by `__pycache__` `.cpython-313.pyc` files)
 
 **Secondary:**
-- None (Windows-native APIs via ctypes, pywinauto for UI automation)
+- HTML/SVG - Web UI (`web/index.html`, `web/favicon.svg`)
+- Batch - Utility script (`move_mesa_files.bat`)
 
 ## Runtime
 
 **Environment:**
-- Windows (primary deployment target with full feature support)
-- macOS/Linux (partial support - HID and MIDI work, Windows-specific power control unavailable)
+- CPython 3.13 (Windows)
+- **No virtual environment or `.python-version` file detected** - dependencies assumed globally installed
 
 **Package Manager:**
-- pip (Python package management)
-- Lockfile: `requirements.txt` (present, pinned versions not enforced)
+- pip (inferred from `requirements.txt`)
+- Lockfile: **absent** - `requirements.txt` has no pinned versions (e.g., `hidapi`, `mido`, not `hidapi==0.14.0`)
 
 ## Frameworks
 
 **Core:**
-- hidapi 0.x - Low-level HID device communication (USB knob input)
-- mido 1.x - MIDI message abstraction and sequencing
-- python-rtmidi 1.x - Real-time MIDI I/O backend
+- `mido` - MIDI I/O abstraction layer (send/receive MIDI CC messages to/from GLM)
+- `python-rtmidi` - Backend for `mido` (Windows MIDI port access via WinMM)
+- `hidapi` - Raw HID device access (reads Fosi Audio VOL20 USB knob, VID `0x07d7`)
 
-**API & Integration:**
-- FastAPI (latest stable) - REST API with WebSocket support for real-time state updates (Phase 3)
-- uvicorn[standard] - ASGI server for FastAPI
-- paho-mqtt 1.x - MQTT client for Home Assistant integration (Phase 5)
+**REST API:**
+- `fastapi` - Async REST + WebSocket server (`api/rest.py`)
+- `uvicorn[standard]` - ASGI server run in a background `threading.Thread`
 
-**System Management:**
-- psutil (latest stable) - Process and CPU monitoring for watchdog and CPU gating
+**MQTT:**
+- `paho-mqtt` - MQTT v5 client (`api/mqtt.py`), uses `CallbackAPIVersion.VERSION2`
 
-**Testing:**
-- None detected - no test framework configured
+**UI Automation (Windows-only):**
+- `pywinauto` - Window enumeration via `Desktop(backend="win32")`, finds JUCE windows by `class_name_re=r"JUCE_.*"` with "GLM" in title
+- `Pillow` (`PIL.ImageGrab`) - Screen pixel sampling for power button color detection
+- `pywin32` (`win32api`, `win32con`, `win32process`) - Mouse synthesis, keyboard events, thread priority
+
+**Process Management:**
+- `psutil` - Process enumeration (`process_iter`), priority setting (`ABOVE_NORMAL_PRIORITY_CLASS`), CPU usage polling
 
 **Build/Dev:**
-- None detected - direct Python execution (no build step)
+- No build system detected (no `pyproject.toml`, `setup.py`, `Makefile`)
+- No test framework detected (no `pytest`, `unittest`, test files)
+- No linter/formatter config detected (no `.flake8`, `pyproject.toml`, `.pylintrc`)
 
 ## Key Dependencies
 
-**Critical - Hardware Interface:**
-- `hidapi` - Direct USB HID access to Fosi Audio VOL20 knob (VID: 0x07d7, PID: 0x0000)
-- `mido` + `python-rtmidi` - MIDI output to Genelec GLM software via virtual MIDI ports ("GLMMIDI 1" / "GLMOUT 1")
-
-**Critical - Windows Automation (optional):**
-- `pywinauto` - UI automation for pixel-based power button state reading and clicking (fallback when MIDI insufficient)
-- `pillow (PIL)` - Screenshot capture for power button state detection (RGB value sampling)
-- `pywin32` - Windows API access (session management, window manipulation, process priorities)
+**Critical:**
+- `hidapi` - Without this, no input from the VOL20 knob. HID read loop polls every `HID_READ_TIMEOUT_MS=1000ms`.
+- `mido` + `python-rtmidi` - Without these, no MIDI communication with GLM. App retries connection continuously.
+- `pywinauto` + `Pillow` + `pywin32` - Required for `PowerOnOff` module. Gracefully degrades to `POWER_CONTROL_AVAILABLE=False` if absent.
+- `psutil` - Required for `GlmManager` watchdog and CPU gating. Also used for thread priority in main script.
 
 **Infrastructure:**
-- `psutil` - CPU monitoring for pre-startup idle gating, process lifecycle tracking
-- `fastapi` + `uvicorn` - HTTP/WebSocket server for remote control
-- `paho-mqtt` - MQTT message publishing/subscription for Home Assistant discovery
-
-**System Integration:**
-- `ctypes` (stdlib) - Direct Windows kernel32 API calls (session ID detection, RDP status checking)
-- `win32api`, `win32process`, `win32con` (from pywin32) - Thread priorities (ABOVE_NORMAL, HIGHEST)
+- `fastapi` + `uvicorn` - REST API on port 8080 (default). Disabled if `--api_port 0`. Runs in `APIServerThread` daemon thread.
+- `paho-mqtt` - MQTT integration for Home Assistant. Disabled unless `--mqtt_broker` is specified.
 
 ## Configuration
 
 **Environment:**
-- Command-line argument parsing via `config.py:parse_arguments()` for all operational parameters
-- No `.env` file detected - credentials and secrets passed via CLI or Windows Credential Manager
-
-**Key Configuration Parameters:**
-- MIDI channels: `--midi_in_channel` (default "GLMMIDI 1"), `--midi_out_channel` (default "GLMOUT 1")
-- HID device: `--device` (default 0x07d7:0x0000 for Fosi VOL20)
-- Volume acceleration: `--volume_increases_list`, `--click_times` for adaptive knob response
-- REST API: `--api_port` (default 8080, set to 0 to disable)
-- MQTT: `--mqtt_broker`, `--mqtt_port`, `--mqtt_user`, `--mqtt_pass`, `--mqtt_topic`, `--mqtt_ha_discovery`
-- GLM management: `--glm_manager`, `--glm_path`, `--glm_cpu_gating`
-- Logging: `--log_level` (DEBUG/INFO/NONE), `--log_file_name`
+- All configuration via CLI arguments parsed in `config.py` using `argparse`
+- No `.env` file usage - configuration is not environment-variable-based
+- Windows Credential Manager used for RDP priming credentials (read via `cmdkey`/Win32 API, not a Python library in this codebase)
+- Key configurable parameters:
+  - `--device VID,PID` (default: `0x07d7,0x0000`) - VOL20 HID device
+  - `--midi_in_channel` / `--midi_out_channel` - MIDI port names
+  - `--glm_path` - Path to `GLMv5.exe` (default: `C:\Program Files (x86)\Genelec\GLMv5\GLMv5.exe`)
+  - `--api_port` (default: 8080, 0 = disabled)
+  - `--mqtt_broker` (absent = disabled)
+  - `--startup_volume` (0-127, optional)
 
 **Build:**
-- No build configuration - direct Python execution via `python bridge2glm.py [args]`
-- Logging configured via `logging_setup.py` with rotating file handlers and async queue logging
+- No build configuration files
+
+**Logging:**
+- `RotatingFileHandler`: 4MB max, 5 backups, written to script directory
+- `QueueHandler` + `QueueListener` for async logging from multiple threads
+- Format: `%(asctime)s [%(levelname)s] %(threadName)s %(module)s:%(funcName)s:%(lineno)d - %(message)s`
+- Log file named after script (e.g., `bridge2glm.log`)
 
 ## Platform Requirements
 
-**Development:**
-- Python 3.8+
-- Windows: Full feature set (HID, MIDI, MAPI UI automation, process management, RDP priming)
-- macOS: HID and MIDI work (pywinauto/pywin32 not available)
-- Linux: HID and MIDI work (pywinauto/pywin32 not available)
+**Development & Production (Windows only):**
+- Windows 10/11 (RDP session management, WTS APIs, JUCE window class names)
+- Genelec GLM v5 installed at `C:\Program Files (x86)\Genelec\GLMv5\GLMv5.exe`
+- MIDI loopback driver providing virtual ports `GLMMIDI 1` (input to GLM) and `GLMOUT 1` (output from GLM)
+- Fosi Audio VOL20 USB HID device
+- Optional: FreeRDP (`wfreerdp.exe`) in PATH for RDP session priming
+- Optional: PsExec in PATH for elevated `tscon` calls
 
-**Production (Windows):**
-- Windows 10/11 (tested on Windows for RDP session handling, display automation)
-- FreeRDP (`wfreerdp.exe`) - For RDP session priming to prevent high CPU after RDP disconnect
-- Windows Credential Manager - Stores RDP credentials securely (accessed via cmdkey)
-- Genelec GLM software with MIDI support enabled
-- Fosi Audio VOL20 USB knob (or compatible HID device via `--device` parameter)
-
-**Runtime Dependencies:**
-- MIDI virtual ports: GLM exposes "GLMMIDI 1" (input) and "GLMOUT 1" (output) by default
-- HID device: Fosi VOL20 must be connected and recognized by Windows HID stack
-- RDP: Only priming required on startup; script includes fallback for console-only sessions
-
-## Security & Dependency Management
-
-**Vulnerability Considerations:**
-- `pywinauto` - Mirrors desktop UI; security depends on GLM window title matching (deterministic)
-- `paho-mqtt` - Username/password passed via CLI (can be exposed in process args; prefer env vars)
-- `pywin32` - Requires admin elevation for RDP priming (session context verification)
-- `ctypes` - Direct kernel API calls; validates session IDs before RDP priming
-
-**Dependency Stability:**
-- `hidapi`, `mido`, `python-rtmidi` - Stable, minimal maintenance
-- `psutil` - Actively maintained, platform abstractions well-tested
-- `FastAPI` - Rapid updates; uvicorn[standard] adds WebSocket support
-- `paho-mqtt` - Stable; Home Assistant integrations mature
-- `pywinauto` - Slower maintenance; UI automation inherently fragile across Windows versions
-
-**Version Pinning:**
-- `requirements.txt` lists packages without version constraints (e.g., `hidapi` not `hidapi==0.14.0`)
-- Recommendation: Consider pinning major versions or using `requirements-lock.txt` for reproducible builds
+**Version:** `bridge2glm.py` declares `__version__ = "3.2.22"`
 
 ---
 
@@ -125,66 +101,43 @@
 
 ### Senior Developer Perspective
 
-**Strengths:**
-- Clean dependency separation: HID/MIDI (hardware), FastAPI (REST), paho-mqtt (messaging), psutil (monitoring)
-- Conditional imports handle platform differences gracefully (Windows-specific power control optional)
-- Argument parsing with validation (`config.py`) provides safe CLI interface
-- Async logging via queue handlers prevents thread blocking in real-time loops
+**Dependency Version Pinning - High Risk:**
+`requirements.txt` lists packages without versions (`hidapi`, `mido`, etc.). A `pip install -r requirements.txt` on a new machine may install incompatible versions. `paho-mqtt` version is critical: the code uses `CallbackAPIVersion.VERSION2` (paho-mqtt >= 2.0). Installing paho-mqtt 1.x would cause a runtime `AttributeError`. No `requirements-lock.txt` or `pip freeze` output exists.
 
-**Concerns:**
-- No version pinning in `requirements.txt` risks version skew and reproducibility issues
-- No test framework; untested code paths in power control, MQTT, and RDP priming
-- MQTT credentials passed via CLI (visible in `ps` output); should use environment variables or encrypted config
-- Direct `ctypes` and `win32api` calls increase Windows-specific fragility; pywin32 version conflicts possible
-- No dependency lock file (`pip freeze` output) for production deployment
+**No Virtual Environment:**
+No `venv`, `.python-version`, or `pyenv` configuration exists. The application is assumed to run with globally-installed packages on the Windows machine.
 
-**Recommendations:**
-- Generate `requirements-lock.txt` with pinned versions and hashes for production
-- Introduce pytest and mock hardware/MIDI interfaces for testing
-- Move secrets to environment variables with fallback to Credential Manager (already done for RDP)
-- Document Windows version compatibility matrix for pywinauto and pywin32
+**No Test Suite:**
+Zero test files exist. The application has complex stateful logic (power settling timers, MIDI pattern detection, UI automation timing) with no automated verification. Manual testing only.
 
-### Senior macOS App Architect Perspective
+**No Linting/Formatting Config:**
+No `.flake8`, `pylint`, `black`, or `ruff` configuration. Code quality relies entirely on author discipline.
 
-**macOS/Darwin Native Alternatives:**
-- **HID (current: hidapi via ctypes)** → Use native `IOKit` framework via PyObjC for HID enumeration/reading
-  - Better integration with macOS permission model (Input Monitoring may be required)
-  - Eliminates dependency on platform-specific ctypes bindings
+**Mixed Sync/Async Architecture:**
+`bridge2glm.py` is synchronous/threaded. The REST API (`api/rest.py`) is async (FastAPI/uvicorn) running in a separate thread with its own event loop. Cross-thread WebSocket broadcasts use `asyncio.run_coroutine_threadsafe()`. This dual-paradigm design works but is fragile - the `_api_event_loop` global must be set before broadcasts are attempted.
 
-- **MIDI (current: mido + python-rtmidi)** → Use native `CoreMIDI` via PyObjC
-  - Native virtual port creation (MIDIClientCreateVirtualDestination)
-  - Eliminates RtMidi jni bloat; native CoreAudio integration
+**No Entry Point Script/Packaging:**
+The application is launched directly as `python bridge2glm.py`. No `__main__` guard issue (it does use `parse_arguments()`), but there is no installable package structure.
 
-- **UI Automation (current: pywinauto + PIL + win32api)** → Not needed on macOS
-  - Genelec GLM likely uses AppleScript or native macOS APIs
-  - Use `py-applescript` or native `EventKit` for accessibility
+### Senior Windows Desktop App Architect Perspective
 
-- **Process Management (current: psutil + pywin32 priorities)** → Use native `launchd`
-  - More elegant than watchdog threads; integrates with macOS system
-  - Priority via `nice`/`renice` or QoS classes in plist
-  - Auto-restart on crash without polling
+**Thread Priority Management via win32process:**
+The main script uses `win32process.SetThreadPriority()` with constants (`THREAD_PRIORITY_ABOVE_NORMAL`, `THREAD_PRIORITY_IDLE`) to prioritize the HID reader thread above normal and the logging thread at idle. This is correct Windows practice for real-time HID polling.
 
-- **RDP Session Handling (current: Windows-specific ctypes)** → Not applicable; use native screen sharing
-  - Use `Quartz` framework for display detection (wake from sleep, display sleep)
-  - No RDP priming needed; AppleScript or automation handles window state
+**Process Priority via psutil:**
+`GlmManager._start_glm()` sets GLM's process priority to `ABOVE_NORMAL_PRIORITY_CLASS` using `psutil.Process.nice()`. This maps correctly to Windows `SetPriorityClass`.
 
-**Cross-Platform Architecture Problem:**
-The codebase assumes Windows-centric deployment. Proper macOS support requires:
-1. Abstraction layer for UI automation (Interface protocol with Windows/macOS implementations)
-2. Native HID/MIDI implementations (PyObjC-based on macOS, ctypes-based on Windows)
-3. Process management strategy per platform (launchd vs. watchdog thread)
+**No Windows Service:**
+The application runs as a foreground process (or via Task Scheduler, based on CLAUDE.md context). There is no `win32serviceutil.ServiceFramework` wrapper. Running as a Windows Service would require refactoring the UI automation components (session 0 isolation problem).
 
-**Hybrid Approach (Recommended):**
-- Core bridge logic (HID→MIDI translation) stays platform-agnostic
-- Platform-specific adapters:
-  - `PowerOnOff/windows_controller.py` - Current pywinauto/pywin32 code
-  - `PowerOnOff/macos_controller.py` - PyObjC + native APIs
-  - Platform factory in `PowerOnOff/__init__.py` to select implementation
+**No Windows Event Log:**
+Logging is file-only + console. No `win32evtlog` or `win32evtlogutil` integration. Production diagnostics rely entirely on the rotating log file.
 
-**Conflict Points:**
-- **pywinauto fragility on Windows vs. PyObjC maturity on macOS**: Windows automation is inherently fragile (window titles, pixel coordinates); macOS Accessibility APIs more stable
-- **RDP priming (Windows-only) vs. native screen sleep handling (macOS)**: Fundamentally different problems; abstraction layer needed
-- **Win32 process priorities vs. launchd scheduling**: Different scheduling models; Win32 thread priorities don't map cleanly to macOS QoS classes
+**No Job Object:**
+`GlmManager` starts GLM via `subprocess.Popen` without assigning it to a Windows Job Object. If the bridge process crashes, GLM continues running unmanaged. A Job Object with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` would ensure GLM is killed when the bridge exits.
+
+**Credential Manager Access Pattern:**
+RDP priming credentials are read from Windows Credential Manager at runtime (via `cmdkey` CLI or Win32 API). The credentials use `/generic:localhost` type (not domain credentials) specifically because generic credentials expose passwords via the API while domain credentials do not. This is a deliberate security trade-off documented in CLAUDE.md.
 
 ---
 
