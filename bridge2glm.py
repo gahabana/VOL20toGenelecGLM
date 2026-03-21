@@ -5,119 +5,6 @@ Bridges a Fosi Audio VOL20 USB volume knob to Genelec GLM software via MIDI.
 Supports volume control, mute, dim, and power management with UI automation.
 """
 
-# v3.2.22 changes from v3.2.21:
-# 1. Restart Windows MIDI Service (midisrv) at startup so LoopMIDI virtual ports
-#    are detected. Windows MIDI Services (KB5074105, rolled out Feb-Mar 2026) doesn't
-#    see virtual ports created before the service starts.
-#
-# v3.2.21 changes from v3.2.20:
-# 1. Relaxed RF power pattern timing: MAX_GAP 100ms→170ms (allows MIDI latency),
-#    PRE_GAP 200ms→120ms (allows RF power press shortly after volume change).
-# 2. Reduced HID power cooldown: 5s→3s (total lockout 5s instead of 7s).
-#
-# v3.2.20 changes from v3.2.19:
-# 1. Confirmed GLM bug: Power button visual only updates when clicked directly - RF remote
-#    changes internal state (sends MIDI) but doesn't trigger button repaint. User verified
-#    this via RDP observation. Reverting to v3.2.18 approach: trust MIDI pattern, skip UI.
-# 2. Re-enable post-startup minimize (v3.2.19 test showed it wasn't the issue).
-#
-# v3.2.19 changes from v3.2.18:
-# 1. TEST: Hypothesis that minimize/restore causes stale button. Disabled post-startup
-#    minimize. Re-enabled UI reading for RF path. If window stays visible, reading
-#    should work like it does at startup. RESULT: Failed - GLM bug confirmed.
-#
-# v3.2.18 changes from v3.2.17:
-# 1. Trust MIDI pattern for RF power detection: Skip UI verification entirely since GLM's
-#    power button doesn't repaint when power changes via RF remote. Just toggle internal
-#    state when valid MIDI pattern is detected. The triple-condition filter (max gap <100ms,
-#    total gaps <200ms, pre-gap >200ms) prevents false positives from volume changes.
-#    This makes RF detection instant (no 3s timeout) and reliable.
-#
-# v3.2.17 changes from v3.2.16:
-# 1. (Failed) Resize trick - also doesn't update GLM button visual. Tried v3.2.9-v3.2.17
-#    with: render delay, mouse hover, neutral clicks, RedrawWindow, window resize. None
-#    work because GLM/JUCE only updates button visual when you CLICK the button.
-#
-# v3.2.16 changes from v3.2.15:
-# 1. (Failed) Tried RedrawWindow - doesn't work for OpenGL apps, they ignore paint messages.
-#
-# v3.2.15 changes from v3.2.14:
-# 1. Simplify RF path to match HID path exactly: Removed render_delay, neutral click, and
-#    mouse movement from wait_for_state(). Now just does _ensure_foreground() + immediate
-#    poll loop - exactly what set_state() does for HID, which works perfectly. The extra
-#    delays and clicks we added (v3.2.7-v3.2.14) were unnecessary complexity.
-#
-# v3.2.14 changes from v3.2.13:
-# 1. Fix neutral click location: Clicking above power button at y=45 was hitting menu bar
-#    area. Now clicks 80 pixels to the LEFT of power button at the SAME HEIGHT (y=80).
-#    This ensures the click lands in empty grey area, forcing GLM repaint without hitting
-#    any interactive elements.
-#
-# v3.2.13 changes from v3.2.12:
-# 1. Use neutral click to force GLM repaint: Instead of just hovering over power button,
-#    now clicks in empty grey area above the power button (same x, but y=45 instead of 80).
-#    This forces GLM to process its event queue and repaint, mimicking HID path behavior.
-#    Mouse hover alone wasn't reliable; a click forces synchronous UI update.
-#
-# v3.2.12 changes from v3.2.11:
-# 1. Fix wait_for_state() always minimizing window: Previously it unconditionally minimized GLM
-#    window after reading, even if window was already in foreground (e.g., user clicked power
-#    button directly in GLM UI). Now properly captures/restores window state like get_state()
-#    and set_state() do - only minimizes if window was minimized before.
-#
-# v3.2.11 changes from v3.2.10:
-# 1. Fix RF remote power detection hover effect: Moving mouse to power button triggered repaint
-#    but left cursor on button, causing hover effect that showed green regardless of actual state.
-#    Now moves mouse away (100px left) after triggering repaint to read true button color.
-#
-# v3.2.10 changes from v3.2.9:
-# 1. Fix RF remote power detection: GLM doesn't repaint the power button when window is restored
-#    from minimized state. Added mouse movement to power button area after restore to trigger
-#    GLM's UI refresh. Without this, we read stale grey pixels even when power is actually ON.
-#
-# v3.2.9 changes from v3.2.8:
-# 1. Added diagnostic logging to wait_for_state() to investigate RF remote power detection issues.
-#    Now logs: window rectangle, foreground status, minimized status, and RGB values on each poll.
-#    This helps diagnose why we're reading OFF when speakers are actually ON.
-#
-# v3.2.8 changes from v3.2.7:
-# 1. Refactored RF remote power detection to use new wait_for_state() method in GlmPowerController.
-#    This method brings window to foreground, waits for render delay, polls efficiently using
-#    _read_state_internal() (no window-finding overhead per poll), then minimizes.
-#    Much cleaner than the custom polling loop and matches what set_state() does internally.
-#
-# v3.2.7 changes from v3.2.6:
-# 1. Add render delay after bringing GLM window to foreground for RF remote power detection.
-#    Without this delay, we read stale pixel values because GLM hasn't repainted yet.
-#    The HID path works because clicking forces synchronous UI update; RF remote is async.
-#
-# v3.2.6 changes from v3.2.5:
-# 1. Triple-condition power pattern filter: Added pre-gap check (>200ms) to ensure
-#    pattern is an isolated burst, not embedded within ongoing volume change traffic.
-#    Real power toggles have 200-2000+ms silence before; false positives have ~30ms.
-#
-# v3.2.5 changes from v3.2.4:
-# 1. Dual-condition power pattern filter: Instead of single 50ms max gap threshold,
-#    now uses both max single gap (100ms) AND total of all gaps (200ms).
-#    This allows occasional jitter (real toggles had ~70ms gaps) while still
-#    rejecting false positives (volume changes have 246-431ms total gaps).
-#
-# v3.2.4 changes from v3.2.3:
-# 1. Polling for RF remote power detection: Instead of fixed delay before UI read,
-#    now polls until state change is detected (up to 3s timeout, 150ms interval).
-#    RF remote → GLM path can take variable time (Power ON measured at 1329-2000+ms).
-#
-# v3.2.3 changes from v3.2.2:
-# 1. Timing-based power pattern filter: Real power toggles have consistent ~31ms gaps
-#    between MIDI messages, while false positives (volume changes) have ~130-150ms gaps.
-#    Patterns with any gap > 50ms are now rejected to prevent false positive detections.
-#
-# v3.2.2 changes from v3.2.0:
-# 1. Timing improvements: Added delays after RDP session detection and GLM restart
-#    to prevent "screen grab failed" errors when Windows display driver not ready.
-# 2. Session reconnect for RF remote: When power is toggled via GLM's RF remote,
-#    the MIDIReaderThread now reconnects the session (via tscon) before reading UI,
-#    preventing state desync from failed screen grabs.
 __version__ = "3.2.22"
 
 import time
@@ -141,7 +28,6 @@ from midi_constants import (
     GLM_VOLUME_ABS, GLM_VOL_UP_CC, GLM_VOL_DOWN_CC, GLM_MUTE_CC, GLM_DIM_CC, GLM_POWER_CC,
     POWER_PATTERN, POWER_PATTERN_WINDOW, POWER_PATTERN_MIN_SPAN, POWER_STARTUP_WINDOW,
     POWER_PATTERN_MAX_GAP, POWER_PATTERN_MAX_TOTAL, POWER_PATTERN_PRE_GAP,
-    POWER_PATTERN_POLL_TIMEOUT, POWER_PATTERN_POLL_INTERVAL, POWER_PATTERN_RENDER_DELAY,
     CC_NAMES, ACTION_TO_GLM, CC_TO_ACTION,
     KEY_VOL_UP, KEY_VOL_DOWN, KEY_CLICK, KEY_DOUBLE_CLICK, KEY_TRIPLE_CLICK, KEY_LONG_PRESS,
     KEY_NAMES, DEFAULT_BINDINGS, log_midi as _log_midi
