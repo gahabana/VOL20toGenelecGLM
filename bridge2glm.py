@@ -5,7 +5,7 @@ Bridges a Fosi Audio VOL20 USB volume knob to Genelec GLM software via MIDI.
 Supports volume control, mute, dim, and power management with UI automation.
 """
 
-__version__ = "3.2.26"
+__version__ = "3.2.27"
 
 import time
 import signal
@@ -86,8 +86,8 @@ QUEUE_MAX_SIZE = 100  # Maximum queued events before backpressure
 
 # Power control timing (UI automation based)
 POWER_SETTLING_TIME = 2.0   # Block ALL commands during power settling
-POWER_COOLDOWN_TIME = 3.0   # Block power commands after settling ends
-POWER_TOTAL_LOCKOUT = POWER_SETTLING_TIME + POWER_COOLDOWN_TIME  # 5s total
+POWER_COOLDOWN_TIME = 1.5   # Block power commands after settling ends
+POWER_TOTAL_LOCKOUT = POWER_SETTLING_TIME + POWER_COOLDOWN_TIME  # 3.5s total
 
 # GLM volume initialization timing
 GLM_INIT_WAIT = 0.5  # seconds - wait for MIDI reader to connect
