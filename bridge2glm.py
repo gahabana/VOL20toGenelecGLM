@@ -5,7 +5,7 @@ Bridges a Fosi Audio VOL20 USB volume knob to Genelec GLM software via MIDI.
 Supports volume control, mute, dim, and power management with UI automation.
 """
 
-__version__ = "3.2.27"
+__version__ = "3.2.28"
 
 import time
 import signal
@@ -987,24 +987,27 @@ class HIDToMIDIDaemon:
                         if len(seq) >= 5 and seq[-5:] == POWER_PATTERN:
                             time_span = self._rx_seq[-1][0] - self._rx_seq[-5][0]
                             if time_span >= POWER_PATTERN_MIN_SPAN:  # Not a buffer dump
-                                # Check timing gaps between consecutive messages
+                                # Early pre-gap check: if pattern is clearly embedded in a
+                                # message stream (< 50ms silence before), skip full gap analysis
+                                if len(self._rx_seq) > 5:
+                                    pre_gap = self._rx_seq[-5][0] - self._rx_seq[-6][0]
+                                    if pre_gap < 0.05:
+                                        self._rx_seq = []
+                                        continue
+                                else:
+                                    pre_gap = float('inf')  # No prior message = isolated burst
+
+                                # Full gap analysis for plausible candidates
                                 # Triple-condition filter for robustness:
-                                # 1. No single gap > MAX_GAP (100ms) - allows occasional jitter
+                                # 1. No single gap > MAX_GAP (170ms) - allows occasional jitter
                                 # 2. Total of all gaps < MAX_TOTAL (200ms) - catches false positives
-                                # 3. Pre-gap before pattern > PRE_GAP (200ms) - ensures isolated burst
-                                # Real power toggles: isolated bursts with 200-2000+ms silence before
+                                # 3. Pre-gap before pattern > PRE_GAP (120ms) - ensures isolated burst
+                                # Real power toggles: isolated bursts with 120-2000+ms silence before
                                 # False positives: embedded in stream with ~30ms between messages
                                 pattern_times = [t for t, _ in self._rx_seq[-5:]]
                                 gaps = [pattern_times[i+1] - pattern_times[i] for i in range(4)]
                                 max_gap = max(gaps)
                                 total_gap = sum(gaps)
-
-                                # Check pre-gap: time between message before pattern and first pattern message
-                                # If buffer has only 5 messages, pattern is isolated (no prior message)
-                                if len(self._rx_seq) > 5:
-                                    pre_gap = self._rx_seq[-5][0] - self._rx_seq[-6][0]
-                                else:
-                                    pre_gap = float('inf')  # No prior message = isolated burst
 
                                 # Reject if any condition fails
                                 if max_gap > POWER_PATTERN_MAX_GAP or total_gap > POWER_PATTERN_MAX_TOTAL or pre_gap < POWER_PATTERN_PRE_GAP:
