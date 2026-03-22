@@ -291,8 +291,27 @@ This was reported on the JUCE forum ([Windows UI Automation thread](https://foru
 | 3. GPU Capture API | Medium-High | Medium-High | Medium | **RECOMMENDED** — combine with #2 |
 | 4. OpenGL Framebuffer | Low | Low | Very High | **Skip** — absurdly over-engineered |
 | 5. Process Memory | Low-Medium | Low | High | **Skip** — too fragile |
-| 6. Network/genlc | Medium | Medium | Medium | **INVESTIGATE** — could be complementary |
+| 6. Network/genlc | Medium | Medium | Medium | **Skip** — abandoned (2021), no forks, flakey |
 | 7. Message Hooking | Low | Very Low | High | **Skip** — wrong approach for OpenGL |
+| 8. GLM MIDI (glm-cli) | Low | Low | Low | **Skip** — we already do everything it does, better |
+
+### Important Constraints Discovered
+
+**Neither template matching (#2) nor GPU capture (#3) work headless/disconnected RDP.**
+All pixel-based approaches require an active display surface (DWM compositing). The existing
+`tscon` + RDP priming mechanism remains essential. Only direct hardware access (genlc-style)
+could eliminate the display dependency — but genlc is abandoned and flakey.
+
+**GLM MIDI CC28 (System Power) is a dead end for state feedback.**
+See `RESEARCH-glm-midi-cc28-power.md` for full details:
+- CC28 is toggle-only (value > 0 toggles, value 0 ignored). No way to send explicit ON/OFF.
+- GLM does NOT send CC28 on its MIDI output port. Mute, Dim, Volume get feedback; Power does not.
+- Confirmed by GLM 5 Operating Manual, Section 8.6, pages 85-86.
+- `glm-cli` (PyPI, v0.1.0, Sept 2024) is a 165-line wrapper that sends CC28=127 blindly —
+  adds zero value over our existing bridge2glm implementation.
+
+**GLM 5.2.0 (May 2025) fixed a MIDI output bug** that may improve reliability of the CC burst
+pattern detection we already depend on. Worth upgrading.
 
 ### Recommended Strategy
 
@@ -308,10 +327,11 @@ This was reported on the JUCE forum ([Windows UI Automation thread](https://foru
 - May resolve capture issues during startup/RDP transitions
 - Estimated effort: 4-8 hours
 
-**Phase 3 (Investigation)**: Evaluate `genlc` for direct speaker state queries.
-- Test if we can query power state without conflicting with GLM
-- Could provide a fallback when UI detection returns "unknown"
-- Estimated effort: 4-8 hours for evaluation
+**Phase 3 (MIDI Power Direction Inference)**: Use CC values inside the MIDI burst to infer ON vs OFF.
+- When power goes OFF, GLM likely sends CC20=0 (volume zeroed) and CC23=127 (muted)
+- When power comes ON, GLM restores previous volume (CC20 > 0) and unmutes (CC23=0)
+- Could replace blind toggle tracking with directional inference from the 5-message burst
+- Estimated effort: 2-4 hours for testing, minimal code change if confirmed
 
 ---
 
