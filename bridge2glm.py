@@ -5,7 +5,7 @@ Bridges a Fosi Audio VOL20 USB volume knob to Genelec GLM software via MIDI.
 Supports volume control, mute, dim, and power management with UI automation.
 """
 
-__version__ = "3.2.28"
+__version__ = "3.2.29"
 
 import time
 import signal
@@ -999,11 +999,11 @@ class HIDToMIDIDaemon:
 
                                 # Full gap analysis for plausible candidates
                                 # Triple-condition filter for robustness:
-                                # 1. No single gap > MAX_GAP (170ms) - allows occasional jitter
-                                # 2. Total of all gaps < MAX_TOTAL (200ms) - catches false positives
-                                # 3. Pre-gap before pattern > PRE_GAP (120ms) - ensures isolated burst
-                                # Real power toggles: isolated bursts with 120-2000+ms silence before
-                                # False positives: embedded in stream with ~30ms between messages
+                                # 1. No single gap > MAX_GAP (260ms) - covers RF remote and GUI/RDP clicks
+                                # 2. Total of all gaps < MAX_TOTAL (350ms) - catches false positives
+                                # 3. Pre-gap before pattern > PRE_GAP (120ms) - primary defense
+                                # RF remote bursts: uniform ~31ms gaps, total ~124ms
+                                # GUI clicks via RDP: gap[1] can reach ~243ms, total ~316ms
                                 pattern_times = [t for t, _ in self._rx_seq[-5:]]
                                 gaps = [pattern_times[i+1] - pattern_times[i] for i in range(4)]
                                 max_gap = max(gaps)

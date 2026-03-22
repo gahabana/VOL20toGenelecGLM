@@ -55,13 +55,13 @@ GLM_POWER_CC = 28     # System Power (momentary trigger, no MIDI feedback)
 POWER_PATTERN = [GLM_MUTE_CC, GLM_VOLUME_ABS, GLM_DIM_CC, GLM_MUTE_CC, GLM_VOLUME_ABS]
 POWER_PATTERN_WINDOW = 0.5  # seconds - max time window for pattern
 POWER_PATTERN_MIN_SPAN = 0.05  # seconds - min span (faster = buffer dump, ignore)
-POWER_PATTERN_MAX_GAP = 0.17  # seconds - max gap between any two consecutive messages (170ms)
-POWER_PATTERN_MAX_TOTAL = 0.20  # seconds - max total of all 4 gaps combined (200ms)
+POWER_PATTERN_MAX_GAP = 0.26  # seconds - max gap between any two consecutive messages (260ms)
+POWER_PATTERN_MAX_TOTAL = 0.35  # seconds - max total of all 4 gaps combined (350ms)
 POWER_PATTERN_PRE_GAP = 0.12  # seconds - min gap before first message (120ms) to confirm isolated burst
 # Triple-condition filter: All three must be satisfied to detect power toggle.
-# 1. No single gap > MAX_GAP (170ms) - allows for MIDI latency
-# 2. Total of all gaps < MAX_TOTAL (200ms)
-# 3. Pre-gap before pattern > PRE_GAP (120ms) - allows RF power shortly after volume change
+# 1. No single gap > MAX_GAP (260ms) - covers RF remote (~31ms) and GUI click via RDP (~243ms)
+# 2. Total of all gaps < MAX_TOTAL (350ms)
+# 3. Pre-gap before pattern > PRE_GAP (120ms) - primary false-positive defense
 # Real power toggles: isolated bursts with 120-2000+ms silence before
 # False positives (volume changes): embedded in stream with ~30ms between messages
 POWER_STARTUP_WINDOW = 3.0  # seconds - if second pattern within this, it's GLM startup
