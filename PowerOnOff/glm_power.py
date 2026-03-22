@@ -847,13 +847,28 @@ class GlmPowerController:
                 self._ensure_foreground(win)
                 t2 = time.time()
 
-                # Read current state (single read, no polling)
+                # Read current state with retry on "unknown"
+                # Transient occlusions (dialogs, tooltips, render artifacts)
+                # often resolve within 1-2 seconds
+                unknown_retries = 3
+                unknown_retry_delay = 0.5
                 state, rgb, pt = self._read_state_internal(win)
                 t3 = time.time()
                 self.logger.debug(
                     f"Power set_state({desired}): current={state}, rgb={rgb} "
                     f"[find={t1-t0:.3f}s, focus={t2-t1:.3f}s, read={t3-t2:.3f}s]"
                 )
+
+                if state == "unknown":
+                    for retry in range(unknown_retries):
+                        time.sleep(unknown_retry_delay)
+                        state, rgb, pt = self._read_state_internal(win)
+                        self.logger.debug(
+                            f"Power state retry {retry+1}/{unknown_retries}: "
+                            f"state={state}, rgb={rgb}"
+                        )
+                        if state != "unknown":
+                            break
 
                 if state == desired:
                     self.logger.debug(f"Power already {desired}")
