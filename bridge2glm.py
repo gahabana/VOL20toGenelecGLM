@@ -5,7 +5,7 @@ Bridges a Fosi Audio VOL20 USB volume knob to Genelec GLM software via MIDI.
 Supports volume control, mute, dim, and power management with UI automation.
 """
 
-__version__ = "3.2.23"
+__version__ = "3.2.24"
 
 import time
 import signal
@@ -855,7 +855,7 @@ class HIDToMIDIDaemon:
                 state = self._power_controller.get_state()
                 if state in ("on", "off"):
                     glm_controller.power = (state == "on")
-                    _notify_state_change()
+                    self._notify_state_change()
                     logger.info(f"Power state synced from GLM UI after restart: {state.upper()}")
                 else:
                     logger.warning(f"Could not determine GLM power state after restart: {state}")
