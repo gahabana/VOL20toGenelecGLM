@@ -4,8 +4,32 @@ GlmAction dataclasses - domain actions for GLM control.
 These represent what the system should do, independent of input source.
 All input adapters (HID, REST, MQTT) create these actions and submit to the queue.
 """
-from dataclasses import dataclass
+import threading
+from dataclasses import dataclass, field
 from typing import Optional, Union
+
+
+class TraceIdGenerator:
+    """Thread-safe trace ID generator with source prefixes.
+
+    Each input source (hid, api, mqtt, sys, pwr) gets its own counter.
+    IDs are sequential per source: hid-0001, hid-0002, api-0001, etc.
+    """
+
+    def __init__(self):
+        self._counters: dict = {}
+        self._lock = threading.Lock()
+
+    def next(self, source: str) -> str:
+        """Generate next trace ID for a source."""
+        with self._lock:
+            count = self._counters.get(source, 0) + 1
+            self._counters[source] = count
+            return f"{source}-{count:04d}"
+
+
+# Global trace ID generator instance
+trace_ids = TraceIdGenerator()
 
 
 @dataclass(frozen=True)
@@ -60,10 +84,12 @@ GlmAction = Union[SetVolume, AdjustVolume, SetMute, SetDim, SetPower]
 @dataclass
 class QueuedAction:
     """
-    Wrapper for actions in the queue, carrying timestamp for stale event filtering.
+    Wrapper for actions in the queue, carrying timestamp and trace ID.
 
-    Input adapters create QueuedAction(action=..., timestamp=time.time())
+    Input adapters create QueuedAction(action=..., timestamp=time.time(), trace_id=trace_ids.next("source"))
     and submit to the queue. Consumer checks timestamp to discard stale events.
+    The trace_id follows the action through HID→Queue→Consumer→MIDI TX for log correlation.
     """
     action: GlmAction
     timestamp: float
+    trace_id: str = ""

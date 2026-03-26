@@ -12,7 +12,7 @@ from typing import Optional, Callable
 
 import paho.mqtt.client as mqtt
 
-from glm_core import SetVolume, AdjustVolume, SetMute, SetDim, SetPower, QueuedAction
+from glm_core import SetVolume, AdjustVolume, SetMute, SetDim, SetPower, QueuedAction, trace_ids
 
 logger = logging.getLogger(__name__)
 
@@ -73,7 +73,7 @@ class MqttClient:
     def _on_connect(self, client, userdata, flags, reason_code, properties):
         """Handle connection to broker."""
         if reason_code == 0:
-            logger.info(f"Connected to MQTT broker {self._broker}:{self._port}")
+            logger.info(f"mqtt.connect: Connected to broker {self._broker}:{self._port}")
             self._connected = True
 
             # Subscribe to command topics
@@ -81,7 +81,7 @@ class MqttClient:
             client.subscribe(self._cmd_mute_topic)
             client.subscribe(self._cmd_dim_topic)
             client.subscribe(self._cmd_power_topic)
-            logger.info(f"Subscribed to {self._topic_prefix}/set/+")
+            logger.info(f"mqtt.connect: Subscribed to {self._topic_prefix}/set/+")
 
             # Publish availability
             client.publish(self._availability_topic, "online", retain=True)
@@ -93,13 +93,13 @@ class MqttClient:
             # Publish current state
             self._publish_state(self._glm_controller.get_state())
         else:
-            logger.error(f"Failed to connect to MQTT broker, rc={reason_code}")
+            logger.error(f"mqtt.error: Failed to connect to broker, rc={reason_code}")
 
     def _on_disconnect(self, client, userdata, disconnect_flags, reason_code, properties):
         """Handle disconnection from broker."""
         self._connected = False
         if reason_code != 0:
-            logger.warning(f"Unexpected MQTT disconnect, rc={reason_code}")
+            logger.warning(f"mqtt.error: Unexpected disconnect, rc={reason_code}")
 
     def _on_message(self, client, userdata, msg):
         """Handle incoming MQTT messages."""
@@ -110,7 +110,8 @@ class MqttClient:
             logger.warning(f"Invalid payload on {topic}")
             return
 
-        logger.debug(f"MQTT received: {topic} = {payload}")
+        tid = trace_ids.next("mqtt")
+        logger.debug(f"[{tid}] mqtt.rx: {topic} = {payload}")
 
         try:
             if topic == self._cmd_volume_topic:
@@ -121,25 +122,25 @@ class MqttClient:
                     value = value + 127
                 # Clamp to valid range
                 value = max(0, min(127, value))
-                self._submit_action(SetVolume(target=value))
+                self._submit_action(SetVolume(target=value), trace_id=tid)
 
             elif topic == self._cmd_mute_topic:
                 # Mute: accept ON/OFF/true/false/1/0/TOGGLE
                 state = self._parse_bool_or_toggle(payload)
-                self._submit_action(SetMute(state=state))
+                self._submit_action(SetMute(state=state), trace_id=tid)
 
             elif topic == self._cmd_dim_topic:
                 # Dim: accept ON/OFF/true/false/1/0/TOGGLE
                 state = self._parse_bool_or_toggle(payload)
-                self._submit_action(SetDim(state=state))
+                self._submit_action(SetDim(state=state), trace_id=tid)
 
             elif topic == self._cmd_power_topic:
                 # Power: accept ON/OFF/true/false/1/0/TOGGLE
                 state = self._parse_bool_or_toggle(payload)
-                self._submit_action(SetPower(state=state))
+                self._submit_action(SetPower(state=state), trace_id=tid)
 
         except (ValueError, TypeError) as e:
-            logger.warning(f"Invalid MQTT command on {topic}: {payload} ({e})")
+            logger.warning(f"[{tid}] mqtt.error: Invalid command on {topic}: {payload} ({e})")
 
     def _parse_bool_or_toggle(self, payload: str) -> Optional[bool]:
         """Parse payload to bool or None (toggle)."""
@@ -153,9 +154,9 @@ class MqttClient:
         else:
             raise ValueError(f"Unknown state: {payload}")
 
-    def _submit_action(self, action):
-        """Submit an action to the queue."""
-        self._action_queue.put(QueuedAction(action=action, timestamp=time.time()))
+    def _submit_action(self, action, trace_id: str = ""):
+        """Submit an action to the queue with trace ID."""
+        self._action_queue.put(QueuedAction(action=action, timestamp=time.time(), trace_id=trace_id))
 
     def _publish_state(self, state: dict):
         """Publish current state to MQTT."""
@@ -273,7 +274,7 @@ class MqttClient:
             retain=True
         )
 
-        logger.info("Published Home Assistant MQTT Discovery configs")
+        logger.info("mqtt.init: Published Home Assistant MQTT Discovery configs")
 
     def on_state_change(self, state: dict):
         """Callback for GlmController state changes."""
@@ -298,12 +299,12 @@ class MqttClient:
         try:
             self._client.connect(self._broker, self._port, keepalive=60)
         except Exception as e:
-            logger.error(f"Failed to connect to MQTT broker: {e}")
+            logger.error(f"mqtt.error: Failed to connect to broker: {e}")
             return
 
         # Start network loop in background thread
         self._client.loop_start()
-        logger.info(f"MQTT client started, connecting to {self._broker}:{self._port}")
+        logger.info(f"mqtt.init: Client started, connecting to {self._broker}:{self._port}")
 
         # Register state callback
         self._glm_controller.add_state_callback(self.on_state_change)
@@ -320,7 +321,7 @@ class MqttClient:
 
             self._client.loop_stop()
             self._client.disconnect()
-            logger.info("MQTT client stopped")
+            logger.info("mqtt.shutdown: Client stopped")
 
 
 def start_mqtt_client(

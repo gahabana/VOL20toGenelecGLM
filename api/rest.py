@@ -17,7 +17,7 @@ from fastapi.responses import JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from glm_core import SetVolume, AdjustVolume, SetMute, SetDim, SetPower, QueuedAction
+from glm_core import SetVolume, AdjustVolume, SetMute, SetDim, SetPower, QueuedAction, trace_ids
 
 logger = logging.getLogger(__name__)
 
@@ -112,11 +112,11 @@ async def lifespan(app: FastAPI):
     """Manage startup and shutdown."""
     # Register state callback for WebSocket broadcast
     _glm_controller.add_state_callback(_broadcast_state_sync)
-    logger.info("API server started, WebSocket broadcast registered")
+    logger.info("api.init: Server started, WebSocket broadcast registered")
     yield
     # Cleanup
     _glm_controller.remove_state_callback(_broadcast_state_sync)
-    logger.info("API server stopped")
+    logger.info("api.shutdown: Server stopped")
 
 
 def create_app(action_queue, glm_controller) -> FastAPI:
@@ -174,12 +174,13 @@ def create_app(action_queue, glm_controller) -> FastAPI:
 
 
 def _submit_action(action):
-    """Submit an action to the queue."""
+    """Submit an action to the queue with trace ID."""
     if _action_queue is None:
-        logger.error("Action queue not initialized")
-        return False, "not_initialized"
-    _action_queue.put(QueuedAction(action=action, timestamp=time.time()))
-    return True, None
+        logger.error("api.error: Action queue not initialized")
+        return False, None, "not_initialized"
+    tid = trace_ids.next("api")
+    _action_queue.put(QueuedAction(action=action, timestamp=time.time(), trace_id=tid))
+    return True, tid, None
 
 
 def _check_settling():
@@ -259,8 +260,9 @@ async def set_volume(request: VolumeRequest):
         )
 
     value = max(0, min(127, request.value))
-    success, err = _submit_action(SetVolume(target=value))
+    success, tid, err = _submit_action(SetVolume(target=value))
     if success:
+        logger.debug(f"[{tid}] api.request: POST /api/volume value={value}")
         return {"status": "ok", "action": "set_volume", "value": value}
     return JSONResponse({"error": "Failed to submit action"}, status_code=500)
 
@@ -276,8 +278,9 @@ async def adjust_volume(request: VolumeAdjustRequest):
             headers={"Retry-After": str(int(wait_time) + 1)}
         )
 
-    success, err = _submit_action(AdjustVolume(delta=request.delta))
+    success, tid, err = _submit_action(AdjustVolume(delta=request.delta))
     if success:
+        logger.debug(f"[{tid}] api.request: POST /api/volume/adjust delta={request.delta}")
         return {"status": "ok", "action": "adjust_volume", "delta": request.delta}
     return JSONResponse({"error": "Failed to submit action"}, status_code=500)
 
@@ -293,9 +296,10 @@ async def set_mute(request: StateRequest = StateRequest()):
             headers={"Retry-After": str(int(wait_time) + 1)}
         )
 
-    success, err = _submit_action(SetMute(state=request.state))
+    success, tid, err = _submit_action(SetMute(state=request.state))
     if success:
         action_desc = f"set to {request.state}" if request.state is not None else "toggle"
+        logger.debug(f"[{tid}] api.request: POST /api/mute mode={action_desc}")
         return {"status": "ok", "action": "mute", "mode": action_desc}
     return JSONResponse({"error": "Failed to submit action"}, status_code=500)
 
@@ -311,9 +315,10 @@ async def set_dim(request: StateRequest = StateRequest()):
             headers={"Retry-After": str(int(wait_time) + 1)}
         )
 
-    success, err = _submit_action(SetDim(state=request.state))
+    success, tid, err = _submit_action(SetDim(state=request.state))
     if success:
         action_desc = f"set to {request.state}" if request.state is not None else "toggle"
+        logger.debug(f"[{tid}] api.request: POST /api/dim mode={action_desc}")
         return {"status": "ok", "action": "dim", "mode": action_desc}
     return JSONResponse({"error": "Failed to submit action"}, status_code=500)
 
@@ -337,12 +342,13 @@ async def set_power(request: PowerRequest = PowerRequest()):
             headers={"Retry-After": str(int(wait_time) + 1)}
         )
 
-    success, err = _submit_action(SetPower(state=request.state))
+    success, tid, err = _submit_action(SetPower(state=request.state))
     if success:
         if request.state is None:
             mode = "toggle"
         else:
             mode = "on" if request.state else "off"
+        logger.debug(f"[{tid}] api.request: POST /api/power mode={mode}")
         return {"status": "ok", "action": "power", "mode": mode}
     return JSONResponse({"error": "Failed to submit action"}, status_code=500)
 
@@ -363,7 +369,7 @@ async def websocket_state(websocket: WebSocket):
 
     with _ws_lock:
         _websocket_clients.add(websocket)
-    logger.info(f"WebSocket client connected. Total: {len(_websocket_clients)}")
+    logger.info(f"api.ws: Client connected. Total: {len(_websocket_clients)}")
 
     # Send current state immediately
     if _glm_controller:
@@ -382,7 +388,7 @@ async def websocket_state(websocket: WebSocket):
     finally:
         with _ws_lock:
             _websocket_clients.discard(websocket)
-        logger.info(f"WebSocket client disconnected. Total: {len(_websocket_clients)}")
+        logger.info(f"api.ws: Client disconnected. Total: {len(_websocket_clients)}")
 
 
 def start_api_server(action_queue, glm_controller, host: str = "0.0.0.0", port: int = 8080):
@@ -463,6 +469,6 @@ def start_api_server(action_queue, glm_controller, host: str = "0.0.0.0", port: 
 
     thread = threading.Thread(target=run_server, name="APIServerThread", daemon=True)
     thread.start()
-    logger.info(f"API server starting on http://{host}:{port}")
+    logger.info(f"api.init: Server starting on http://{host}:{port}")
 
     return thread

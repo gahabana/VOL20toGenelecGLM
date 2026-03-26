@@ -127,9 +127,9 @@ DEFAULT_BINDINGS: Dict[int, Action] = {
 }
 
 
-def log_midi(logger, direction: str, msg_type: str, cc: int = None, value: int = None, channel: int = None, raw: str = None):
+def log_midi(logger, direction: str, msg_type: str, cc: int = None, value: int = None, channel: int = None, raw: str = None, trace_id: str = ""):
     """
-    Log MIDI message in consistent format.
+    Log MIDI message in consistent format with event category and optional trace ID.
 
     Args:
         logger: Logger instance to use
@@ -139,14 +139,18 @@ def log_midi(logger, direction: str, msg_type: str, cc: int = None, value: int =
         value: Value (if applicable)
         channel: MIDI channel (if applicable)
         raw: Raw message string for unknown types
+        trace_id: Optional trace ID for correlation (e.g., "hid-0042")
     """
+    prefix = f"[{trace_id}] " if trace_id else ""
+    category = f"midi.{'tx' if direction == 'TX' else 'rx'}"
+
     if msg_type == "control_change" and cc is not None:
         cc_name = CC_NAMES.get(cc, f"CC{cc}")
-        logger.info(f"MIDI {direction}: {cc_name}(CC{cc})={value}")
+        logger.info(f"{prefix}{category}: {cc_name}(CC{cc})={value}")
     elif raw:
-        logger.info(f"MIDI {direction}: {raw}")
+        logger.info(f"{prefix}{category}: {raw}")
     else:
-        parts = [f"MIDI {direction}: {msg_type}"]
+        parts = [f"{prefix}{category}: {msg_type}"]
         if channel is not None:
             parts.append(f"ch={channel}")
         if value is not None:

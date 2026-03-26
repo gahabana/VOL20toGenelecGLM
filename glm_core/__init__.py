@@ -7,6 +7,8 @@ from .actions import (
     SetDim,
     SetPower,
     QueuedAction,
+    TraceIdGenerator,
+    trace_ids,
 )
 
 __all__ = [
@@ -17,4 +19,6 @@ __all__ = [
     'SetDim',
     'SetPower',
     'QueuedAction',
+    'TraceIdGenerator',
+    'trace_ids',
 ]

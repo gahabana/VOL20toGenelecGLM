@@ -5,7 +5,7 @@ Bridges a Fosi Audio VOL20 USB volume knob to Genelec GLM software via MIDI.
 Supports volume control, mute, dim, and power management with UI automation.
 """
 
-__version__ = "3.2.29"
+__version__ = "3.2.30"
 
 import time
 import signal
@@ -17,7 +17,7 @@ from queue import Queue
 from typing import Dict, Optional, List, Callable
 import hid
 
-from glm_core import SetVolume, AdjustVolume, SetMute, SetDim, SetPower, QueuedAction
+from glm_core import SetVolume, AdjustVolume, SetMute, SetDim, SetPower, QueuedAction, trace_ids
 from mido import Message, open_output, open_input
 
 # Import from extracted modules
@@ -98,9 +98,9 @@ GLM_VOL_RESPONSE_WAIT = 0.3  # seconds - wait for GLM to report volume
 logger = logging.getLogger(__name__)
 
 
-def log_midi(direction: str, msg_type: str, cc: int = None, value: int = None, channel: int = None, raw: str = None):
+def log_midi(direction: str, msg_type: str, cc: int = None, value: int = None, channel: int = None, raw: str = None, trace_id: str = ""):
     """Wrapper for log_midi that uses the module logger."""
-    _log_midi(logger, direction, msg_type, cc, value, channel, raw)
+    _log_midi(logger, direction, msg_type, cc, value, channel, raw, trace_id=trace_id)
 
 
 # ==============================================================================
@@ -124,6 +124,7 @@ class GlmController:
         self._power_transition_start: float = 0  # When power transition started
         self._power_settling: bool = False       # True during power settling period
         self._power_target: Optional[bool] = None  # Target state during transition
+        self._power_trace_id: str = ""           # Trace ID for current power transition
 
     def add_state_callback(self, callback: Callable[[dict], None]):
         """Register a callback to be called when state changes."""
@@ -138,7 +139,7 @@ class GlmController:
     # Power transition management
     # =========================================================================
 
-    def start_power_transition(self, target_state: bool):
+    def start_power_transition(self, target_state: bool, trace_id: str = ""):
         """
         Mark the start of a power transition.
 
@@ -148,8 +149,10 @@ class GlmController:
             self._power_transition_start = time.time()
             self._power_settling = True
             self._power_target = target_state
+            self._power_trace_id = trace_id
         self._notify_state_change(force=True)  # Notify UI of transitioning state
-        logger.info(f"Power transition started: target={'ON' if target_state else 'OFF'}")
+        prefix = f"[{trace_id}] " if trace_id else ""
+        logger.info(f"{prefix}power.begin: target={'ON' if target_state else 'OFF'}")
 
     def end_power_transition(self, success: bool, actual_state: Optional[bool] = None):
         """
@@ -159,13 +162,17 @@ class GlmController:
         """
         with self._lock:
             self._power_settling = False
+            duration = time.time() - self._power_transition_start if self._power_transition_start else 0
+            trace_id = getattr(self, '_power_trace_id', '')
             if success and actual_state is not None:
                 self.power = actual_state
             elif success and self._power_target is not None:
                 self.power = self._power_target
             self._power_target = None
         self._notify_state_change(force=True)
-        logger.info(f"Power transition ended: success={success}, power={'ON' if self.power else 'OFF'}")
+        prefix = f"[{trace_id}] " if trace_id else ""
+        result = "OK" if success else "FAILED"
+        logger.info(f"{prefix}power.end: {result}, power={'ON' if self.power else 'OFF'} (took {duration:.1f}s)")
 
     def is_power_settling(self) -> bool:
         """Check if power is currently settling (2s window)."""
@@ -296,7 +303,7 @@ class GlmController:
                 # Check if GLM clipped/adjusted our requested value
                 # If so, force notification to sync UI even if volume unchanged
                 if self._pending_volume is not None and self._pending_volume != value:
-                    logger.debug(f"GLM clipped volume: sent {self._pending_volume}, got {value}")
+                    logger.debug(f"volume: GLM clipped: sent {self._pending_volume}, got {value}")
                     force_notify = True
                 # Clear pending and trust GLM's reported value as source of truth.
                 # This ensures we respect GLM's volume limits (e.g., max volume cap).
@@ -351,7 +358,7 @@ class GlmController:
                 "power_cooldown_remaining": round(cooldown_remaining, 1),
             }
 
-    def send_volume_absolute(self, target: int, midi_output) -> bool:
+    def send_volume_absolute(self, target: int, midi_output, trace_id: str = "") -> bool:
         """
         Send absolute volume command to GLM via CC 20.
         Target is clamped to 0-127 range.
@@ -360,13 +367,14 @@ class GlmController:
         target = max(0, min(127, target))
         try:
             midi_output.send(Message('control_change', control=GLM_VOLUME_ABS, value=target))
-            log_midi("TX", "control_change", cc=GLM_VOLUME_ABS, value=target)
+            log_midi("TX", "control_change", cc=GLM_VOLUME_ABS, value=target, trace_id=trace_id)
             return True
         except (OSError, IOError) as e:
-            logger.debug(f"Failed to send volume command: {e}")
+            prefix = f"[{trace_id}] " if trace_id else ""
+            logger.debug(f"{prefix}midi.error: Failed to send volume command: {e}")
             return False
 
-    def send_action(self, action: Action, midi_output, explicit_state: Optional[bool] = None) -> bool:
+    def send_action(self, action: Action, midi_output, explicit_state: Optional[bool] = None, trace_id: str = "") -> bool:
         """
         Send an action to GLM via MIDI.
 
@@ -411,10 +419,11 @@ class GlmController:
 
         try:
             midi_output.send(Message('control_change', control=glm_ctrl.cc, value=value))
-            log_midi("TX", "control_change", cc=glm_ctrl.cc, value=value)
+            log_midi("TX", "control_change", cc=glm_ctrl.cc, value=value, trace_id=trace_id)
             return True
         except (OSError, IOError) as e:
-            logger.debug(f"Failed to send action {action.value}: {e}")
+            prefix = f"[{trace_id}] " if trace_id else ""
+            logger.debug(f"{prefix}midi.error: Failed to send action {action.value}: {e}")
             return False
 
 
@@ -730,7 +739,7 @@ def setup_logging(log_level, log_file_name, max_bytes=4*1024*1024, backup_count=
 
     # Listener Thread
     stop_event = threading.Event()
-    logger.info(f">----- Starting {os.path.basename(__file__)} v{__version__}. Initializing...")
+    logger.info(f"sys.init: >----- Starting {os.path.basename(__file__)} v{__version__}. Initializing...")
 
     def log_listener_thread():
         listener = QueueListener(log_queue, file_handler, console_handler)
@@ -752,7 +761,7 @@ def setup_logging(log_level, log_file_name, max_bytes=4*1024*1024, backup_count=
 
 def signal_handler(sig, frame, daemon, stop_logging_func):
     """Handles SIGINT and shuts down the daemon."""
-    logger.info("SIGINT received, shutting down...")
+    logger.info("sys.shutdown: SIGINT received, shutting down...")
     daemon.stop()
     stop_logging_func()
     sys.exit(0)
@@ -809,7 +818,7 @@ class HIDToMIDIDaemon:
                     config=config,
                     reinit_callback=self._reinit_power_controller,
                 )
-                logger.info("GlmManager initialized (will start GLM and watchdog)")
+                logger.info("sys.init: GlmManager initialized (will start GLM and watchdog)")
             except Exception as e:
                 logger.warning(f"GlmManager not available: {e}")
         elif glm_manager_enabled and not GLM_MANAGER_AVAILABLE:
@@ -831,7 +840,7 @@ class HIDToMIDIDaemon:
 
                 # Always try to initialize - let it fail naturally if display inaccessible
                 self._power_controller = GlmPowerController(steal_focus=True)
-                logger.info("GlmPowerController initialized for UI-based power control")
+                logger.info("sys.init: GlmPowerController initialized for UI-based power control")
             except Exception as e:
                 logger.warning(f"GlmPowerController not available: {e}")
 
@@ -846,7 +855,7 @@ class HIDToMIDIDaemon:
             try:
                 # Recreate power controller with PID to find correct window
                 self._power_controller = GlmPowerController(steal_focus=True, pid=pid)
-                logger.info(f"Power controller reinitialized after GLM restart (PID={pid})")
+                logger.info(f"power.init: Controller reinitialized after GLM restart (PID={pid})")
 
                 # Wait for GLM UI to fully render (splash screen ~5s + OpenGL init)
                 time.sleep(1.0)
@@ -856,7 +865,7 @@ class HIDToMIDIDaemon:
                 if state in ("on", "off"):
                     glm_controller.power = (state == "on")
                     glm_controller._notify_state_change()
-                    logger.info(f"Power state synced from GLM UI after restart: {state.upper()}")
+                    logger.info(f"power.init: State synced from GLM UI after restart: {state.upper()}")
                 else:
                     logger.warning(f"Could not determine GLM power state after restart: {state}")
 
@@ -874,12 +883,12 @@ class HIDToMIDIDaemon:
             if self._midi_output is None:
                 try:
                     self._midi_output = open_output(self.midi_in_channel)
-                    logger.info(f"Connected to MIDI channel '{self.midi_in_channel}'.")
+                    logger.info(f"midi.connect: Connected to MIDI channel '{self.midi_in_channel}'")
                     retry_logger.reset("midi_output")  # Reset on successful connection
                 except (OSError, IOError) as e:
                     if retry_logger.should_log("midi_output"):
                         info = retry_logger.format_retry_info("midi_output")
-                        logger.warning(f"Failed to connect to MIDI channel '{self.midi_in_channel}': {e} {info}")
+                        logger.warning(f"midi.error: Failed to connect to '{self.midi_in_channel}': {e} {info}")
                     return None
             return self._midi_output
 
@@ -901,12 +910,12 @@ class HIDToMIDIDaemon:
                 try:
                     self.hid_device = hid.device()
                     self.hid_device.open(self.vid, self.pid)
-                    logger.info(f"Connected to HID device VID: {hex(self.vid)} PID: {hex(self.pid)}.")
+                    logger.info(f"hid.connect: Connected to HID device VID: {hex(self.vid)} PID: {hex(self.pid)}")
                     retry_logger.reset("hid_connect")  # Reset on successful connection
                 except (OSError, IOError) as e:
                     if retry_logger.should_log("hid_connect"):
                         info = retry_logger.format_retry_info("hid_connect")
-                        logger.warning(f"Failed to open HID device: {e}. Retrying... {info}")
+                        logger.warning(f"hid.error: Failed to open HID device: {e}. Retrying... {info}")
                     self.hid_device = None
                     time.sleep(RETRY_DELAY)
                     continue
@@ -922,7 +931,7 @@ class HIDToMIDIDaemon:
                     # Map physical key to logical action
                     action_type = self.bindings.get(keyreported)
                     if not action_type:
-                        logger.debug(f"No binding for key {KEY_NAMES.get(keyreported, keyreported)}")
+                        logger.debug(f"hid.input: No binding for key {KEY_NAMES.get(keyreported, keyreported)}")
                         continue
 
                     # Create appropriate GlmAction based on action type
@@ -940,15 +949,16 @@ class HIDToMIDIDaemon:
                         glm_action = SetPower()
                     else:
                         # Non-GLM actions (PLAY_PAUSE, etc.) - skip for now
-                        logger.debug(f"Action {action_type.value} not yet supported")
+                        logger.debug(f"hid.input: Action {action_type.value} not yet supported")
                         continue
 
-                    self.queue.put(QueuedAction(action=glm_action, timestamp=now))
-                    logger.debug(f"HID: key={KEY_NAMES.get(keyreported, keyreported)} -> {glm_action}")
+                    tid = trace_ids.next("hid")
+                    self.queue.put(QueuedAction(action=glm_action, timestamp=now, trace_id=tid))
+                    logger.debug(f"[{tid}] hid.input: key={KEY_NAMES.get(keyreported, keyreported)} -> {glm_action}")
             except (OSError, IOError) as e:
                 if retry_logger.should_log("hid_error"):
                     info = retry_logger.format_retry_info("hid_error")
-                    logger.warning(f"HID device error: {e}. Reconnecting... {info}")
+                    logger.warning(f"hid.error: Device error: {e}. Reconnecting... {info}")
                 if self.hid_device:
                     try:
                         self.hid_device.close()
@@ -965,7 +975,7 @@ class HIDToMIDIDaemon:
         while not self._stop_event.is_set():
             try:
                 self.midi_input = open_input(self.midi_out_channel)
-                logger.info(f"Connected to MIDI output channel '{self.midi_out_channel}' for state reading.")
+                logger.info(f"midi.connect: Connected to MIDI output channel '{self.midi_out_channel}' for state reading")
                 retry_logger.reset("midi_reader")  # Reset on successful connection
 
                 # Blocking iteration - waits for messages, no polling
@@ -1018,13 +1028,13 @@ class HIDToMIDIDaemon:
                                         reason.append(f"total {total_gap*1000:.0f}ms > {POWER_PATTERN_MAX_TOTAL*1000:.0f}ms")
                                     if pre_gap < POWER_PATTERN_PRE_GAP:
                                         reason.append(f"pre-gap {pre_gap*1000:.0f}ms < {POWER_PATTERN_PRE_GAP*1000:.0f}ms")
-                                    logger.debug(f"Power pattern rejected: {', '.join(reason)} (gaps: {[f'{g*1000:.0f}ms' for g in gaps]})")
+                                    logger.debug(f"power.pattern: Rejected: {', '.join(reason)} (gaps: {[f'{g*1000:.0f}ms' for g in gaps]})")
                                     self._rx_seq = []
                                     continue
 
                                 # Skip pattern processing during startup/volume init
                                 if self._suppress_power_pattern:
-                                    logger.debug("MIDI power pattern ignored (suppressed during init)")
+                                    logger.debug("power.pattern: Ignored (suppressed during init)")
                                     self._rx_seq = []
                                     continue
 
@@ -1032,7 +1042,7 @@ class HIDToMIDIDaemon:
                                 # (UI automation already verified state)
                                 allowed, wait_time, _ = glm_controller.can_accept_power_command()
                                 if not allowed:
-                                    logger.debug(f"MIDI power pattern ignored during cooldown ({wait_time:.1f}s remaining)")
+                                    logger.debug(f"power.pattern: Ignored during cooldown ({wait_time:.1f}s remaining)")
                                     self._rx_seq = []
                                     continue
 
@@ -1040,7 +1050,7 @@ class HIDToMIDIDaemon:
                                 # GLM bug: Power button visual doesn't update on RF remote toggle
                                 # (only updates when button is clicked directly). Verified via RDP observation.
                                 new_power = glm_controller.toggle_power_from_midi_pattern()
-                                logger.info(f"RF power toggle detected (MIDI pattern) - now {'ON' if new_power else 'OFF'}")
+                                logger.info(f"power.pattern: RF power toggle detected - now {'ON' if new_power else 'OFF'}")
 
                                 self._rx_seq = []  # Clear after detection
 
@@ -1048,7 +1058,7 @@ class HIDToMIDIDaemon:
                         changed = glm_controller.update_from_midi(msg.control, msg.value)
                         if changed:
                             state = glm_controller.get_state()
-                            logger.debug(f"GLM state: vol={state['volume']}, mute={state['mute']}, dim={state['dim']}, pwr={state['power']}")
+                            logger.debug(f"state.change: vol={state['volume']}, mute={state['mute']}, dim={state['dim']}, pwr={state['power']}")
                     else:
                         # Log non-control_change messages (unexpected but want to see them)
                         log_midi("RX", msg.type, raw=str(msg))
@@ -1057,7 +1067,7 @@ class HIDToMIDIDaemon:
                 if not self._stop_event.is_set():  # Only log if not shutting down
                     if retry_logger.should_log("midi_reader"):
                         info = retry_logger.format_retry_info("midi_reader")
-                        logger.warning(f"MIDI reader error: {e}. Reconnecting... {info}")
+                        logger.warning(f"midi.error: Reader error: {e}. Reconnecting... {info}")
                     time.sleep(RETRY_DELAY)
             finally:
                 if self.midi_input:
@@ -1078,14 +1088,17 @@ class HIDToMIDIDaemon:
         while True:
             queued = self.queue.get()
             if queued is None:  # Sentinel for consumer shutdown
-                logger.info("Consumer thread exiting...")
+                logger.info("sys.shutdown: Consumer thread exiting")
                 break
 
             # Handle QueuedAction objects
             now = time.time()
             event_age = now - queued.timestamp
+            tid = queued.trace_id
+            prefix = f"[{tid}] " if tid else ""
+
             if event_age > MAX_EVENT_AGE:
-                logger.warning(f"Discarded stale action: {queued.action}")
+                logger.warning(f"{prefix}queue.stale: Discarded {queued.action} (age={event_age:.1f}s)")
                 continue
 
             action = queued.action
@@ -1096,60 +1109,63 @@ class HIDToMIDIDaemon:
                 allowed, wait_time, reason = glm_controller.can_accept_power_command()
                 if not allowed:
                     if reason == "power_settling":
-                        logger.warning(f"Power command blocked: settling ({wait_time:.1f}s remaining)")
+                        logger.warning(f"{prefix}power.blocked: settling ({wait_time:.1f}s remaining)")
                     else:
-                        logger.warning(f"Power command blocked: cooldown ({wait_time:.1f}s remaining)")
+                        logger.warning(f"{prefix}power.blocked: cooldown ({wait_time:.1f}s remaining)")
                     continue
             else:
                 # All other commands blocked only during settling
                 allowed, wait_time, reason = glm_controller.can_accept_command()
                 if not allowed:
-                    logger.warning(f"Command blocked: power settling ({wait_time:.1f}s remaining)")
+                    logger.warning(f"{prefix}queue.blocked: power settling ({wait_time:.1f}s remaining)")
                     continue
 
             # Dispatch based on action type
             try:
                 if isinstance(action, SetVolume):
-                    self._handle_set_volume(action.target)
+                    self._handle_set_volume(action.target, trace_id=tid)
                 elif isinstance(action, AdjustVolume):
-                    self._handle_adjust_volume(action.delta)
+                    self._handle_adjust_volume(action.delta, trace_id=tid)
                 elif isinstance(action, SetMute):
-                    logger.debug(f"Sending Mute (CC {GLM_MUTE_CC})")
-                    self._send_action(Action.MUTE)
+                    logger.debug(f"{prefix}midi.tx: Sending Mute (CC {GLM_MUTE_CC})")
+                    self._send_action(Action.MUTE, trace_id=tid)
                     time.sleep(SEND_DELAY)
                 elif isinstance(action, SetDim):
-                    logger.debug(f"Sending Dim (CC {GLM_DIM_CC})")
-                    self._send_action(Action.DIM)
+                    logger.debug(f"{prefix}midi.tx: Sending Dim (CC {GLM_DIM_CC})")
+                    self._send_action(Action.DIM, trace_id=tid)
                     time.sleep(SEND_DELAY)
                 elif isinstance(action, SetPower):
-                    self._handle_power_action(action)
+                    self._handle_power_action(action, trace_id=tid)
                 else:
-                    logger.debug(f"Unknown action type: {type(action).__name__}")
+                    logger.debug(f"{prefix}queue.unknown: {type(action).__name__}")
             except Exception as e:
-                logger.error(f"Error processing action {action}: {e}", exc_info=True)
+                logger.error(f"{prefix}queue.error: Processing {action}: {e}", exc_info=True)
 
-    def _send_action(self, action: Action):
+    def _send_action(self, action: Action, trace_id: str = ""):
         """Send an action to GLM using the controller."""
+        prefix = f"[{trace_id}] " if trace_id else ""
         midi_out = self._get_midi_output()
         if midi_out is None:
-            logger.warning("MIDI output not connected, skipping action.")
+            logger.warning(f"{prefix}midi.error: Output not connected, skipping action")
             return
 
         try:
-            glm_controller.send_action(action, midi_out)
+            glm_controller.send_action(action, midi_out, trace_id=trace_id)
         except (OSError, IOError) as e:
-            logger.error(f"Error sending MIDI message: {e}")
+            logger.error(f"{prefix}midi.error: Sending {action.value}: {e}")
             self._reset_midi_output()
 
-    def _handle_power_action(self, action: SetPower):
+    def _handle_power_action(self, action: SetPower, trace_id: str = ""):
         """
         Handle power control via UI automation.
 
         This uses GlmPowerController to click the power button in GLM,
         providing deterministic state control with verification.
         """
+        prefix = f"[{trace_id}] " if trace_id else ""
+
         if self._power_controller is None:
-            logger.error("Power control unavailable: GlmPowerController not initialized")
+            logger.error(f"{prefix}power.error: GlmPowerController not initialized")
             return
 
         # Determine target state
@@ -1160,10 +1176,10 @@ class HIDToMIDIDaemon:
             target_state = action.state
 
         desired = "on" if target_state else "off"
-        logger.info(f"Power command: setting to {desired.upper()} via UI automation")
+        logger.info(f"{prefix}power.begin: Setting to {desired.upper()} via UI automation")
 
         # Start power transition (blocks all commands)
-        glm_controller.start_power_transition(target_state)
+        glm_controller.start_power_transition(target_state, trace_id=trace_id)
         transition_start = time.time()
 
         # Ensure session is connected to console before UI automation
@@ -1171,7 +1187,7 @@ class HIDToMIDIDaemon:
         # and reconnects via tscon if needed
         if ensure_session_connected:
             if not ensure_session_connected(logger=logger):
-                logger.error("Power control failed: could not ensure session is connected to console")
+                logger.error(f"{prefix}power.error: Could not ensure session is connected to console")
                 glm_controller.end_power_transition(success=False)
                 return
 
@@ -1181,14 +1197,14 @@ class HIDToMIDIDaemon:
             self._power_controller.set_state(desired, verify=True)
             success = True
         except Exception as e:
-            logger.error(f"Power control failed: {e}")
+            logger.error(f"{prefix}power.error: UI automation failed: {e}")
 
         # Wait for full settling time before ending transition
         # This ensures UI shows transitioning state for the full 2 seconds
         elapsed = time.time() - transition_start
         if elapsed < POWER_SETTLING_TIME:
             remaining = POWER_SETTLING_TIME - elapsed
-            logger.debug(f"Waiting {remaining:.1f}s for power settling")
+            logger.debug(f"{prefix}power.settling: Waiting {remaining:.1f}s")
             time.sleep(remaining)
 
         # Now end transition (UI will stop showing transitioning state)
@@ -1197,21 +1213,23 @@ class HIDToMIDIDaemon:
         else:
             glm_controller.end_power_transition(success=False)
 
-    def _handle_adjust_volume(self, delta: int):
+    def _handle_adjust_volume(self, delta: int, trace_id: str = ""):
         """
         Handle volume changes using absolute volume (CC 20) when possible.
 
         Args:
             delta: Volume change amount. Positive = up, negative = down.
+            trace_id: Trace ID for log correlation.
 
         If we have a valid volume reading from GLM, calculate target and send
         one absolute command. This avoids GLM dropping rapid increment commands.
 
         If volume is not yet initialized, fall back to single CC 21/22.
         """
+        prefix = f"[{trace_id}] " if trace_id else ""
         midi_out = self._get_midi_output()
         if midi_out is None:
-            logger.warning("MIDI output not connected, skipping volume action.")
+            logger.warning(f"{prefix}midi.error: Output not connected, skipping volume action")
             return
 
         try:
@@ -1224,45 +1242,47 @@ class HIDToMIDIDaemon:
 
                 if target != current:
                     sign = '+' if delta > 0 else ''
-                    logger.debug(f"Volume: {current} -> {target} (delta={sign}{delta}, CC 20)")
+                    logger.debug(f"{prefix}volume: {current} -> {target} (delta={sign}{delta}, CC 20)")
                     glm_controller.set_pending_volume(target)
-                    glm_controller.send_volume_absolute(target, midi_out)
+                    glm_controller.send_volume_absolute(target, midi_out, trace_id=trace_id)
                     # Clear power pattern buffer - GLM's response (DIM, MUTE, VOL)
                     # should not be mistaken for power toggle pattern
                     self._rx_seq = []
                 else:
                     direction = "up" if delta > 0 else "down"
-                    logger.debug(f"Volume already at limit ({current}), ignoring {direction}")
+                    logger.debug(f"{prefix}volume: Already at limit ({current}), ignoring {direction}")
             else:
                 # Volume not initialized yet - use CC 21/22 to trigger GLM state report
                 action = Action.VOL_UP if delta > 0 else Action.VOL_DOWN
-                logger.debug(f"Volume not initialized, using {action.value} (CC 21/22) to trigger state")
-                glm_controller.send_action(action, midi_out)
+                logger.debug(f"{prefix}volume: Not initialized, using {action.value} (CC 21/22) to trigger state")
+                glm_controller.send_action(action, midi_out, trace_id=trace_id)
         except (OSError, IOError) as e:
-            logger.error(f"Error handling volume action: {e}")
+            logger.error(f"{prefix}midi.error: Volume action failed: {e}")
             self._reset_midi_output()
 
-    def _handle_set_volume(self, target: int):
+    def _handle_set_volume(self, target: int, trace_id: str = ""):
         """
         Handle absolute volume setting (from REST API).
 
         Args:
             target: Target volume (0-127).
+            trace_id: Trace ID for log correlation.
         """
+        prefix = f"[{trace_id}] " if trace_id else ""
         midi_out = self._get_midi_output()
         if midi_out is None:
-            logger.warning("MIDI output not connected, skipping volume action.")
+            logger.warning(f"{prefix}midi.error: Output not connected, skipping volume action")
             return
 
         target = max(0, min(127, target))
         try:
-            logger.debug(f"Setting volume to {target} (CC 20)")
+            logger.debug(f"{prefix}volume: Setting to {target} (CC 20)")
             glm_controller.set_pending_volume(target)
-            glm_controller.send_volume_absolute(target, midi_out)
+            glm_controller.send_volume_absolute(target, midi_out, trace_id=trace_id)
             # Clear power pattern buffer - GLM's response should not trigger pattern
             self._rx_seq = []
         except (OSError, IOError) as e:
-            logger.error(f"Error setting volume: {e}")
+            logger.error(f"{prefix}midi.error: Setting volume failed: {e}")
             self._reset_midi_output()
 
     def _initialize_glm_volume(self):
@@ -1291,17 +1311,18 @@ class HIDToMIDIDaemon:
         # (GLM responses can form false power patterns)
         self._suppress_power_pattern = True
 
+        init_tid = trace_ids.next("sys")
         try:
             if self.startup_volume is not None:
                 # Set volume to specified value
-                logger.info(f"Setting startup volume to {self.startup_volume}")
-                glm_controller.send_volume_absolute(self.startup_volume, midi_out)
+                logger.info(f"[{init_tid}] sys.init: Setting startup volume to {self.startup_volume}")
+                glm_controller.send_volume_absolute(self.startup_volume, midi_out, trace_id=init_tid)
             else:
                 # Query current volume by sending vol+1 then vol-1
-                logger.info("Querying current GLM volume (sending vol+1, vol-1)...")
-                glm_controller.send_action(Action.VOL_UP, midi_out)
+                logger.info(f"[{init_tid}] sys.init: Querying current GLM volume (sending vol+1, vol-1)...")
+                glm_controller.send_action(Action.VOL_UP, midi_out, trace_id=init_tid)
                 time.sleep(GLM_VOL_QUERY_DELAY)
-                glm_controller.send_action(Action.VOL_DOWN, midi_out)
+                glm_controller.send_action(Action.VOL_DOWN, midi_out, trace_id=init_tid)
 
             # Wait for GLM to respond with volume state
             time.sleep(GLM_VOL_RESPONSE_WAIT)
@@ -1311,9 +1332,9 @@ class HIDToMIDIDaemon:
             self._suppress_power_pattern = False
 
         if glm_controller.has_valid_volume:
-            logger.info(f"GLM volume initialized: {glm_controller.volume}")
+            logger.info(f"[{init_tid}] sys.init: GLM volume initialized: {glm_controller.volume}")
         else:
-            logger.warning("GLM volume state not yet received. Will initialize on first volume command.")
+            logger.warning(f"[{init_tid}] sys.init: GLM volume state not yet received. Will initialize on first volume command.")
 
     def start(self):
         """Starts all threads."""
@@ -1328,10 +1349,10 @@ class HIDToMIDIDaemon:
             else:
                 logger.error("GLM Manager failed to start")
 
-        # Register state change callback for logging (proof of concept)
+        # Register state change callback for logging
         def log_state_change(state: dict):
             transitioning = " [TRANSITIONING]" if state.get('power_transitioning') else ""
-            logger.info(f"State changed: vol={state['volume']}, mute={state['mute']}, dim={state['dim']}, pwr={state['power']}{transitioning}")
+            logger.info(f"state.change: vol={state['volume']}, mute={state['mute']}, dim={state['dim']}, pwr={state['power']}{transitioning}")
         glm_controller.add_state_callback(log_state_change)
 
         # Sync power state from GLM UI (before starting threads)
@@ -1341,7 +1362,7 @@ class HIDToMIDIDaemon:
                 state = self._power_controller.get_state()
                 if state in ("on", "off"):
                     glm_controller.power = (state == "on")
-                    logger.info(f"Power state synced from GLM UI: {state.upper()}")
+                    logger.info(f"power.init: State synced from GLM UI: {state.upper()}")
                 else:
                     logger.warning(f"Could not determine GLM power state: {state}")
             except Exception as e:
@@ -1386,7 +1407,7 @@ class HIDToMIDIDaemon:
 
     def stop(self):
         """Stops the daemon gracefully."""
-        logger.info("Stopping daemon...")
+        logger.info("sys.shutdown: Stopping daemon...")
         self._stop_event.set()
         self.queue.put(None)  # Sentinel to unblock the consumer
 
@@ -1421,7 +1442,7 @@ class HIDToMIDIDaemon:
         # This allows graceful shutdown but doesn't block if they're stuck
         time.sleep(0.1)
 
-        logger.info("Daemon stopped.")
+        logger.info("sys.shutdown: Daemon stopped")
 
 if __name__ == "__main__":
     args = parse_arguments(__file__)
