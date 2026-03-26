@@ -978,11 +978,30 @@ class HIDToMIDIDaemon:
                                     self._rx_seq = []
                                     continue
 
-                                # Power pattern detected - trust the MIDI pattern and toggle state
-                                # GLM bug: Power button visual doesn't update on RF remote toggle
-                                # (only updates when button is clicked directly). Verified via RDP observation.
+                                # Power pattern detected - toggle state then verify via pixel read
                                 new_power = glm_controller.toggle_power_from_midi_pattern()
                                 logger.info(f"power.pattern: RF power toggle detected - now {'ON' if new_power else 'OFF'}")
+
+                                # Verify via pixel read if power controller is available
+                                if self._power_controller:
+                                    if ensure_session_connected:
+                                        ensure_session_connected(logger=logger)
+                                    try:
+                                        actual_state = self._power_controller.get_state()
+                                        if actual_state in ("on", "off"):
+                                            actual_power = (actual_state == "on")
+                                            if actual_power != new_power:
+                                                # Pattern toggle was wrong - correct it
+                                                with glm_controller._lock:
+                                                    glm_controller.power = actual_power
+                                                glm_controller._notify_state_change()
+                                                logger.warning(f"power.pattern: Pixel read corrected state to {'ON' if actual_power else 'OFF'} (pattern said {'ON' if new_power else 'OFF'})")
+                                            else:
+                                                logger.debug(f"power.pattern: Pixel read confirmed {'ON' if actual_power else 'OFF'}")
+                                        else:
+                                            logger.debug(f"power.pattern: Pixel read returned '{actual_state}', keeping pattern result")
+                                    except Exception as e:
+                                        logger.debug(f"power.pattern: Pixel verify failed: {e}, keeping pattern result")
 
                                 self._rx_seq = []  # Clear after detection
 
