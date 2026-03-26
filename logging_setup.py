@@ -81,6 +81,10 @@ def setup_logging(
     root_logger.setLevel(logging.DEBUG if log_level == "DEBUG" else logging.INFO)
     root_logger.addHandler(queue_handler)
 
+    # Suppress verbose debug logging from third-party libraries
+    logging.getLogger("keyring").setLevel(logging.WARNING)
+    logging.getLogger("jaraco").setLevel(logging.WARNING)
+
     # Module Logger
     logger = logging.getLogger(__name__)
     logger.setLevel(logging.DEBUG if log_level == "DEBUG" else logging.INFO)
@@ -93,7 +97,7 @@ def setup_logging(
 
     # Log startup message
     version_str = f" v{version}" if version else ""
-    logger.info(f">----- Starting {script_name}{version_str}. Initializing...")
+    logger.info(f"sys.init: >----- Starting {script_name}{version_str}. Initializing...")
 
     def log_listener_thread():
         listener = QueueListener(log_queue, file_handler, console_handler)

@@ -5,7 +5,7 @@ Bridges a Fosi Audio VOL20 USB volume knob to Genelec GLM software via MIDI.
 Supports volume control, mute, dim, and power management with UI automation.
 """
 
-__version__ = "3.2.30"
+__version__ = "3.2.31"
 
 import time
 import signal
@@ -13,7 +13,6 @@ import sys
 import os
 import threading
 import queue
-from queue import Queue
 from typing import Dict, Optional, List, Callable
 import hid
 
@@ -33,7 +32,7 @@ from midi_constants import (
     KEY_NAMES, DEFAULT_BINDINGS, log_midi as _log_midi
 )
 from acceleration import AccelerationHandler
-from logging_setup import LOG_FORMAT
+from logging_setup import setup_logging
 
 # Power control via UI automation (Windows only)
 try:
@@ -54,7 +53,6 @@ except ImportError:
 
 import psutil
 import logging
-from logging.handlers import RotatingFileHandler, QueueHandler, QueueListener
 
 # Platform-specific imports (Windows thread priority)
 IS_WINDOWS = sys.platform == 'win32'
@@ -692,72 +690,6 @@ def set_current_thread_priority(priority_level):
     except Exception as e:
         logger.warning(f"Failed to set priority for thread '{thread_name}' (ID: {thread_id}): {e}")
 
-
-# Setup logging
-def setup_logging(log_level, log_file_name, max_bytes=4*1024*1024, backup_count=5):
-    script_directory = os.path.dirname(os.path.abspath(__file__))
-    log_file_path = os.path.join(script_directory, log_file_name)
-
-    log_queue = Queue()
-
-    # Import WebSocket error filter to suppress disconnect errors in logs
-    from api.rest import WebSocketErrorFilter
-    ws_filter = WebSocketErrorFilter()
-
-    # File Handler
-    file_handler = RotatingFileHandler(log_file_path, maxBytes=max_bytes, backupCount=backup_count)
-    file_handler.setLevel(logging.DEBUG if log_level != "NONE" else logging.CRITICAL)
-    file_handler.setFormatter(logging.Formatter(LOG_FORMAT))
-    file_handler.addFilter(ws_filter)  # Filter WebSocket disconnect errors
-
-    # Console Handler
-    console_handler = logging.StreamHandler()
-    console_handler.setLevel(logging.INFO if log_level in ["INFO", "DEBUG"] else logging.CRITICAL)
-    console_handler.setFormatter(logging.Formatter(LOG_FORMAT))
-    console_handler.addFilter(ws_filter)  # Filter WebSocket disconnect errors
-
-    # QueueHandler
-    queue_handler = QueueHandler(log_queue)
-
-    # Root Logger
-    root_logger = logging.getLogger()
-    root_logger.handlers = []  # Clear all handlers
-    root_logger.setLevel(logging.DEBUG if log_level == "DEBUG" else logging.INFO)
-    root_logger.addHandler(queue_handler)
-
-    # Suppress verbose debug logging from third-party libraries
-    logging.getLogger("keyring").setLevel(logging.WARNING)
-    logging.getLogger("jaraco").setLevel(logging.WARNING)
-
-    # Custom Module Logger
-    global logger
-    logger = logging.getLogger(__name__)
-    logger.setLevel(logging.DEBUG if log_level == "DEBUG" else logging.INFO)
-    logger.addHandler(console_handler)  # Optional: Direct console output
-    logger.addHandler(file_handler)     # Optional: Direct file output
-    logger.propagate = False  # Avoid double logging
-
-    # Listener Thread
-    stop_event = threading.Event()
-    logger.info(f"sys.init: >----- Starting {os.path.basename(__file__)} v{__version__}. Initializing...")
-
-    def log_listener_thread():
-        listener = QueueListener(log_queue, file_handler, console_handler)
-        listener.start()
-
-        # Lower thread priority
-        set_current_thread_priority(THREAD_PRIORITY_IDLE)
-
-        stop_event.wait()
-        listener.stop()
-
-    logging_thread = threading.Thread(target=log_listener_thread, name="LoggingThread", daemon=False)
-    logging_thread.start()
-
-    def stop_logging():
-        stop_event.set()
-
-    return stop_logging
 
 def signal_handler(sig, frame, daemon, stop_logging_func):
     """Handles SIGINT and shuts down the daemon."""
@@ -1446,7 +1378,15 @@ class HIDToMIDIDaemon:
 
 if __name__ == "__main__":
     args = parse_arguments(__file__)
-    stop_logging = setup_logging(args.log_level, args.log_file_name)
+    logger, stop_logging = setup_logging(
+        log_level=args.log_level,
+        log_file_name=args.log_file_name,
+        script_dir=os.path.dirname(os.path.abspath(__file__)),
+        version=__version__,
+        script_name=os.path.basename(__file__),
+        set_thread_priority_func=set_current_thread_priority,
+        thread_priority_idle=THREAD_PRIORITY_IDLE,
+    )
 
     # Log the configurations for confirmation
     logger.info(f"---> Configuration:")
