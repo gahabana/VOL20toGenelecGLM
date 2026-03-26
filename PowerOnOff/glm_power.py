@@ -46,6 +46,7 @@ try:
     from ctypes import wintypes
     from PIL import ImageGrab
     from pywinauto import Desktop
+    import numpy as np
     HAS_WIN32_DEPS = True
 except ImportError:
     HAS_WIN32_DEPS = False
@@ -395,11 +396,21 @@ class GlmPowerConfig:
     post_click_delay: float = 0.35
     verify_timeout: float = 3.0
     poll_interval: float = 0.15
-    # Color thresholds for state classification
+    # Color thresholds for button state classification
     off_max_brightness: int = 95
     off_max_channel_diff: int = 22
     on_min_green: int = 110
     on_green_red_diff: int = 35
+    # OFFLINE label detection (honeycomb scan)
+    offline_gold_min_r: int = 150
+    offline_gold_min_g: int = 120
+    offline_gold_max_g: int = 200
+    offline_gold_max_b: int = 80
+    offline_gold_threshold: int = 50
+    honeycomb_inset_left: float = 0.15
+    honeycomb_inset_top: float = 0.15
+    honeycomb_inset_right: float = 0.25
+    honeycomb_inset_bottom: float = 0.10
 
 
 class GlmPowerController:
@@ -636,6 +647,79 @@ class GlmPowerController:
             r.top + self.config.dy_from_top
         )
 
+    def _get_honeycomb_bbox(self, win) -> Tuple[int, int, int, int]:
+        """Calculate screen-coordinate bbox of the honeycomb speaker grid.
+
+        Returns (left, top, right, bottom) in screen pixels.
+        The region is inset from the window edges by configurable proportions
+        to focus on the central honeycomb area where OFFLINE labels appear.
+        """
+        r = win.rectangle()
+        w = r.right - r.left
+        h = r.bottom - r.top
+        cfg = self.config
+        return (
+            r.left + int(w * cfg.honeycomb_inset_left),
+            r.top + int(h * cfg.honeycomb_inset_top),
+            r.right - int(w * cfg.honeycomb_inset_right),
+            r.bottom - int(h * cfg.honeycomb_inset_bottom),
+        )
+
+    def _scan_offline_labels(self, win, img=None) -> Tuple[PowerState, int]:
+        """Scan honeycomb region for gold/amber OFFLINE badges.
+
+        When speakers are OFF, each speaker cell shows a gold "OFFLINE" label.
+        When speakers are ON, no gold pixels exist in the honeycomb region.
+
+        Args:
+            win: The GLM window wrapper.
+            img: Optional pre-captured PIL Image of the full window. If None,
+                 captures the honeycomb region directly.
+
+        Returns:
+            Tuple of (state, gold_count) where state is "off" if gold pixels
+            exceed threshold, "on" if zero gold pixels, "unknown" otherwise.
+        """
+        try:
+            if img is not None:
+                # Crop honeycomb region from pre-captured full window image
+                r = win.rectangle()
+                bbox = self._get_honeycomb_bbox(win)
+                crop = img.crop((
+                    bbox[0] - r.left, bbox[1] - r.top,
+                    bbox[2] - r.left, bbox[3] - r.top,
+                ))
+                arr = np.array(crop)
+            else:
+                bbox = self._get_honeycomb_bbox(win)
+                arr = np.array(ImageGrab.grab(bbox=bbox, all_screens=True))
+
+            cfg = self.config
+            gold_mask = (
+                (arr[:, :, 0] > cfg.offline_gold_min_r) &
+                (arr[:, :, 1] > cfg.offline_gold_min_g) &
+                (arr[:, :, 1] < cfg.offline_gold_max_g) &
+                (arr[:, :, 2] < cfg.offline_gold_max_b)
+            )
+            gold_count = int(np.count_nonzero(gold_mask))
+
+            if gold_count >= cfg.offline_gold_threshold:
+                self.logger.debug(
+                    f"OFFLINE scan: {gold_count} gold pixels -> OFF"
+                )
+                return "off", gold_count
+            elif gold_count == 0:
+                self.logger.debug("OFFLINE scan: 0 gold pixels -> ON")
+                return "on", 0
+            else:
+                self.logger.debug(
+                    f"OFFLINE scan: {gold_count} gold pixels (below threshold {cfg.offline_gold_threshold}) -> unknown"
+                )
+                return "unknown", gold_count
+        except Exception as e:
+            self.logger.debug(f"OFFLINE scan failed: {e}")
+            return "unknown", -1
+
     def _get_patch_median_rgb(self, center: Point) -> Tuple[int, int, int]:
         """Sample a patch and return per-channel median RGB."""
         radius = self.config.patch_radius
@@ -676,23 +760,72 @@ class GlmPowerController:
 
     def _read_state_internal(self, win) -> Tuple[PowerState, Tuple[int, int, int], Point]:
         """
-        Internal state reading without window finding.
+        Internal state reading using dual detection: OFFLINE scan + button pixel.
 
-        Returns (state, rgb, point).
+        Priority:
+        1. OFFLINE label scan (primary) - not affected by button render bug
+        2. Button pixel RGB classification (secondary/fallback)
+
+        Uses a single ImageGrab of the full window to avoid double I/O.
+        Returns (state, rgb, point) for backward compatibility.
         """
+        r = win.rectangle()
         pt = self._get_power_point(win)
-        rgb = self._get_patch_median_rgb(pt)
-        state = self._classify_state(rgb)
 
-        # Try fallback point if unknown
-        if state == "unknown" and self.config.fallback_nudge_x:
-            pt2 = Point(pt.x - self.config.fallback_nudge_x, pt.y)
-            rgb2 = self._get_patch_median_rgb(pt2)
-            state2 = self._classify_state(rgb2)
-            if state2 != "unknown":
-                return state2, rgb2, pt2
+        # Single grab of entire window
+        full_img = ImageGrab.grab(
+            bbox=(r.left, r.top, r.right, r.bottom), all_screens=True
+        )
 
-        return state, rgb, pt
+        # Extract button patch from full image (relative coordinates)
+        radius = self.config.patch_radius
+        btn_x = pt.x - r.left
+        btn_y = pt.y - r.top
+        btn_crop = full_img.crop((
+            btn_x - radius, btn_y - radius,
+            btn_x + radius + 1, btn_y + radius + 1,
+        ))
+        pixels = list(btn_crop.getdata())
+        rgb = (
+            int(median([p[0] for p in pixels])),
+            int(median([p[1] for p in pixels])),
+            int(median([p[2] for p in pixels])),
+        )
+        button_state = self._classify_state(rgb)
+
+        # Try fallback button point if unknown
+        if button_state == "unknown" and self.config.fallback_nudge_x:
+            fb_x = btn_x - self.config.fallback_nudge_x
+            fb_crop = full_img.crop((
+                fb_x - radius, btn_y - radius,
+                fb_x + radius + 1, btn_y + radius + 1,
+            ))
+            fb_pixels = list(fb_crop.getdata())
+            rgb2 = (
+                int(median([p[0] for p in fb_pixels])),
+                int(median([p[1] for p in fb_pixels])),
+                int(median([p[2] for p in fb_pixels])),
+            )
+            button_state2 = self._classify_state(rgb2)
+            if button_state2 != "unknown":
+                button_state = button_state2
+                rgb = rgb2
+                pt = Point(pt.x - self.config.fallback_nudge_x, pt.y)
+
+        # OFFLINE scan (primary signal) - reuses the same captured image
+        offline_state, gold_count = self._scan_offline_labels(win, img=full_img)
+
+        if offline_state != "unknown":
+            if offline_state != button_state and button_state != "unknown":
+                self.logger.warning(
+                    f"Detection disagreement: OFFLINE={offline_state}, button={button_state} "
+                    f"(rgb={rgb}, gold={gold_count}) -- trusting OFFLINE scan"
+                )
+            return offline_state, rgb, pt
+
+        # OFFLINE scan inconclusive, use button pixel
+        self.logger.debug(f"OFFLINE scan inconclusive, using button pixel: {button_state}")
+        return button_state, rgb, pt
 
     def _click_point(self, pt: Point) -> None:
         """Synthesize a left mouse click."""

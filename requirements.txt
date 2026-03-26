@@ -12,6 +12,7 @@ uvicorn[standard]
 pywinauto
 pillow
 pywin32
+numpy
 
 # MQTT/Home Assistant (Phase 5)
 paho-mqtt
