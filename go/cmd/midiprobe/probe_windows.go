@@ -44,7 +44,7 @@ func run() error {
 	fmt.Printf("  Volume after Vol+: %d\n", vol1)
 
 	fmt.Println("  (settling 200ms...)")
-	time.Sleep(200 * time.Millisecond)
+	time.Sleep(50 * time.Millisecond)
 
 	fmt.Println("Sending CC22 (Vol-)...")
 	writer.SendCC(0, types.CCVolDown, 127)
@@ -55,7 +55,7 @@ func run() error {
 	}
 
 	fmt.Println("  (settling 200ms...)")
-	time.Sleep(200 * time.Millisecond)
+	time.Sleep(50 * time.Millisecond)
 
 	// Test 2: CC21, wait, 200ms settle, CC20 absolute restore
 	fmt.Println("\n=== Test 2: CC21 (Vol+) — 200ms settle — CC20 (restore) ===")
@@ -65,7 +65,7 @@ func run() error {
 	fmt.Printf("  Volume after Vol+: %d\n", vol3)
 
 	fmt.Println("  (settling 200ms...)")
-	time.Sleep(200 * time.Millisecond)
+	time.Sleep(50 * time.Millisecond)
 
 	restore := vol3 - 1
 	fmt.Printf("Sending CC20 (Volume=%d) to restore...\n", restore)
@@ -74,7 +74,7 @@ func run() error {
 	fmt.Printf("  Volume after restore: %d (expected %d)\n", vol4, restore)
 
 	fmt.Println("  (settling 200ms...)")
-	time.Sleep(200 * time.Millisecond)
+	time.Sleep(50 * time.Millisecond)
 
 	// Test 3: Just CC21 alone — does it always trigger a response?
 	fmt.Println("\n=== Test 3: CC21 (Vol+) x3 — reliability check ===")
@@ -83,7 +83,7 @@ func run() error {
 		writer.SendCC(0, types.CCVolUp, 127)
 		v := waitForVolume(responses, 1*time.Second)
 		fmt.Printf("  Volume: %d\n", v)
-		time.Sleep(200 * time.Millisecond)
+		time.Sleep(50 * time.Millisecond)
 	}
 
 	// Restore: send 3x CC22 to undo
@@ -91,7 +91,7 @@ func run() error {
 	for i := 0; i < 3; i++ {
 		writer.SendCC(0, types.CCVolDown, 127)
 		waitForVolume(responses, 1*time.Second)
-		time.Sleep(200 * time.Millisecond)
+		time.Sleep(50 * time.Millisecond)
 	}
 	fmt.Println("Done.")
 
