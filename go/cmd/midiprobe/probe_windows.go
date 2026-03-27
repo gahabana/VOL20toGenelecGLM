@@ -14,6 +14,8 @@ import (
 
 type msg struct{ cc, value int }
 
+const responseTimeout = 2 * time.Second // generous fixed timeout for waiting for GLM response
+
 func run() error {
 	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
 
@@ -39,44 +41,48 @@ func run() error {
 	// Drain any stale messages
 	drain(responses)
 
-	limit := 2000 * time.Millisecond
-	minLimit := 10 * time.Millisecond
+	settle := 200 * time.Millisecond
+	minSettle := 10 * time.Millisecond
 	round := 1
 
-	fmt.Println("=== GLM MIDI Timing Probe ===")
-	fmt.Println("Each round: Vol- then Vol+ (net zero change)")
-	fmt.Println("Wait limit shrinks by 20% each round until GLM stops responding")
+	fmt.Println("=== GLM MIDI Settle Time Probe ===")
+	fmt.Println("Each round: Vol- (wait for response) → settle delay → Vol+ (wait for response)")
+	fmt.Println("Settle delay shrinks by 10% each round to find GLM's minimum inter-command gap")
 	fmt.Println()
 
-	for limit >= minLimit {
-		fmt.Printf("--- Round %d | wait limit: %dms ---\n", round, limit.Milliseconds())
+	for settle >= minSettle {
+		fmt.Printf("--- Round %d | settle: %dms ---\n", round, settle.Milliseconds())
 
 		// Step 1: Send Vol-
 		fmt.Printf("  [%s] SEND Vol- (CC%d=127)\n", ts(), types.CCVolDown)
-		sendTime := time.Now()
+		t1 := time.Now()
 		writer.SendCC(0, types.CCVolDown, 127, "probe")
-		volDownMsgs := waitMessages(responses, 3, limit, sendTime)
-		printMessages("Vol-", volDownMsgs, sendTime)
+		downMsgs := waitMessages(responses, 3, responseTimeout, t1)
+		printMessages("Vol-", downMsgs, t1)
+
+		// Settle delay
+		fmt.Printf("  [%s] settling %dms...\n", ts(), settle.Milliseconds())
+		time.Sleep(settle)
 
 		// Step 2: Send Vol+
 		fmt.Printf("  [%s] SEND Vol+ (CC%d=127)\n", ts(), types.CCVolUp)
-		sendTime2 := time.Now()
+		t2 := time.Now()
 		writer.SendCC(0, types.CCVolUp, 127, "probe")
-		volUpMsgs := waitMessages(responses, 3, limit, sendTime2)
-		printMessages("Vol+", volUpMsgs, sendTime2)
+		upMsgs := waitMessages(responses, 3, responseTimeout, t2)
+		printMessages("Vol+", upMsgs, t2)
 
 		// Summary
-		gotDown := countVolume(volDownMsgs)
-		gotUp := countVolume(volUpMsgs)
-		fmt.Printf("  RESULT: Vol- volume_response=%v (%d msgs) | Vol+ volume_response=%v (%d msgs)\n",
-			gotDown >= 0, len(volDownMsgs), gotUp >= 0, len(volUpMsgs))
-
-		if gotDown < 0 || gotUp < 0 {
-			fmt.Printf("  *** MISSED RESPONSE at limit=%dms ***\n", limit.Milliseconds())
+		volDown := findVolume(downMsgs)
+		volUp := findVolume(upMsgs)
+		fmt.Printf("  RESULT: Vol-=%d (%d msgs) | Vol+=%d (%d msgs)",
+			volDown, len(downMsgs), volUp, len(upMsgs))
+		if volDown < 0 || volUp < 0 {
+			fmt.Printf("  *** MISSED at settle=%dms ***", settle.Milliseconds())
 		}
 		fmt.Println()
+		fmt.Println()
 
-		limit = time.Duration(float64(limit) * 0.8)
+		settle = time.Duration(float64(settle) * 0.9)
 		round++
 	}
 
@@ -85,7 +91,6 @@ func run() error {
 }
 
 // waitMessages waits for up to maxMsgs messages within the timeout.
-// Returns as soon as maxMsgs are received or timeout expires.
 func waitMessages(ch chan msg, maxMsgs int, timeout time.Duration, sendTime time.Time) []timedMsg {
 	var result []timedMsg
 	deadline := time.After(timeout)
@@ -111,7 +116,7 @@ type timedMsg struct {
 
 func printMessages(label string, msgs []timedMsg, sendTime time.Time) {
 	if len(msgs) == 0 {
-		fmt.Printf("    %s: (no response)\n", label)
+		fmt.Printf("    %s: (no response within %s)\n", label, responseTimeout)
 		return
 	}
 	for i, m := range msgs {
@@ -124,7 +129,7 @@ func printMessages(label string, msgs []timedMsg, sendTime time.Time) {
 	}
 }
 
-func countVolume(msgs []timedMsg) int {
+func findVolume(msgs []timedMsg) int {
 	for _, m := range msgs {
 		if m.cc == types.CCVolumeAbs {
 			return m.value
