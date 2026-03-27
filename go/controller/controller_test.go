@@ -214,10 +214,10 @@ func TestCanAcceptCommand_DuringSettling(t *testing.T) {
 
 func TestCanAcceptPowerCommand_DuringCooldown(t *testing.T) {
 	c := New()
-	// Manually set transition start to simulate settling already passed
+	// Simulate: settling done, cooldown just started
 	c.mu.Lock()
-	c.powerTransitionStart = float64(time.Now().Add(-time.Duration(PowerSettlingTime*1000+100)*time.Millisecond).UnixMilli()) / 1000
 	c.powerSettling = false
+	c.powerCooldownStart = float64(time.Now().UnixMilli()) / 1000 // cooldown started now
 	c.mu.Unlock()
 
 	allowed, _, reason := c.CanAcceptPowerCommand()
@@ -231,15 +231,15 @@ func TestCanAcceptPowerCommand_DuringCooldown(t *testing.T) {
 
 func TestCanAcceptPowerCommand_AfterLockout(t *testing.T) {
 	c := New()
-	// Set transition start far enough in the past
+	// Simulate: cooldown expired (started 2s ago, only lasts 1.5s)
 	c.mu.Lock()
-	c.powerTransitionStart = float64(time.Now().Add(-4*time.Second).UnixMilli()) / 1000
 	c.powerSettling = false
+	c.powerCooldownStart = float64(time.Now().Add(-2*time.Second).UnixMilli()) / 1000
 	c.mu.Unlock()
 
 	allowed, _, _ := c.CanAcceptPowerCommand()
 	if !allowed {
-		t.Error("power command should be allowed after lockout expires")
+		t.Error("power command should be allowed after cooldown expires")
 	}
 }
 

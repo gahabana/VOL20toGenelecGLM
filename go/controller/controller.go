@@ -24,8 +24,9 @@ type Controller struct {
 	volumeInitialized    bool
 	callbacks            []types.StateCallback
 	lastNotifiedState    *types.State
-	powerTransitionStart float64 // Unix timestamp
+	powerTransitionStart float64 // Unix timestamp when settling started
 	powerSettling        bool
+	powerCooldownStart   float64 // Unix timestamp when cooldown started (0 = no cooldown)
 	powerTarget          *bool
 	powerTraceID         string
 }
@@ -70,6 +71,7 @@ func (c *Controller) HasValidVolume() bool {
 
 // CanAcceptCommand checks if any command can be accepted.
 // Returns (allowed, waitSeconds, reason).
+// Only blocks during active settling (not during cooldown — cooldown only blocks power commands).
 func (c *Controller) CanAcceptCommand() (bool, float64, string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -88,22 +90,27 @@ func (c *Controller) CanAcceptCommand() (bool, float64, string) {
 }
 
 // CanAcceptPowerCommand checks if a power command can be accepted.
-// Power commands are blocked for the full lockout period.
+// Blocked during settling (all commands blocked) and during cooldown (power-only block).
 func (c *Controller) CanAcceptPowerCommand() (bool, float64, string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	if c.powerTransitionStart == 0 {
-		return true, 0, ""
+	// Settling blocks everything including power
+	if c.powerSettling {
+		elapsed := float64(time.Now().UnixMilli())/1000 - c.powerTransitionStart
+		if elapsed < PowerSettlingTime {
+			return false, PowerSettlingTime - elapsed, "power_settling"
+		}
+		c.powerSettling = false
 	}
 
-	elapsed := float64(time.Now().UnixMilli())/1000 - c.powerTransitionStart
-	if elapsed < PowerTotalLockout {
-		waitSeconds := PowerTotalLockout - elapsed
-		if elapsed < PowerSettlingTime {
-			return false, waitSeconds, "power_settling"
+	// Cooldown blocks power commands only
+	if c.powerCooldownStart > 0 {
+		elapsed := float64(time.Now().UnixMilli())/1000 - c.powerCooldownStart
+		if elapsed < PowerCooldownTime {
+			return false, PowerCooldownTime - elapsed, "power_cooldown"
 		}
-		return false, waitSeconds, "power_cooldown"
+		c.powerCooldownStart = 0 // Cooldown expired
 	}
 
 	return true, 0, ""
@@ -121,14 +128,12 @@ func (c *Controller) StartPowerTransition(targetState bool, traceID string) {
 }
 
 // EndPowerTransition marks the end of a power transition.
-// Resets the settling timer so settling is immediately over.
-// Cooldown starts from now (powerTransitionStart set to now - PowerSettlingTime).
+// Settling ends immediately. Cooldown (power-only block) starts from now.
 func (c *Controller) EndPowerTransition(success bool, actualState *bool) {
 	c.mu.Lock()
 	c.powerSettling = false
-	// Move transition start back so elapsed >= PowerSettlingTime (settling done)
-	// but elapsed < PowerTotalLockout (cooldown still active)
-	c.powerTransitionStart = float64(time.Now().UnixMilli())/1000 - PowerSettlingTime
+	c.powerTransitionStart = 0
+	c.powerCooldownStart = float64(time.Now().UnixMilli()) / 1000
 	oldState := c.state
 	if success {
 		if actualState != nil {
