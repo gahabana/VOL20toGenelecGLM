@@ -121,9 +121,14 @@ func (c *Controller) StartPowerTransition(targetState bool, traceID string) {
 }
 
 // EndPowerTransition marks the end of a power transition.
+// Resets the settling timer so settling is immediately over.
+// Cooldown starts from now (powerTransitionStart set to now - PowerSettlingTime).
 func (c *Controller) EndPowerTransition(success bool, actualState *bool) {
 	c.mu.Lock()
 	c.powerSettling = false
+	// Move transition start back so elapsed >= PowerSettlingTime (settling done)
+	// but elapsed < PowerTotalLockout (cooldown still active)
+	c.powerTransitionStart = float64(time.Now().UnixMilli())/1000 - PowerSettlingTime
 	oldState := c.state
 	if success {
 		if actualState != nil {
