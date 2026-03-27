@@ -8,6 +8,7 @@ import (
 	"vol20toglm/config"
 	"vol20toglm/hid"
 	"vol20toglm/midi"
+	"vol20toglm/power"
 	"vol20toglm/types"
 )
 
@@ -40,4 +41,8 @@ func createMIDIReader(cfg config.Config, log *slog.Logger) midi.Reader {
 		return &midi.StubReader{Log: log}
 	}
 	return r
+}
+
+func createPowerController(log *slog.Logger) power.Controller {
+	return power.NewWindowsController(log.With("component", "power"))
 }

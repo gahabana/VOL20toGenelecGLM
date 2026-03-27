@@ -8,6 +8,7 @@ import (
 	"vol20toglm/config"
 	"vol20toglm/hid"
 	"vol20toglm/midi"
+	"vol20toglm/power"
 	"vol20toglm/types"
 )
 
@@ -21,4 +22,8 @@ func createHIDReader(cfg config.Config, accel *hid.AccelerationHandler, traceGen
 
 func createMIDIReader(cfg config.Config, log *slog.Logger) midi.Reader {
 	return &midi.StubReader{Log: log.With("component", "midi-in")}
+}
+
+func createPowerController(log *slog.Logger) power.Controller {
+	return &power.StubController{Log: log.With("component", "power"), State: true}
 }

@@ -20,7 +20,7 @@ import (
 	"vol20toglm/types"
 )
 
-const version = "0.4.0"
+const version = "0.5.0"
 
 func main() {
 	cfg := config.Parse(os.Args[1:])
@@ -75,6 +75,9 @@ func main() {
 	midiIn := createMIDIReader(cfg, log)
 	defer midiIn.Close()
 
+	// Power controller — platform-specific
+	powerCtrl := createPowerController(log)
+
 	// Power pattern detector
 	midiLog := log.With("component", "midi-in")
 	powerDetector := controller.NewPowerPatternDetector(func() {
@@ -97,7 +100,7 @@ func main() {
 		if midiOut == nil {
 			log.Warn("no MIDI output, consumer running in dry-run mode")
 		}
-		consumer.Run(ctx, actions, ctrl, midiOut, 0, log.With("component", "consumer"))
+		consumer.Run(ctx, actions, ctrl, midiOut, 0, powerCtrl, log.With("component", "consumer"))
 	}()
 
 	// Start HID reader goroutine
