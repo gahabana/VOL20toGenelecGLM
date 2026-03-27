@@ -168,7 +168,7 @@ func main() {
 	}()
 
 	// Probe GLM state at startup
-	probeGLMState(midiOut, ctrl, probeCh, log)
+	probeGLMState(midiOut, probeCh, log)
 
 	// Start API server
 	if cfg.APIPort > 0 {
@@ -202,9 +202,10 @@ func main() {
 	log.Info("shutdown complete")
 }
 
-// probeGLMState sends CC21 (Vol+) to trigger GLM's state burst, reads the volume,
-// then sends CC20 (absolute) with value-1 to restore. Net zero volume change.
-func probeGLMState(midiOut midi.Writer, ctrl *controller.Controller, probeCh <-chan int, log *slog.Logger) {
+// probeGLMState sends CC21 (Vol+) then CC22 (Vol-) to discover GLM's state.
+// The Vol- response gives us the original volume (handles GLM's min/max clamping).
+// Net zero volume change in all cases.
+func probeGLMState(midiOut midi.Writer, probeCh <-chan int, log *slog.Logger) {
 	if midiOut == nil {
 		return
 	}
@@ -212,37 +213,42 @@ func probeGLMState(midiOut midi.Writer, ctrl *controller.Controller, probeCh <-c
 	// Small delay to let MIDI reader goroutine start
 	time.Sleep(100 * time.Millisecond)
 
-	log.Info("probing GLM state (sending CC21 Vol+)...")
+	// Step 1: Send CC21 (Vol+) — triggers GLM state burst
+	log.Info("probing GLM state...")
 	start := time.Now()
 	if err := midiOut.SendCC(0, types.CCVolUp, 127); err != nil {
-		log.Warn("probe: failed to send CC21", "err", err)
+		log.Warn("probe: failed to send CC21 (Vol+)", "err", err)
 		return
 	}
 
-	// Wait for volume response
+	var volUp int
 	select {
-	case vol := <-probeCh:
+	case volUp = <-probeCh:
 		elapsed := time.Since(start)
-		log.Info("probe: GLM responded",
-			"volume", vol,
-			"response_time", elapsed.Round(time.Millisecond),
-		)
-
-		// Restore: send CC20 with original volume (vol-1, since we nudged up)
-		// CC20 (absolute set) doesn't trigger a GLM response burst — just fire and forget
-		restore := vol - 1
-		if restore < 0 {
-			restore = 0
-		}
-		if err := midiOut.SendCC(0, types.CCVolumeAbs, restore); err != nil {
-			log.Warn("probe: failed to restore volume", "err", err)
-			return
-		}
-		// Update controller to the restored value directly
-		ctrl.UpdateFromMIDI(types.CCVolumeAbs, restore)
-		log.Info("probe: volume restored", "volume", restore)
-
+		log.Info("probe: Vol+ response", "volume", volUp, "response_time", elapsed.Round(time.Millisecond))
 	case <-time.After(1 * time.Second):
 		log.Warn("probe: no response from GLM within 1s (volume not initialized)")
+		return
+	}
+
+	// Step 2: Send CC22 (Vol-) — restores original volume
+	start2 := time.Now()
+	if err := midiOut.SendCC(0, types.CCVolDown, 127); err != nil {
+		log.Warn("probe: failed to send CC22 (Vol-)", "err", err)
+		return
+	}
+
+	select {
+	case volDown := <-probeCh:
+		elapsed2 := time.Since(start2)
+		log.Info("probe: Vol- response", "volume", volDown, "response_time", elapsed2.Round(time.Millisecond))
+
+		// volDown is the original volume (Vol+ then Vol- = net zero)
+		// If GLM clamped the Vol+ (at max), volUp == volDown and both are correct
+		log.Info("probe: GLM state initialized", "volume", volDown)
+
+	case <-time.After(1 * time.Second):
+		// Vol- didn't respond, but Vol+ did — use volUp-1 as best guess
+		log.Warn("probe: Vol- no response, using Vol+ value", "volume", volUp)
 	}
 }
