@@ -12,6 +12,8 @@ import (
 	"vol20toglm/types"
 )
 
+type msg struct{ cc, value int }
+
 func run() error {
 	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
 
@@ -27,7 +29,6 @@ func run() error {
 	}
 	defer reader.Close()
 
-	type msg struct{ cc, value int }
 	responses := make(chan msg, 20)
 
 	go reader.Start(func(channel, cc, value int) {
