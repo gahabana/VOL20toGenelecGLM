@@ -3,10 +3,15 @@
 package main
 
 import (
+	"fmt"
 	"log/slog"
 	"os/exec"
+	"strings"
+	"syscall"
 	"time"
+	"unsafe"
 
+	"golang.org/x/sys/windows"
 	"vol20toglm/config"
 	"vol20toglm/glm"
 	"vol20toglm/hid"
@@ -53,6 +58,159 @@ func createPowerController(log *slog.Logger) power.Controller {
 
 func createGLMManager(cfg config.Config, log *slog.Logger) glm.Manager {
 	return glm.NewWindowsManager(cfg.GLMPath, cfg.GLMCPUGating, log.With("component", "glm"))
+}
+
+func listDevices() {
+	fmt.Println("=== MIDI Output Ports (write to GLM) ===")
+	outPorts := midi.ListOutputPorts()
+	if len(outPorts) == 0 {
+		fmt.Println("  (none found)")
+	}
+	for i, name := range outPorts {
+		fmt.Printf("  [%d] %s\n", i, name)
+	}
+
+	fmt.Println("\n=== MIDI Input Ports (read from GLM) ===")
+	inPorts := midi.ListInputPorts()
+	if len(inPorts) == 0 {
+		fmt.Println("  (none found)")
+	}
+	for i, name := range inPorts {
+		fmt.Printf("  [%d] %s\n", i, name)
+	}
+
+	fmt.Println("\n=== HID Devices ===")
+	listHIDDevices()
+}
+
+func listHIDDevices() {
+	var guidHID = windows.GUID{
+		Data1: 0x4D1E55B2, Data2: 0xF16F, Data3: 0x11CF,
+		Data4: [8]byte{0x88, 0xCB, 0x00, 0x11, 0x11, 0x00, 0x00, 0x30},
+	}
+
+	setupapi := windows.NewLazySystemDLL("setupapi.dll")
+	hidDll := windows.NewLazySystemDLL("hid.dll")
+
+	procSetupDiGetClassDevsW := setupapi.NewProc("SetupDiGetClassDevsW")
+	procSetupDiEnumDeviceInterfaces := setupapi.NewProc("SetupDiEnumDeviceInterfaces")
+	procSetupDiGetDeviceInterfaceDetailW := setupapi.NewProc("SetupDiGetDeviceInterfaceDetailW")
+	procSetupDiDestroyDeviceInfoList := setupapi.NewProc("SetupDiDestroyDeviceInfoList")
+	procHidD_GetAttributes := hidDll.NewProc("HidD_GetAttributes")
+	procHidD_GetProductString := hidDll.NewProc("HidD_GetProductString")
+	procHidD_GetManufacturerString := hidDll.NewProc("HidD_GetManufacturerString")
+
+	type spDeviceInterfaceData struct {
+		cbSize             uint32
+		interfaceClassGuid windows.GUID
+		flags              uint32
+		reserved           uintptr
+	}
+	type hiddAttributes struct {
+		Size          uint32
+		VendorID      uint16
+		ProductID     uint16
+		VersionNumber uint16
+	}
+
+	devInfoSet, _, _ := procSetupDiGetClassDevsW.Call(
+		uintptr(unsafe.Pointer(&guidHID)), 0, 0, 0x02|0x10,
+	)
+	if devInfoSet == uintptr(windows.InvalidHandle) {
+		fmt.Println("  (failed to enumerate HID devices)")
+		return
+	}
+	defer procSetupDiDestroyDeviceInfoList.Call(devInfoSet)
+
+	var ifData spDeviceInterfaceData
+	ifData.cbSize = uint32(unsafe.Sizeof(ifData))
+
+	count := 0
+	seen := make(map[string]bool)
+
+	for i := uint32(0); ; i++ {
+		ret, _, _ := procSetupDiEnumDeviceInterfaces.Call(
+			devInfoSet, 0, uintptr(unsafe.Pointer(&guidHID)), uintptr(i), uintptr(unsafe.Pointer(&ifData)),
+		)
+		if ret == 0 {
+			break
+		}
+
+		// Get device path
+		var requiredSize uint32
+		procSetupDiGetDeviceInterfaceDetailW.Call(devInfoSet, uintptr(unsafe.Pointer(&ifData)), 0, 0, uintptr(unsafe.Pointer(&requiredSize)), 0)
+		if requiredSize == 0 {
+			continue
+		}
+		buf := make([]byte, requiredSize)
+		cbSize := uint32(8)
+		if unsafe.Sizeof(uintptr(0)) == 4 {
+			cbSize = 6
+		}
+		*(*uint32)(unsafe.Pointer(&buf[0])) = cbSize
+		ret, _, _ = procSetupDiGetDeviceInterfaceDetailW.Call(devInfoSet, uintptr(unsafe.Pointer(&ifData)), uintptr(unsafe.Pointer(&buf[0])), uintptr(requiredSize), 0, 0)
+		if ret == 0 {
+			continue
+		}
+
+		pathSlice := (*[4096]uint16)(unsafe.Pointer(&buf[4]))
+		devicePath := windows.UTF16ToString(pathSlice[:])
+
+		// Open device
+		pathPtr, _ := windows.UTF16PtrFromString(devicePath)
+		handle, err := windows.CreateFile(pathPtr, 0, windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE, nil, windows.OPEN_EXISTING, 0, 0)
+		if err != nil {
+			continue
+		}
+
+		// Get VID/PID
+		var attrs hiddAttributes
+		attrs.Size = uint32(unsafe.Sizeof(attrs))
+		ret, _, _ = procHidD_GetAttributes.Call(uintptr(handle), uintptr(unsafe.Pointer(&attrs)))
+		if ret == 0 {
+			windows.CloseHandle(handle)
+			continue
+		}
+
+		key := fmt.Sprintf("%04x:%04x", attrs.VendorID, attrs.ProductID)
+		if seen[key] {
+			windows.CloseHandle(handle)
+			continue
+		}
+		seen[key] = true
+
+		// Get product name
+		productBuf := make([]uint16, 128)
+		ret, _, _ = procHidD_GetProductString.Call(uintptr(handle), uintptr(unsafe.Pointer(&productBuf[0])), 128*2)
+		product := ""
+		if ret != 0 {
+			product = strings.TrimRight(syscall.UTF16ToString(productBuf), "\x00")
+		}
+
+		// Get manufacturer
+		mfgBuf := make([]uint16, 128)
+		ret, _, _ = procHidD_GetManufacturerString.Call(uintptr(handle), uintptr(unsafe.Pointer(&mfgBuf[0])), 128*2)
+		manufacturer := ""
+		if ret != 0 {
+			manufacturer = strings.TrimRight(syscall.UTF16ToString(mfgBuf), "\x00")
+		}
+
+		windows.CloseHandle(handle)
+
+		count++
+		fmt.Printf("  [%d] VID=0x%04X PID=0x%04X", count, attrs.VendorID, attrs.ProductID)
+		if manufacturer != "" {
+			fmt.Printf("  Manufacturer=%q", manufacturer)
+		}
+		if product != "" {
+			fmt.Printf("  Product=%q", product)
+		}
+		fmt.Println()
+	}
+
+	if count == 0 {
+		fmt.Println("  (none found)")
+	}
 }
 
 func runStartupTasks(cfg config.Config, log *slog.Logger) {

@@ -3,6 +3,7 @@
 package main
 
 import (
+	"fmt"
 	"log/slog"
 
 	"vol20toglm/config"
@@ -12,6 +13,11 @@ import (
 	"vol20toglm/power"
 	"vol20toglm/types"
 )
+
+func listDevices() {
+	fmt.Println("Device listing is only available on Windows.")
+	fmt.Println("Run this command on the Windows machine where GLM is installed.")
+}
 
 func createMIDIWriter(cfg config.Config, log *slog.Logger) midi.Writer {
 	return &midi.StubWriter{Log: log}

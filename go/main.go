@@ -28,6 +28,12 @@ const version = "0.6.0"
 func main() {
 	cfg := config.Parse(os.Args[1:])
 
+	if cfg.ListDevices {
+		fmt.Printf("vol20toglm v%s — device discovery\n\n", version)
+		listDevices()
+		return
+	}
+
 	log := applog.Setup(cfg.LogLevel, cfg.LogFileName)
 
 	fmt.Printf("vol20toglm v%s\n", version)

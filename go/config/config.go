@@ -7,6 +7,9 @@ import (
 
 // Config holds all application configuration.
 type Config struct {
+	// Discovery
+	ListDevices bool // Print available HID devices and MIDI ports, then exit
+
 	// Logging
 	LogLevel    string
 	LogFileName string
@@ -57,6 +60,8 @@ func Parse(args []string) Config {
 	cfg := Config{
 		VolumeIncreases: []int{1, 1, 2, 2, 3},
 	}
+
+	fs.BoolVar(&cfg.ListDevices, "list", false, "List available HID devices and MIDI ports, then exit")
 
 	fs.StringVar(&cfg.LogLevel, "log_level", "DEBUG", "Logging level: DEBUG, INFO, NONE")
 	fs.StringVar(&cfg.LogFileName, "log_file_name", "vol20toglm.log", "Log file name")
