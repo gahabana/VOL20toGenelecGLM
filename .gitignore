@@ -17,3 +17,6 @@ ENV/
 .vscode/
 *.swp
 *.swo
+
+# Go binaries
+go/vol20toglm
