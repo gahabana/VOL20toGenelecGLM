@@ -31,3 +31,13 @@ func createHIDReader(cfg config.Config, accel *hid.AccelerationHandler, traceGen
 		Log:      log.With("component", "hid"),
 	}
 }
+
+func createMIDIReader(cfg config.Config, log *slog.Logger) midi.Reader {
+	// MIDIOutChannel = GLM's output port (where we READ from)
+	r, err := midi.OpenWinMMReader(cfg.MIDIOutChannel, log)
+	if err != nil {
+		log.Error("failed to open MIDI input", "port", cfg.MIDIOutChannel, "err", err)
+		return &midi.StubReader{Log: log}
+	}
+	return r
+}

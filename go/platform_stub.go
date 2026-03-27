@@ -18,3 +18,7 @@ func createMIDIWriter(cfg config.Config, log *slog.Logger) midi.Writer {
 func createHIDReader(cfg config.Config, accel *hid.AccelerationHandler, traceGen *types.TraceIDGenerator, log *slog.Logger) hid.Reader {
 	return &hid.StubReader{Log: log.With("component", "hid")}
 }
+
+func createMIDIReader(cfg config.Config, log *slog.Logger) midi.Reader {
+	return &midi.StubReader{Log: log.With("component", "midi-in")}
+}

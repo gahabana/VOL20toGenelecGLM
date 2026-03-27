@@ -8,6 +8,7 @@ import (
 	"os/signal"
 	"sync"
 	"syscall"
+	"time"
 
 	"vol20toglm/config"
 	"vol20toglm/consumer"
@@ -16,7 +17,7 @@ import (
 	"vol20toglm/types"
 )
 
-const version = "0.2.0"
+const version = "0.3.0"
 
 func main() {
 	cfg := config.Parse(os.Args[1:])
@@ -56,6 +57,17 @@ func main() {
 		defer midiOut.Close()
 	}
 
+	// MIDI input — platform-specific
+	midiIn := createMIDIReader(cfg, log)
+	defer midiIn.Close()
+
+	// Power pattern detector
+	midiLog := log.With("component", "midi-in")
+	powerDetector := controller.NewPowerPatternDetector(func() {
+		newPower := ctrl.TogglePowerFromMIDIPattern()
+		midiLog.Info("power pattern detected", "new_power_state", newPower)
+	})
+
 	// Acceleration handler
 	accel := hid.NewAccelerationHandler(cfg.MinClickTime, cfg.MaxAvgClickTime, cfg.VolumeIncreases)
 
@@ -83,11 +95,39 @@ func main() {
 		}
 	}()
 
+	// Start MIDI input reader goroutine
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		err := midiIn.Start(func(channel, cc, value int) {
+			now := float64(time.Now().UnixMilli()) / 1000.0
+
+			ccName := types.CCNames[cc]
+			if ccName == "" {
+				ccName = fmt.Sprintf("CC%d", cc)
+			}
+			midiLog.Debug("MIDI recv", "cc", ccName, "cc_num", cc, "value", value, "channel", channel)
+
+			// Update controller state
+			changed := ctrl.UpdateFromMIDI(cc, value)
+			if changed {
+				midiLog.Debug("state updated from MIDI", "cc", ccName, "value", value)
+			}
+
+			// Feed to power pattern detector
+			powerDetector.Feed(cc, value, now)
+		})
+		if err != nil && ctx.Err() == nil {
+			log.Error("MIDI reader exited with error", "err", err)
+		}
+	}()
+
 	log.Info("running — press Ctrl+C to stop")
 	<-ctx.Done()
 	log.Info("shutting down")
 
 	cancel()
+	midiIn.Close()
 	wg.Wait()
 	log.Info("shutdown complete")
 }
