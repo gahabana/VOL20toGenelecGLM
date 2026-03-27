@@ -282,6 +282,14 @@ func (r *USBReader) readLoop(ctx context.Context, dev *hidDevice, actions chan<-
 			keycode = int(buf[0])
 		}
 
+		if keycode != 0 {
+			name := types.KeyNames[keycode]
+			if name == "" {
+				name = fmt.Sprintf("unknown(%d)", keycode)
+			}
+			r.Log.Debug("HID report", "keycode", keycode, "key", name, "bytes_read", bytesRead)
+		}
+
 		ProcessReport(keycode, time.Now(), r.Bindings, r.Accel, r.TraceGen, actions)
 	}
 }

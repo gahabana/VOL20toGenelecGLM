@@ -12,9 +12,10 @@ import (
 )
 
 func createMIDIWriter(cfg config.Config, log *slog.Logger) midi.Writer {
-	w, err := midi.OpenWinMMWriter(cfg.MIDIOutChannel, log)
+	// MIDIInChannel = GLM's input port (where we WRITE to)
+	w, err := midi.OpenWinMMWriter(cfg.MIDIInChannel, log)
 	if err != nil {
-		log.Error("failed to open MIDI output", "port", cfg.MIDIOutChannel, "err", err)
+		log.Error("failed to open MIDI output", "port", cfg.MIDIInChannel, "err", err)
 		return &midi.StubWriter{Log: log}
 	}
 	return w
