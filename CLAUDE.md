@@ -126,6 +126,22 @@ At script startup (`bridge2glm.py`):
 | Priming runs every boot | Flag file issue | Check `%TEMP%\rdp_primed.flag` exists and is writable |
 | High CPU still occurs | Priming failed or didn't run | Check logs for "RDP session primed successfully" |
 
+## Go Migration Rules
+- Python threading.Thread → goroutine
+- Python queue.Queue → Go channel
+- Python threading.Lock → sync.Mutex
+- Python dataclass → Go struct
+- Python Optional[T] → Go pointer or zero value
+- Python logging → Go log/slog (structured)
+- Use `go vet` and `gofmt` on all generated code
+- Idiomatic error handling: if err != nil { return err }
+- No naked returns, no init() unless necessary
+
+### Constants Documentation
+- Behavioral constants are kept near their code (Go convention)
+- **`go/CONSTANTS.md`** is the central reference for all tunable values
+- When adding or changing constants: update BOTH the source code AND `go/CONSTANTS.md`
+
 ### Architecture Notes
 - Multi-threaded application (HID, MIDI, Consumer, Logging threads)
 - Uses UI automation (pywinauto) for power control via pixel sampling
