@@ -195,3 +195,115 @@ func TestGetEffectiveVolume_PendingOverride(t *testing.T) {
 		t.Errorf("effective volume = %d, want 80 (confirmed)", vol)
 	}
 }
+
+func TestCanAcceptCommand_DuringSettling(t *testing.T) {
+	c := New()
+	c.StartPowerTransition(false, "test-0001")
+
+	allowed, wait, reason := c.CanAcceptCommand()
+	if allowed {
+		t.Error("should be blocked during settling")
+	}
+	if reason != "power_settling" {
+		t.Errorf("reason = %q, want power_settling", reason)
+	}
+	if wait <= 0 || wait > PowerSettlingTime {
+		t.Errorf("wait = %f, expected 0 < wait <= %f", wait, PowerSettlingTime)
+	}
+}
+
+func TestCanAcceptPowerCommand_DuringCooldown(t *testing.T) {
+	c := New()
+	// Manually set transition start to simulate settling already passed
+	c.mu.Lock()
+	c.powerTransitionStart = float64(time.Now().Add(-time.Duration(PowerSettlingTime*1000+100)*time.Millisecond).UnixMilli()) / 1000
+	c.powerSettling = false
+	c.mu.Unlock()
+
+	allowed, _, reason := c.CanAcceptPowerCommand()
+	if allowed {
+		t.Error("power command should be blocked during cooldown")
+	}
+	if reason != "power_cooldown" {
+		t.Errorf("reason = %q, want power_cooldown", reason)
+	}
+}
+
+func TestCanAcceptPowerCommand_AfterLockout(t *testing.T) {
+	c := New()
+	// Set transition start far enough in the past
+	c.mu.Lock()
+	c.powerTransitionStart = float64(time.Now().Add(-4*time.Second).UnixMilli()) / 1000
+	c.powerSettling = false
+	c.mu.Unlock()
+
+	allowed, _, _ := c.CanAcceptPowerCommand()
+	if !allowed {
+		t.Error("power command should be allowed after lockout expires")
+	}
+}
+
+func TestTogglePowerFromMIDIPattern(t *testing.T) {
+	c := New()
+	// Default power is true
+	newPower := c.TogglePowerFromMIDIPattern()
+	if newPower {
+		t.Error("toggle from ON should give OFF")
+	}
+	newPower = c.TogglePowerFromMIDIPattern()
+	if !newPower {
+		t.Error("toggle from OFF should give ON")
+	}
+}
+
+func TestStateCallback_CalledOnChange(t *testing.T) {
+	c := New()
+	var called bool
+	var gotOld, gotNew types.State
+
+	c.OnStateChange(func(old, new_ types.State) {
+		called = true
+		gotOld = old
+		gotNew = new_
+	})
+
+	c.UpdateFromMIDI(types.CCVolumeAbs, 80)
+
+	if !called {
+		t.Fatal("callback not called")
+	}
+	if gotOld.Volume != 0 {
+		t.Errorf("old volume = %d, want 0", gotOld.Volume)
+	}
+	if gotNew.Volume != 80 {
+		t.Errorf("new volume = %d, want 80", gotNew.Volume)
+	}
+}
+
+func TestStateCallback_NotCalledWhenUnchanged(t *testing.T) {
+	c := New()
+	c.UpdateFromMIDI(types.CCVolumeAbs, 80)
+
+	callCount := 0
+	c.OnStateChange(func(old, new_ types.State) {
+		callCount++
+	})
+
+	c.UpdateFromMIDI(types.CCVolumeAbs, 80) // same value
+	if callCount != 0 {
+		t.Errorf("callback called %d times for unchanged state", callCount)
+	}
+}
+
+func TestEndPowerTransition_UpdatesState(t *testing.T) {
+	c := New()
+	c.StartPowerTransition(false, "test-0001")
+
+	actualState := false
+	c.EndPowerTransition(true, &actualState)
+
+	state := c.GetState()
+	if state.Power {
+		t.Error("power should be OFF after successful transition to OFF")
+	}
+}
