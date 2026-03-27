@@ -37,7 +37,7 @@ const (
 	digcfDeviceInterface = 0x10
 
 	readTimeoutMs = 1000
-	retryDelay    = 500 * time.Millisecond
+	retryDelay    = 5 * time.Second
 	maxReportSize = 64 // Typical max HID report size
 )
 
@@ -77,25 +77,13 @@ type USBReader struct {
 }
 
 // Run opens the HID device and reads reports in a loop until ctx is cancelled.
+// Retries every 5s if the device is not found, with exponential backoff on log messages.
 func (r *USBReader) Run(ctx context.Context, actions chan<- types.Action) error {
 	for {
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-
-		dev, err := r.openDevice()
+		// Try to connect, with exponential log backoff while waiting
+		dev, err := r.connectWithBackoff(ctx)
 		if err != nil {
-			r.Log.Warn("HID device not found, retrying",
-				"vid", fmt.Sprintf("0x%04x", r.VID),
-				"pid", fmt.Sprintf("0x%04x", r.PID),
-				"err", err,
-			)
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			case <-time.After(retryDelay):
-				continue
-			}
+			return err // ctx cancelled
 		}
 
 		r.Log.Info("HID device connected",
@@ -111,9 +99,43 @@ func (r *USBReader) Run(ctx context.Context, actions chan<- types.Action) error 
 		}
 
 		r.Log.Warn("HID device disconnected, reconnecting", "err", err)
+	}
+}
+
+// connectWithBackoff retries opening the HID device every 5s.
+// Logs at attempt 1, 2, 4, 8, 16, 32, 64... to avoid flooding.
+func (r *USBReader) connectWithBackoff(ctx context.Context) (*hidDevice, error) {
+	attempt := 0
+	nextLogAt := 1
+
+	for {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+
+		dev, err := r.openDevice()
+		if err == nil {
+			if attempt > 0 {
+				r.Log.Info("HID device found after retrying", "attempts", attempt)
+			}
+			return dev, nil
+		}
+
+		attempt++
+		if attempt == nextLogAt {
+			r.Log.Warn("HID device not found",
+				"vid", fmt.Sprintf("0x%04x", r.VID),
+				"pid", fmt.Sprintf("0x%04x", r.PID),
+				"attempt", attempt,
+				"next_log_at", nextLogAt*2,
+				"err", err,
+			)
+			nextLogAt *= 2
+		}
+
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			return nil, ctx.Err()
 		case <-time.After(retryDelay):
 		}
 	}
