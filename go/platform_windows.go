@@ -85,7 +85,7 @@ func listDevices() {
 
 // Known USB vendor IDs for identification when device strings are unavailable.
 var knownVendors = map[uint16]string{
-	0x07D7: "Griffin Technology (PowerMate/VOL20)",
+	0x07D7: "Griffin Technology",
 	0x1AF4: "Red Hat / VirtIO (VM virtual device)",
 	0x1781: "Genelec",
 	0x045E: "Microsoft",
