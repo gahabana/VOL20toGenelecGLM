@@ -168,7 +168,7 @@ func main() {
 	}()
 
 	// Probe GLM state at startup
-	probeGLMState(midiOut, probeCh, log)
+	probeGLMState(midiOut, ctrl, probeCh, log)
 
 	// Start API server
 	if cfg.APIPort > 0 {
@@ -204,7 +204,7 @@ func main() {
 
 // probeGLMState sends CC21 (Vol+) to trigger GLM's state burst, reads the volume,
 // then sends CC20 (absolute) with value-1 to restore. Net zero volume change.
-func probeGLMState(midiOut midi.Writer, probeCh <-chan int, log *slog.Logger) {
+func probeGLMState(midiOut midi.Writer, ctrl *controller.Controller, probeCh <-chan int, log *slog.Logger) {
 	if midiOut == nil {
 		return
 	}
@@ -229,27 +229,18 @@ func probeGLMState(midiOut midi.Writer, probeCh <-chan int, log *slog.Logger) {
 		)
 
 		// Restore: send CC20 with original volume (vol-1, since we nudged up)
+		// CC20 (absolute set) doesn't trigger a GLM response burst — just fire and forget
 		restore := vol - 1
 		if restore < 0 {
 			restore = 0
 		}
-		restoreStart := time.Now()
 		if err := midiOut.SendCC(0, types.CCVolumeAbs, restore); err != nil {
 			log.Warn("probe: failed to restore volume", "err", err)
 			return
 		}
-
-		// Wait for restore confirmation
-		select {
-		case restoredVol := <-probeCh:
-			restoreElapsed := time.Since(restoreStart)
-			log.Info("probe: volume restored",
-				"volume", restoredVol,
-				"response_time", restoreElapsed.Round(time.Millisecond),
-			)
-		case <-time.After(1 * time.Second):
-			log.Info("probe: restore sent (no confirmation within 1s, volume set to)", "volume", restore)
-		}
+		// Update controller to the restored value directly
+		ctrl.UpdateFromMIDI(types.CCVolumeAbs, restore)
+		log.Info("probe: volume restored", "volume", restore)
 
 	case <-time.After(1 * time.Second):
 		log.Warn("probe: no response from GLM within 1s (volume not initialized)")
