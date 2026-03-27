@@ -83,6 +83,20 @@ func listDevices() {
 	listHIDDevices()
 }
 
+// Known USB vendor IDs for identification when device strings are unavailable.
+var knownVendors = map[uint16]string{
+	0x07D7: "Griffin Technology (PowerMate/VOL20)",
+	0x1AF4: "Red Hat / VirtIO (VM virtual device)",
+	0x1781: "Genelec",
+	0x045E: "Microsoft",
+	0x046D: "Logitech",
+	0x1532: "Razer",
+	0x04F2: "Chicony Electronics",
+	0x0B05: "ASUS",
+	0x2516: "Cooler Master",
+	0x258A: "SINO WEALTH (generic keyboard/mouse)",
+}
+
 func listHIDDevices() {
 	var guidHID = windows.GUID{
 		Data1: 0x4D1E55B2, Data2: 0xF16F, Data3: 0x11CF,
@@ -199,13 +213,18 @@ func listHIDDevices() {
 
 		count++
 		fmt.Printf("  [%d] VID=0x%04X PID=0x%04X", count, attrs.VendorID, attrs.ProductID)
+
+		// Show manufacturer (from device or known vendor table)
 		if manufacturer != "" {
 			fmt.Printf("  Manufacturer=%q", manufacturer)
+		} else if known, ok := knownVendors[attrs.VendorID]; ok {
+			fmt.Printf("  Vendor=%q", known)
 		}
 		if product != "" {
 			fmt.Printf("  Product=%q", product)
 		}
 		fmt.Println()
+		fmt.Printf("        Path: %s\n", devicePath)
 	}
 
 	if count == 0 {
