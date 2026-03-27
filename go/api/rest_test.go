@@ -17,7 +17,7 @@ func newTestServer() (*Server, chan types.Action) {
 	ctrl.UpdateFromMIDI(types.CCVolumeAbs, 50) // Initialize volume to 50
 	actions := make(chan types.Action, 10)
 	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
-	srv := NewServer(ctrl, actions, "test-v1.0", log)
+	srv := NewServer(ctrl, actions, "test-v1.0", "", log)
 	return srv, actions
 }
 

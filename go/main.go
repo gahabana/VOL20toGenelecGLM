@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"sync"
 	"syscall"
 	"time"
@@ -54,7 +55,12 @@ func main() {
 	actions := make(chan types.Action, 100)
 
 	// API server
-	apiServer := api.NewServer(ctrl, actions, version, log.With("component", "api"))
+	// Web UI directory — look relative to executable, then fall back to ../web
+	webDir := filepath.Join(filepath.Dir(os.Args[0]), "..", "web")
+	if _, err := os.Stat(filepath.Join(webDir, "index.html")); err != nil {
+		webDir = "" // No web UI found
+	}
+	apiServer := api.NewServer(ctrl, actions, version, webDir, log.With("component", "api"))
 	ctrl.OnStateChange(func(old, new_ types.State) {
 		apiServer.BroadcastState()
 	})

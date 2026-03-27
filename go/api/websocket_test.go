@@ -20,7 +20,7 @@ func TestWebSocket_ConnectReceivesState(t *testing.T) {
 	ctrl.UpdateFromMIDI(types.CCVolumeAbs, 65)
 	actions := make(chan types.Action, 10)
 	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
-	srv := NewServer(ctrl, actions, "test", log)
+	srv := NewServer(ctrl, actions, "test", "", log)
 
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
@@ -56,7 +56,7 @@ func TestWebSocket_BroadcastOnStateChange(t *testing.T) {
 	ctrl.UpdateFromMIDI(types.CCVolumeAbs, 50)
 	actions := make(chan types.Action, 10)
 	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
-	srv := NewServer(ctrl, actions, "test", log)
+	srv := NewServer(ctrl, actions, "test", "", log)
 
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
@@ -102,7 +102,7 @@ func TestWebSocket_MultipleClients(t *testing.T) {
 	ctrl.UpdateFromMIDI(types.CCVolumeAbs, 50)
 	actions := make(chan types.Action, 10)
 	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
-	srv := NewServer(ctrl, actions, "test", log)
+	srv := NewServer(ctrl, actions, "test", "", log)
 
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()

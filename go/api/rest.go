@@ -6,6 +6,8 @@ import (
 	"log/slog"
 	"math"
 	"net/http"
+	"os"
+	"path/filepath"
 	"time"
 	"vol20toglm/controller"
 	"vol20toglm/types"
@@ -29,17 +31,20 @@ type Server struct {
 	actions chan<- types.Action
 	traceID *types.TraceIDGenerator
 	version string
+	webDir  string
 	log     *slog.Logger
 	wsHub   *WSHub
 }
 
 // NewServer creates a new REST API server.
-func NewServer(ctrl *controller.Controller, actions chan<- types.Action, version string, log *slog.Logger) *Server {
+// webDir is the path to the web/ directory containing index.html and favicon.svg.
+func NewServer(ctrl *controller.Controller, actions chan<- types.Action, version, webDir string, log *slog.Logger) *Server {
 	return &Server{
 		ctrl:    ctrl,
 		actions: actions,
 		traceID: types.NewTraceIDGenerator(),
 		version: version,
+		webDir:  webDir,
 		log:     log,
 		wsHub:   NewWSHub(log),
 	}
@@ -56,6 +61,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/power", s.handlePower)
 	mux.HandleFunc("GET /api/health", s.handleHealth)
 	mux.HandleFunc("GET /ws/state", s.handleWebSocket)
+	mux.HandleFunc("GET /favicon.svg", s.handleFavicon)
+	mux.HandleFunc("GET /", s.handleIndex)
 	return mux
 }
 
@@ -240,6 +247,27 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		"status":  "ok",
 		"version": s.version,
 	})
+}
+
+func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
+	if s.webDir == "" {
+		http.Error(w, "web UI not configured", http.StatusNotFound)
+		return
+	}
+	path := filepath.Join(s.webDir, "index.html")
+	if _, err := os.Stat(path); err != nil {
+		http.Error(w, "index.html not found", http.StatusNotFound)
+		return
+	}
+	http.ServeFile(w, r, path)
+}
+
+func (s *Server) handleFavicon(w http.ResponseWriter, r *http.Request) {
+	if s.webDir == "" {
+		http.NotFound(w, r)
+		return
+	}
+	http.ServeFile(w, r, filepath.Join(s.webDir, "favicon.svg"))
 }
 
 func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
