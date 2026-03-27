@@ -7,6 +7,7 @@ import (
 
 	"vol20toglm/controller"
 	"vol20toglm/midi"
+	"vol20toglm/power"
 	"vol20toglm/types"
 )
 
@@ -16,18 +17,18 @@ const (
 
 // Run is the consumer goroutine. It reads actions from the channel,
 // applies them to the controller, and sends the resulting MIDI messages.
-func Run(ctx context.Context, actions <-chan types.Action, ctrl *controller.Controller, midiOut midi.Writer, midiChannel int, log *slog.Logger) {
+func Run(ctx context.Context, actions <-chan types.Action, ctrl *controller.Controller, midiOut midi.Writer, midiChannel int, powerCtrl power.Controller, log *slog.Logger) {
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case a := <-actions:
-			processAction(a, ctrl, midiOut, midiChannel, log)
+			processAction(a, ctrl, midiOut, midiChannel, powerCtrl, log)
 		}
 	}
 }
 
-func processAction(a types.Action, ctrl *controller.Controller, midiOut midi.Writer, midiChannel int, log *slog.Logger) {
+func processAction(a types.Action, ctrl *controller.Controller, midiOut midi.Writer, midiChannel int, powerCtrl power.Controller, log *slog.Logger) {
 	// Stale event filter
 	age := time.Since(a.Timestamp).Seconds()
 	if age > MaxEventAge {
@@ -39,7 +40,7 @@ func processAction(a types.Action, ctrl *controller.Controller, midiOut midi.Wri
 		return
 	}
 
-	// Power settling check
+	// Power actions: check power-specific settling, then use pixel toggle or MIDI
 	if a.Kind == types.KindSetPower {
 		allowed, wait, reason := ctrl.CanAcceptPowerCommand()
 		if !allowed {
@@ -50,7 +51,32 @@ func processAction(a types.Action, ctrl *controller.Controller, midiOut midi.Wri
 			)
 			return
 		}
+
+		// Pixel-based power toggle when power controller is available
+		if powerCtrl != nil {
+			log.Info("toggling power via UI automation", "trace_id", a.TraceID)
+			ctrl.StartPowerTransition(!ctrl.GetState().Power, a.TraceID)
+
+			if err := powerCtrl.Toggle(); err != nil {
+				log.Error("power toggle failed", "trace_id", a.TraceID, "err", err)
+				ctrl.EndPowerTransition(false, nil)
+				return
+			}
+
+			newState, err := powerCtrl.GetState()
+			if err != nil {
+				log.Error("power state read failed", "trace_id", a.TraceID, "err", err)
+				ctrl.EndPowerTransition(false, nil)
+				return
+			}
+
+			ctrl.EndPowerTransition(true, &newState)
+			log.Info("power toggle complete", "trace_id", a.TraceID, "power", newState)
+			return
+		}
+		// Fall through to MIDI send when powerCtrl is nil
 	} else {
+		// Non-power actions: check general settling
 		allowed, wait, reason := ctrl.CanAcceptCommand()
 		if !allowed {
 			log.Warn("command blocked",

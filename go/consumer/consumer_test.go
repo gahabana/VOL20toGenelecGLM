@@ -53,7 +53,7 @@ func TestConsumer_SetVolume(t *testing.T) {
 	ctx, cancel, actions, ctrl, mw, log := newTestSetup()
 	defer cancel()
 
-	go Run(ctx, actions, ctrl, mw, 0, log)
+	go Run(ctx, actions, ctrl, mw, 0, nil, log)
 
 	actions <- types.Action{
 		Kind:      types.KindSetVolume,
@@ -78,7 +78,7 @@ func TestConsumer_AdjustVolume(t *testing.T) {
 	ctx, cancel, actions, ctrl, mw, log := newTestSetup()
 	defer cancel()
 
-	go Run(ctx, actions, ctrl, mw, 0, log)
+	go Run(ctx, actions, ctrl, mw, 0, nil, log)
 
 	actions <- types.Action{
 		Kind:      types.KindAdjustVolume,
@@ -103,7 +103,7 @@ func TestConsumer_MuteToggle(t *testing.T) {
 	ctx, cancel, actions, ctrl, mw, log := newTestSetup()
 	defer cancel()
 
-	go Run(ctx, actions, ctrl, mw, 0, log)
+	go Run(ctx, actions, ctrl, mw, 0, nil, log)
 
 	actions <- types.Action{
 		Kind:      types.KindSetMute,
@@ -128,7 +128,7 @@ func TestConsumer_StaleEventDropped(t *testing.T) {
 	ctx, cancel, actions, ctrl, mw, log := newTestSetup()
 	defer cancel()
 
-	go Run(ctx, actions, ctrl, mw, 0, log)
+	go Run(ctx, actions, ctrl, mw, 0, nil, log)
 
 	actions <- types.Action{
 		Kind:      types.KindSetVolume,
@@ -152,7 +152,7 @@ func TestConsumer_PowerSettlingBlocks(t *testing.T) {
 
 	ctrl.StartPowerTransition(false, "test-power")
 
-	go Run(ctx, actions, ctrl, mw, 0, log)
+	go Run(ctx, actions, ctrl, mw, 0, nil, log)
 
 	actions <- types.Action{
 		Kind:      types.KindSetVolume,
@@ -174,7 +174,7 @@ func TestConsumer_PowerToggle(t *testing.T) {
 	ctx, cancel, actions, ctrl, mw, log := newTestSetup()
 	defer cancel()
 
-	go Run(ctx, actions, ctrl, mw, 0, log)
+	go Run(ctx, actions, ctrl, mw, 0, nil, log)
 
 	actions <- types.Action{
 		Kind:      types.KindSetPower,
@@ -203,7 +203,7 @@ func TestConsumer_AdjustVolumeBeforeInit(t *testing.T) {
 	mw := &mockWriter{}
 	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 
-	go Run(ctx, actions, ctrl, mw, 0, log)
+	go Run(ctx, actions, ctrl, mw, 0, nil, log)
 
 	actions <- types.Action{
 		Kind:      types.KindAdjustVolume,
