@@ -45,8 +45,9 @@ func (a *AccelerationHandler) CalculateSpeed(currentTime float64, button int) in
 		a.count = 1
 		a.firstTime = currentTime
 	} else {
-		// Accelerate: index into volume list using current count
-		idx := a.count
+		// Accelerate: count maps 1..len to indices 0..len-1
+		// Beyond list length, use last element (caps acceleration)
+		idx := a.count - 1
 		if idx >= a.listLen {
 			idx = a.listLen - 1
 		}

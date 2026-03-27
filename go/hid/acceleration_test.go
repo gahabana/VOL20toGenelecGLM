@@ -23,11 +23,14 @@ func TestAcceleration_SlowClicks_NoAcceleration(t *testing.T) {
 func TestAcceleration_FastClicks_Accelerates(t *testing.T) {
 	a := NewAccelerationHandler(0.2, 0.15, []int{1, 1, 2, 2, 3})
 	// Fast clicks: 0.05s apart, avg well under max_per_click_avg
-	a.CalculateSpeed(1.0, 1)      // count=1, delta=1
-	a.CalculateSpeed(1.05, 1)     // count=2, delta=volume_list[1]=1
-	a.CalculateSpeed(1.10, 1)     // count=3, delta=volume_list[2]=2
-	a.CalculateSpeed(1.15, 1)     // count=4, delta=volume_list[3]=2
-	delta := a.CalculateSpeed(1.20, 1) // count=5, delta=volume_list[4]=3
+	// 1st click always resets to 1, then list[count-1] from 2nd click onwards
+	// Expected sequence: 1, list[0]=1, list[1]=1, list[2]=2, list[3]=2, list[4]=3
+	a.CalculateSpeed(1.0, 1)       // reset, delta=1
+	a.CalculateSpeed(1.05, 1)      // list[0]=1
+	a.CalculateSpeed(1.10, 1)      // list[1]=1
+	a.CalculateSpeed(1.15, 1)      // list[2]=2
+	a.CalculateSpeed(1.20, 1)      // list[3]=2
+	delta := a.CalculateSpeed(1.25, 1) // list[4]=3
 	if delta != 3 {
 		t.Errorf("fast clicks: got delta %d, want 3", delta)
 	}
@@ -48,11 +51,13 @@ func TestAcceleration_DirectionChange_Resets(t *testing.T) {
 
 func TestAcceleration_BeyondListLength_UsesLastValue(t *testing.T) {
 	a := NewAccelerationHandler(0.2, 0.15, []int{1, 2, 3})
-	// 4 fast clicks — exceeds list length of 3
-	a.CalculateSpeed(1.0, 1)
-	a.CalculateSpeed(1.05, 1)
-	a.CalculateSpeed(1.10, 1)
-	delta := a.CalculateSpeed(1.15, 1) // count=4 > len=3, use last=3
+	// list[0]=1, list[1]=2, list[2]=3, then last element repeats
+	// Sequence: reset=1, list[0]=1, list[1]=2, list[2]=3, list[-1]=3
+	a.CalculateSpeed(1.0, 1)       // reset
+	a.CalculateSpeed(1.05, 1)      // list[0]=1
+	a.CalculateSpeed(1.10, 1)      // list[1]=2
+	a.CalculateSpeed(1.15, 1)      // list[2]=3
+	delta := a.CalculateSpeed(1.20, 1) // beyond len, use last=3
 	if delta != 3 {
 		t.Errorf("beyond list: got delta %d, want 3", delta)
 	}
