@@ -6,6 +6,7 @@ import (
 	"log/slog"
 
 	"vol20toglm/config"
+	"vol20toglm/glm"
 	"vol20toglm/hid"
 	"vol20toglm/midi"
 	"vol20toglm/power"
@@ -26,4 +27,12 @@ func createMIDIReader(cfg config.Config, log *slog.Logger) midi.Reader {
 
 func createPowerController(log *slog.Logger) power.Controller {
 	return &power.StubController{Log: log.With("component", "power"), State: true}
+}
+
+func createGLMManager(cfg config.Config, log *slog.Logger) glm.Manager {
+	return &glm.StubManager{Log: log.With("component", "glm")}
+}
+
+func runStartupTasks(cfg config.Config, log *slog.Logger) {
+	// No startup tasks on non-Windows
 }

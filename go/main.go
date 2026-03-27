@@ -16,11 +16,12 @@ import (
 	"vol20toglm/config"
 	"vol20toglm/consumer"
 	"vol20toglm/controller"
+	"vol20toglm/glm"
 	"vol20toglm/hid"
 	"vol20toglm/types"
 )
 
-const version = "0.5.0"
+const version = "0.6.0"
 
 func main() {
 	cfg := config.Parse(os.Args[1:])
@@ -48,6 +49,21 @@ func main() {
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
+
+	// === Startup automation (headless VM) ===
+	runStartupTasks(cfg, log)
+
+	// GLM Manager (launch/attach, watchdog)
+	var glmMgr glm.Manager
+	if cfg.GLMManager {
+		glmMgr = createGLMManager(cfg, log)
+		if err := glmMgr.Start(); err != nil {
+			log.Error("GLM manager start failed", "err", err)
+		} else {
+			defer glmMgr.Stop()
+		}
+	}
+	_ = glmMgr
 
 	// Core components
 	ctrl := controller.New()
