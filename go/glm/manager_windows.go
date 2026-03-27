@@ -39,8 +39,8 @@ const (
 
 // Watchdog constants.
 const (
-	watchdogInterval = 5 * time.Second
-	hangThreshold    = 6
+	watchdogInterval = 10 * time.Second
+	hangThreshold    = 3 // 3 x 10s = 30s before kill+restart
 	restartDelay     = 5 * time.Second
 )
 
