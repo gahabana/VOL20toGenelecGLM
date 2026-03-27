@@ -12,6 +12,12 @@
 - Prefer graceful degradation over disruptive recovery mechanisms
 - UI responsiveness is a priority
 
+### Subagent Model Selection
+- Before dispatching subagents, **ask the user** whether to use Sonnet (faster, cheaper) or Opus (more capable)
+- Mechanical tasks (isolated file changes, clear specs, 1-2 files) — recommend Sonnet
+- Integration tasks, architectural decisions, debugging — recommend Opus
+- Default to asking, never assume Opus for all subagents
+
 ### Change Management
 - Discuss the trade-offs of each approach
 - Consider the impact on normal operation, not just edge case recovery
