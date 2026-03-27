@@ -18,6 +18,7 @@ import (
 	"vol20toglm/controller"
 	"vol20toglm/glm"
 	"vol20toglm/hid"
+	"vol20toglm/midi"
 	"vol20toglm/types"
 )
 
@@ -101,6 +102,9 @@ func main() {
 		midiLog.Info("power pattern detected", "new_power_state", newPower)
 	})
 
+	// Channel for startup volume probe (buffered, non-blocking send from callback)
+	probeCh := make(chan int, 10)
+
 	// Acceleration handler
 	accel := hid.NewAccelerationHandler(cfg.MinClickTime, cfg.MaxAvgClickTime, cfg.VolumeIncreases)
 
@@ -149,11 +153,22 @@ func main() {
 
 			// Feed to power pattern detector
 			powerDetector.Feed(cc, value, now)
+
+			// Feed volume to startup probe (non-blocking)
+			if cc == types.CCVolumeAbs {
+				select {
+				case probeCh <- value:
+				default:
+				}
+			}
 		})
 		if err != nil && ctx.Err() == nil {
 			log.Error("MIDI reader exited with error", "err", err)
 		}
 	}()
+
+	// Probe GLM state at startup
+	probeGLMState(midiOut, probeCh, log)
 
 	// Start API server
 	if cfg.APIPort > 0 {
@@ -185,4 +200,58 @@ func main() {
 	midiIn.Close()
 	wg.Wait()
 	log.Info("shutdown complete")
+}
+
+// probeGLMState sends CC21 (Vol+) to trigger GLM's state burst, reads the volume,
+// then sends CC20 (absolute) with value-1 to restore. Net zero volume change.
+func probeGLMState(midiOut midi.Writer, probeCh <-chan int, log *slog.Logger) {
+	if midiOut == nil {
+		return
+	}
+
+	// Small delay to let MIDI reader goroutine start
+	time.Sleep(100 * time.Millisecond)
+
+	log.Info("probing GLM state (sending CC21 Vol+)...")
+	start := time.Now()
+	if err := midiOut.SendCC(0, types.CCVolUp, 127); err != nil {
+		log.Warn("probe: failed to send CC21", "err", err)
+		return
+	}
+
+	// Wait for volume response
+	select {
+	case vol := <-probeCh:
+		elapsed := time.Since(start)
+		log.Info("probe: GLM responded",
+			"volume", vol,
+			"response_time", elapsed.Round(time.Millisecond),
+		)
+
+		// Restore: send CC20 with original volume (vol-1, since we nudged up)
+		restore := vol - 1
+		if restore < 0 {
+			restore = 0
+		}
+		restoreStart := time.Now()
+		if err := midiOut.SendCC(0, types.CCVolumeAbs, restore); err != nil {
+			log.Warn("probe: failed to restore volume", "err", err)
+			return
+		}
+
+		// Wait for restore confirmation
+		select {
+		case restoredVol := <-probeCh:
+			restoreElapsed := time.Since(restoreStart)
+			log.Info("probe: volume restored",
+				"volume", restoredVol,
+				"response_time", restoreElapsed.Round(time.Millisecond),
+			)
+		case <-time.After(1 * time.Second):
+			log.Info("probe: restore sent (no confirmation within 1s, volume set to)", "volume", restore)
+		}
+
+	case <-time.After(1 * time.Second):
+		log.Warn("probe: no response from GLM within 1s (volume not initialized)")
+	}
 }
