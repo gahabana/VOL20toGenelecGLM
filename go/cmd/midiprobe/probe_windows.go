@@ -39,7 +39,7 @@ func run() error {
 	// Test 1: CC21, wait, 200ms settle, CC22, wait
 	fmt.Println("=== Test 1: CC21 (Vol+) — 200ms settle — CC22 (Vol-) ===")
 	fmt.Println("Sending CC21 (Vol+)...")
-	writer.SendCC(0, types.CCVolUp, 127)
+	writer.SendCC(0, types.CCVolUp, 127, "midiprobe")
 	vol1 := waitForVolume(responses, 1*time.Second)
 	fmt.Printf("  Volume after Vol+: %d\n", vol1)
 
@@ -47,7 +47,7 @@ func run() error {
 	time.Sleep(50 * time.Millisecond)
 
 	fmt.Println("Sending CC22 (Vol-)...")
-	writer.SendCC(0, types.CCVolDown, 127)
+	writer.SendCC(0, types.CCVolDown, 127, "midiprobe")
 	vol2 := waitForVolume(responses, 1*time.Second)
 	fmt.Printf("  Volume after Vol-: %d\n", vol2)
 	if vol1 >= 0 && vol2 >= 0 {
@@ -60,7 +60,7 @@ func run() error {
 	// Test 2: CC21, wait, 200ms settle, CC20 absolute restore
 	fmt.Println("\n=== Test 2: CC21 (Vol+) — 200ms settle — CC20 (restore) ===")
 	fmt.Println("Sending CC21 (Vol+)...")
-	writer.SendCC(0, types.CCVolUp, 127)
+	writer.SendCC(0, types.CCVolUp, 127, "midiprobe")
 	vol3 := waitForVolume(responses, 1*time.Second)
 	fmt.Printf("  Volume after Vol+: %d\n", vol3)
 
@@ -69,7 +69,7 @@ func run() error {
 
 	restore := vol3 - 1
 	fmt.Printf("Sending CC20 (Volume=%d) to restore...\n", restore)
-	writer.SendCC(0, types.CCVolumeAbs, restore)
+	writer.SendCC(0, types.CCVolumeAbs, restore, "midiprobe")
 	vol4 := waitForVolume(responses, 1*time.Second)
 	fmt.Printf("  Volume after restore: %d (expected %d)\n", vol4, restore)
 
@@ -80,7 +80,7 @@ func run() error {
 	fmt.Println("\n=== Test 3: CC21 (Vol+) x3 — reliability check ===")
 	for i := 1; i <= 3; i++ {
 		fmt.Printf("Sending CC21 #%d...\n", i)
-		writer.SendCC(0, types.CCVolUp, 127)
+		writer.SendCC(0, types.CCVolUp, 127, "midiprobe")
 		v := waitForVolume(responses, 1*time.Second)
 		fmt.Printf("  Volume: %d\n", v)
 		time.Sleep(50 * time.Millisecond)
@@ -89,7 +89,7 @@ func run() error {
 	// Restore: send 3x CC22 to undo
 	fmt.Println("\nRestoring: 3x CC22 (Vol-)...")
 	for i := 0; i < 3; i++ {
-		writer.SendCC(0, types.CCVolDown, 127)
+		writer.SendCC(0, types.CCVolDown, 127, "midiprobe")
 		waitForVolume(responses, 1*time.Second)
 		time.Sleep(50 * time.Millisecond)
 	}

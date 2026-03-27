@@ -9,6 +9,8 @@ import (
 	"sync"
 	"syscall"
 	"unsafe"
+
+	"vol20toglm/types"
 )
 
 var (
@@ -77,9 +79,15 @@ func OpenWinMMWriter(portName string, log *slog.Logger) (*WinMMWriter, error) {
 // SendCC sends a MIDI Control Change message.
 // Message format: status | (cc << 8) | (value << 16)
 // Status byte: 0xB0 | channel (channel is 0-15)
-func (w *WinMMWriter) SendCC(channel, cc, value int) error {
+func (w *WinMMWriter) SendCC(channel, cc, value int, traceID string) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
+
+	ccName := types.CCNames[cc]
+	if ccName == "" {
+		ccName = fmt.Sprintf("CC%d", cc)
+	}
+	w.log.Debug("MIDI send", "cc", ccName, "cc_num", cc, "value", value, "channel", channel, "trace_id", traceID)
 
 	statusByte := 0xB0 | (channel & 0x0F)
 	midiMessage := uintptr(statusByte) | uintptr(cc&0x7F)<<8 | uintptr(value&0x7F)<<16

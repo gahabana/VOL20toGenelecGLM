@@ -4,7 +4,7 @@ import "log/slog"
 
 // Writer sends MIDI CC messages.
 type Writer interface {
-	SendCC(channel, cc, value int) error
+	SendCC(channel, cc, value int, traceID string) error
 	Close() error
 }
 
@@ -22,8 +22,8 @@ type StubWriter struct {
 	Log *slog.Logger
 }
 
-func (s *StubWriter) SendCC(channel, cc, value int) error {
-	s.Log.Debug("MIDI stub: SendCC", "channel", channel, "cc", cc, "value", value)
+func (s *StubWriter) SendCC(channel, cc, value int, traceID string) error {
+	s.Log.Debug("MIDI stub: SendCC", "channel", channel, "cc", cc, "value", value, "trace_id", traceID)
 	return nil
 }
 

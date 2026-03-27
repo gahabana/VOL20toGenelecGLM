@@ -99,7 +99,7 @@ func processAction(a types.Action, ctrl *controller.Controller, midiOut midi.Wri
 			"trace_id", a.TraceID,
 			"cc", cc,
 		)
-		if err := midiOut.SendCC(midiChannel, cc, 127); err != nil {
+		if err := midiOut.SendCC(midiChannel, cc, 127, a.TraceID); err != nil {
 			log.Error("MIDI send failed", "trace_id", a.TraceID, "err", err)
 		}
 		return
@@ -117,13 +117,7 @@ func processAction(a types.Action, ctrl *controller.Controller, midiOut midi.Wri
 	}
 
 	// Send MIDI
-	log.Debug("sending MIDI",
-		"trace_id", a.TraceID,
-		"cc", types.CCNames[cc],
-		"cc_num", cc,
-		"value", val,
-	)
-	if err := midiOut.SendCC(midiChannel, cc, val); err != nil {
+	if err := midiOut.SendCC(midiChannel, cc, val, a.TraceID); err != nil {
 		log.Error("MIDI send failed",
 			"trace_id", a.TraceID,
 			"cc", cc,

@@ -219,7 +219,7 @@ func probeGLMState(midiOut midi.Writer, probeCh <-chan int, log *slog.Logger) {
 	// Step 1: Send CC21 (Vol+) — triggers GLM state burst
 	log.Info("probing GLM state...")
 	start := time.Now()
-	if err := midiOut.SendCC(0, types.CCVolUp, 127); err != nil {
+	if err := midiOut.SendCC(0, types.CCVolUp, 127, "probe"); err != nil {
 		log.Warn("probe: failed to send CC21 (Vol+)", "err", err)
 		return
 	}
@@ -236,7 +236,7 @@ func probeGLMState(midiOut midi.Writer, probeCh <-chan int, log *slog.Logger) {
 
 	// Step 2: Send CC22 (Vol-) — restores original volume
 	start2 := time.Now()
-	if err := midiOut.SendCC(0, types.CCVolDown, 127); err != nil {
+	if err := midiOut.SendCC(0, types.CCVolDown, 127, "probe"); err != nil {
 		log.Warn("probe: failed to send CC22 (Vol-)", "err", err)
 		return
 	}

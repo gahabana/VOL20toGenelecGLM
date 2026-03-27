@@ -22,7 +22,7 @@ type ccMsg struct {
 	channel, cc, value int
 }
 
-func (m *mockWriter) SendCC(channel, cc, value int) error {
+func (m *mockWriter) SendCC(channel, cc, value int, traceID string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.sent = append(m.sent, ccMsg{channel, cc, value})
