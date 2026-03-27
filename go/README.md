@@ -17,10 +17,24 @@ Go 1.22+ required to build from source. Download from [go.dev](https://go.dev/dl
 
 ## Building
 
+**Development build** (includes debug symbols):
+
 ```cmd
 cd go
 go build -o vol20toglm.exe .
 ```
+
+**Release build** (stripped, ~30% smaller):
+
+```cmd
+cd go
+go build -ldflags="-s -w" -o vol20toglm.exe .
+```
+
+| Build | Windows size | macOS size |
+|-------|-------------|------------|
+| Development | 10.3 MB | 8.8 MB |
+| Release (`-s -w`) | 7.2 MB | 6.0 MB |
 
 ## Quick Start
 
@@ -106,6 +120,14 @@ Port matching is substring-based — `GLMMIDI` matches `GLMMIDI 1`, `GLMMIDI 2`,
 | `--no_rdp_priming` | | Disable RDP priming |
 | `--midi_restart` | `true` | Restart Windows MIDI service at startup |
 | `--no_midi_restart` | | Disable MIDI service restart |
+| `--high_priority` | `true` | Set process priority to AboveNormal |
+| `--no_high_priority` | | Run at normal priority |
+
+### Discovery
+
+| Flag | Description |
+|------|-------------|
+| `--list` | List available HID devices and MIDI ports, then exit |
 
 ## REST API Endpoints
 
