@@ -10,6 +10,7 @@ import (
 	"unsafe"
 
 	"golang.org/x/sys/windows"
+	applog "vol20toglm/logging"
 	"vol20toglm/types"
 )
 
@@ -103,10 +104,9 @@ func (r *USBReader) Run(ctx context.Context, actions chan<- types.Action) error 
 }
 
 // connectWithBackoff retries opening the HID device every 5s.
-// Logs at attempt 1, 2, 4, 8, 16, 32, 64... to avoid flooding.
+// Log messages throttled via time-based milestones (2s, 10s, 1m, 10m, 1h, 1d).
 func (r *USBReader) connectWithBackoff(ctx context.Context) (*hidDevice, error) {
-	attempt := 0
-	nextLogAt := 1
+	retryLog := applog.NewRetryLogger(nil)
 
 	for {
 		if ctx.Err() != nil {
@@ -115,22 +115,19 @@ func (r *USBReader) connectWithBackoff(ctx context.Context) (*hidDevice, error) 
 
 		dev, err := r.openDevice()
 		if err == nil {
-			if attempt > 0 {
-				r.Log.Info("HID device found after retrying", "attempts", attempt)
+			if retryLog.RetryCount("hid") > 0 {
+				r.Log.Info("HID device found after retrying", "attempts", retryLog.RetryCount("hid"))
 			}
 			return dev, nil
 		}
 
-		attempt++
-		if attempt == nextLogAt {
+		if retryLog.ShouldLog("hid") {
 			r.Log.Warn("HID device not found",
 				"vid", fmt.Sprintf("0x%04x", r.VID),
 				"pid", fmt.Sprintf("0x%04x", r.PID),
-				"attempt", attempt,
-				"next_log_at", nextLogAt*2,
 				"err", err,
+				"info", retryLog.RetryInfo("hid"),
 			)
-			nextLogAt *= 2
 		}
 
 		select {

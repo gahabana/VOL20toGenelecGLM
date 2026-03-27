@@ -3,6 +3,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"os/exec"
@@ -15,20 +16,38 @@ import (
 	"vol20toglm/config"
 	"vol20toglm/glm"
 	"vol20toglm/hid"
+	applog "vol20toglm/logging"
 	"vol20toglm/midi"
 	"vol20toglm/power"
 	"vol20toglm/rdp"
 	"vol20toglm/types"
 )
 
-func createMIDIWriter(cfg config.Config, log *slog.Logger) midi.Writer {
+func createMIDIWriter(cfg config.Config, ctx context.Context, log *slog.Logger) midi.Writer {
 	// MIDIInChannel = GLM's input port (where we WRITE to)
-	w, err := midi.OpenWinMMWriter(cfg.MIDIInChannel, log)
-	if err != nil {
-		log.Error("failed to open MIDI output", "port", cfg.MIDIInChannel, "err", err)
-		return &midi.StubWriter{Log: log}
+	retryLog := applog.NewRetryLogger(nil)
+	for {
+		w, err := midi.OpenWinMMWriter(cfg.MIDIInChannel, log)
+		if err == nil {
+			if retryLog.RetryCount("midi_out") > 0 {
+				log.Info("MIDI output connected after retrying", "port", cfg.MIDIInChannel, "attempts", retryLog.RetryCount("midi_out"))
+			}
+			return w
+		}
+		if retryLog.ShouldLog("midi_out") {
+			log.Warn("MIDI output not found, retrying",
+				"port", cfg.MIDIInChannel,
+				"err", err,
+				"info", retryLog.RetryInfo("midi_out"),
+			)
+		}
+		select {
+		case <-ctx.Done():
+			log.Error("MIDI output not available, using stub", "port", cfg.MIDIInChannel)
+			return &midi.StubWriter{Log: log}
+		case <-time.After(5 * time.Second):
+		}
 	}
-	return w
 }
 
 func createHIDReader(cfg config.Config, accel *hid.AccelerationHandler, traceGen *types.TraceIDGenerator, log *slog.Logger) hid.Reader {
@@ -42,14 +61,31 @@ func createHIDReader(cfg config.Config, accel *hid.AccelerationHandler, traceGen
 	}
 }
 
-func createMIDIReader(cfg config.Config, log *slog.Logger) midi.Reader {
+func createMIDIReader(cfg config.Config, ctx context.Context, log *slog.Logger) midi.Reader {
 	// MIDIOutChannel = GLM's output port (where we READ from)
-	r, err := midi.OpenWinMMReader(cfg.MIDIOutChannel, log)
-	if err != nil {
-		log.Error("failed to open MIDI input", "port", cfg.MIDIOutChannel, "err", err)
-		return &midi.StubReader{Log: log}
+	retryLog := applog.NewRetryLogger(nil)
+	for {
+		r, err := midi.OpenWinMMReader(cfg.MIDIOutChannel, log)
+		if err == nil {
+			if retryLog.RetryCount("midi_in") > 0 {
+				log.Info("MIDI input connected after retrying", "port", cfg.MIDIOutChannel, "attempts", retryLog.RetryCount("midi_in"))
+			}
+			return r
+		}
+		if retryLog.ShouldLog("midi_in") {
+			log.Warn("MIDI input not found, retrying",
+				"port", cfg.MIDIOutChannel,
+				"err", err,
+				"info", retryLog.RetryInfo("midi_in"),
+			)
+		}
+		select {
+		case <-ctx.Done():
+			log.Error("MIDI input not available, using stub", "port", cfg.MIDIOutChannel)
+			return &midi.StubReader{Log: log}
+		case <-time.After(5 * time.Second):
+		}
 	}
-	return r
 }
 
 func createPowerController(log *slog.Logger) power.Controller {

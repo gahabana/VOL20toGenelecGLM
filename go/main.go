@@ -86,13 +86,13 @@ func main() {
 	})
 
 	// MIDI output — platform-specific, created in platform_*.go
-	midiOut := createMIDIWriter(cfg, log)
+	midiOut := createMIDIWriter(cfg, ctx, log)
 	if midiOut != nil {
 		defer midiOut.Close()
 	}
 
 	// MIDI input — platform-specific
-	midiIn := createMIDIReader(cfg, log)
+	midiIn := createMIDIReader(cfg, ctx, log)
 	defer midiIn.Close()
 
 	// Power controller — platform-specific

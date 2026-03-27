@@ -3,6 +3,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 
@@ -23,7 +24,7 @@ func listDevices() {
 	fmt.Println("Run this command on the Windows machine where GLM is installed.")
 }
 
-func createMIDIWriter(cfg config.Config, log *slog.Logger) midi.Writer {
+func createMIDIWriter(cfg config.Config, ctx context.Context, log *slog.Logger) midi.Writer {
 	return &midi.StubWriter{Log: log}
 }
 
@@ -31,7 +32,7 @@ func createHIDReader(cfg config.Config, accel *hid.AccelerationHandler, traceGen
 	return &hid.StubReader{Log: log.With("component", "hid")}
 }
 
-func createMIDIReader(cfg config.Config, log *slog.Logger) midi.Reader {
+func createMIDIReader(cfg config.Config, ctx context.Context, log *slog.Logger) midi.Reader {
 	return &midi.StubReader{Log: log.With("component", "midi-in")}
 }
 
