@@ -44,6 +44,12 @@ func TestDefaults(t *testing.T) {
 	if !cfg.GLMCPUGating {
 		t.Error("GLMCPUGating should default to true")
 	}
+	if !cfg.RDPPriming {
+		t.Error("RDPPriming should default to true")
+	}
+	if !cfg.MIDIRestart {
+		t.Error("MIDIRestart should default to true")
+	}
 	wantList := []int{1, 1, 2, 2, 3}
 	if len(cfg.VolumeIncreases) != len(wantList) {
 		t.Fatalf("VolumeIncreases len = %d, want %d", len(cfg.VolumeIncreases), len(wantList))

@@ -44,6 +44,10 @@ type Config struct {
 	GLMManager   bool
 	GLMPath      string
 	GLMCPUGating bool
+
+	// Startup automation
+	RDPPriming  bool
+	MIDIRestart bool
 }
 
 // Parse parses CLI arguments and returns a Config with defaults applied.
@@ -87,6 +91,11 @@ func Parse(args []string) Config {
 	fs.BoolVar(&cfg.GLMCPUGating, "glm_cpu_gating", true, "Wait for CPU idle before starting GLM")
 	noGLMCPUGating := fs.Bool("no_glm_cpu_gating", false, "Disable CPU gating")
 
+	fs.BoolVar(&cfg.RDPPriming, "rdp_priming", true, "Prime RDP session at startup (headless VM)")
+	noRDPPriming := fs.Bool("no_rdp_priming", false, "Disable RDP session priming")
+	fs.BoolVar(&cfg.MIDIRestart, "midi_restart", true, "Restart Windows MIDI service at startup")
+	noMIDIRestart := fs.Bool("no_midi_restart", false, "Disable MIDI service restart")
+
 	fs.Parse(args) //nolint:errcheck
 
 	// Parse volume increases list
@@ -112,6 +121,12 @@ func Parse(args []string) Config {
 	}
 	if *noGLMCPUGating {
 		cfg.GLMCPUGating = false
+	}
+	if *noRDPPriming {
+		cfg.RDPPriming = false
+	}
+	if *noMIDIRestart {
+		cfg.MIDIRestart = false
 	}
 
 	return cfg
