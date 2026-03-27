@@ -39,12 +39,7 @@ func (h *WSHub) Broadcast(state APIState) {
 		return
 	}
 
-	h.log.Debug("broadcasting state",
-		"power", state.Power,
-		"power_transitioning", state.PowerTransitioning,
-		"settling_remaining", state.PowerSettlingRemaining,
-		"cooldown", state.PowerCooldown,
-	)
+	h.log.Debug("ws broadcast", "clients", len(h.clients))
 
 	h.mu.Lock()
 	clients := make([]*websocket.Conn, 0, len(h.clients))
