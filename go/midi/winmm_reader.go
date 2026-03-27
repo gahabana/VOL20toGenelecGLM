@@ -35,11 +35,12 @@ type midiInCaps struct {
 	dwSupport      uint32
 }
 
-// midiMsg is a parsed CC message from the callback.
+// midiMsg is a parsed MIDI message from the callback.
 type midiMsg struct {
+	status  byte // Raw status byte (0xB0=CC, 0x90=NoteOn, etc.)
 	channel int
-	cc      int
-	value   int
+	data1   int // CC number or note number
+	data2   int // Value or velocity
 }
 
 // Package-level channel for the callback. Only one MIDI reader per process.
@@ -50,18 +51,16 @@ var globalMidiInCh chan midiMsg
 func midiInProc(hMidiIn uintptr, msg uint32, instance uintptr, param1 uintptr, param2 uintptr) uintptr {
 	if msg == mimData {
 		status := byte(param1 & 0xFF)
-		// Only CC messages (0xB0-0xBF)
-		if status >= 0xB0 && status <= 0xBF {
-			m := midiMsg{
-				channel: int(status & 0x0F),
-				cc:      int((param1 >> 8) & 0xFF),
-				value:   int((param1 >> 16) & 0xFF),
-			}
-			select {
-			case globalMidiInCh <- m:
-			default:
-				// Drop if buffer full — never block the system thread
-			}
+		m := midiMsg{
+			status:  status,
+			channel: int(status & 0x0F),
+			data1:   int((param1 >> 8) & 0xFF),
+			data2:   int((param1 >> 16) & 0xFF),
+		}
+		select {
+		case globalMidiInCh <- m:
+		default:
+			// Drop if buffer full — never block the system thread
 		}
 	}
 	return 0
@@ -129,7 +128,21 @@ func (r *WinMMReader) Start(cb ReaderCallback) error {
 	for {
 		select {
 		case msg := <-globalMidiInCh:
-			cb(msg.channel, msg.cc, msg.value)
+			msgType := msg.status & 0xF0
+			switch {
+			case msgType == 0xB0: // Control Change
+				cb(msg.channel, msg.data1, msg.data2)
+			case msgType == 0x90: // Note On
+				r.log.Warn("unexpected MIDI Note On", "channel", msg.channel, "note", msg.data1, "velocity", msg.data2)
+			case msgType == 0x80: // Note Off
+				r.log.Warn("unexpected MIDI Note Off", "channel", msg.channel, "note", msg.data1)
+			case msgType == 0xE0: // Pitch Bend
+				r.log.Warn("unexpected MIDI Pitch Bend", "channel", msg.channel)
+			case msgType == 0xC0: // Program Change
+				r.log.Warn("unexpected MIDI Program Change", "channel", msg.channel, "program", msg.data1)
+			default:
+				r.log.Warn("unexpected MIDI message", "status", fmt.Sprintf("0x%02X", msg.status), "data1", msg.data1, "data2", msg.data2)
+			}
 		case <-r.done:
 			return nil
 		}
