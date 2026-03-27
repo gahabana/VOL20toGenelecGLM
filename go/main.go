@@ -4,12 +4,14 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/signal"
 	"sync"
 	"syscall"
 	"time"
 
+	"vol20toglm/api"
 	"vol20toglm/config"
 	"vol20toglm/consumer"
 	"vol20toglm/controller"
@@ -17,7 +19,7 @@ import (
 	"vol20toglm/types"
 )
 
-const version = "0.3.0"
+const version = "0.4.0"
 
 func main() {
 	cfg := config.Parse(os.Args[1:])
@@ -50,6 +52,12 @@ func main() {
 	ctrl := controller.New()
 	traceGen := types.NewTraceIDGenerator()
 	actions := make(chan types.Action, 100)
+
+	// API server
+	apiServer := api.NewServer(ctrl, actions, version, log.With("component", "api"))
+	ctrl.OnStateChange(func(old, new_ types.State) {
+		apiServer.BroadcastState()
+	})
 
 	// MIDI output — platform-specific, created in platform_*.go
 	midiOut := createMIDIWriter(cfg, log)
@@ -121,6 +129,28 @@ func main() {
 			log.Error("MIDI reader exited with error", "err", err)
 		}
 	}()
+
+	// Start API server
+	if cfg.APIPort > 0 {
+		httpServer := &http.Server{
+			Addr:    fmt.Sprintf(":%d", cfg.APIPort),
+			Handler: apiServer.Handler(),
+		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			log.Info("API server listening", "port", cfg.APIPort)
+			if err := httpServer.ListenAndServe(); err != http.ErrServerClosed {
+				log.Error("API server error", "err", err)
+			}
+		}()
+		go func() {
+			<-ctx.Done()
+			shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer shutdownCancel()
+			httpServer.Shutdown(shutdownCtx)
+		}()
+	}
 
 	log.Info("running — press Ctrl+C to stop")
 	<-ctx.Done()
