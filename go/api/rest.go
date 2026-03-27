@@ -217,7 +217,7 @@ func (s *Server) handleToggleBool(w http.ResponseWriter, r *http.Request, kind t
 	var body struct {
 		State *bool `json:"state"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil && err.Error() != "EOF" {
 		writeJSONError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
 		return
 	}
