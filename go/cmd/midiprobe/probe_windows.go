@@ -36,84 +36,113 @@ func run() error {
 	})
 	time.Sleep(100 * time.Millisecond)
 
-	// Test 1: CC21, wait, 200ms settle, CC22, wait
-	fmt.Println("=== Test 1: CC21 (Vol+) — 200ms settle — CC22 (Vol-) ===")
-	fmt.Println("Sending CC21 (Vol+)...")
-	writer.SendCC(0, types.CCVolUp, 127, "midiprobe")
-	vol1 := waitForVolume(responses, 1*time.Second)
-	fmt.Printf("  Volume after Vol+: %d\n", vol1)
+	// Drain any stale messages
+	drain(responses)
 
-	fmt.Println("  (settling 200ms...)")
-	time.Sleep(50 * time.Millisecond)
+	limit := 2000 * time.Millisecond
+	minLimit := 10 * time.Millisecond
+	round := 1
 
-	fmt.Println("Sending CC22 (Vol-)...")
-	writer.SendCC(0, types.CCVolDown, 127, "midiprobe")
-	vol2 := waitForVolume(responses, 1*time.Second)
-	fmt.Printf("  Volume after Vol-: %d\n", vol2)
-	if vol1 >= 0 && vol2 >= 0 {
-		fmt.Printf("  Net change: %d (should be 0)\n", vol2-(vol1-1))
+	fmt.Println("=== GLM MIDI Timing Probe ===")
+	fmt.Println("Each round: Vol- then Vol+ (net zero change)")
+	fmt.Println("Wait limit shrinks by 20% each round until GLM stops responding")
+	fmt.Println()
+
+	for limit >= minLimit {
+		fmt.Printf("--- Round %d | wait limit: %dms ---\n", round, limit.Milliseconds())
+
+		// Step 1: Send Vol-
+		fmt.Printf("  [%s] SEND Vol- (CC%d=127)\n", ts(), types.CCVolDown)
+		sendTime := time.Now()
+		writer.SendCC(0, types.CCVolDown, 127, "probe")
+		volDownMsgs := waitMessages(responses, 3, limit, sendTime)
+		printMessages("Vol-", volDownMsgs, sendTime)
+
+		// Step 2: Send Vol+
+		fmt.Printf("  [%s] SEND Vol+ (CC%d=127)\n", ts(), types.CCVolUp)
+		sendTime2 := time.Now()
+		writer.SendCC(0, types.CCVolUp, 127, "probe")
+		volUpMsgs := waitMessages(responses, 3, limit, sendTime2)
+		printMessages("Vol+", volUpMsgs, sendTime2)
+
+		// Summary
+		gotDown := countVolume(volDownMsgs)
+		gotUp := countVolume(volUpMsgs)
+		fmt.Printf("  RESULT: Vol- volume_response=%v (%d msgs) | Vol+ volume_response=%v (%d msgs)\n",
+			gotDown >= 0, len(volDownMsgs), gotUp >= 0, len(volUpMsgs))
+
+		if gotDown < 0 || gotUp < 0 {
+			fmt.Printf("  *** MISSED RESPONSE at limit=%dms ***\n", limit.Milliseconds())
+		}
+		fmt.Println()
+
+		limit = time.Duration(float64(limit) * 0.8)
+		round++
 	}
 
-	fmt.Println("  (settling 200ms...)")
-	time.Sleep(50 * time.Millisecond)
-
-	// Test 2: CC21, wait, 200ms settle, CC20 absolute restore
-	fmt.Println("\n=== Test 2: CC21 (Vol+) — 200ms settle — CC20 (restore) ===")
-	fmt.Println("Sending CC21 (Vol+)...")
-	writer.SendCC(0, types.CCVolUp, 127, "midiprobe")
-	vol3 := waitForVolume(responses, 1*time.Second)
-	fmt.Printf("  Volume after Vol+: %d\n", vol3)
-
-	fmt.Println("  (settling 200ms...)")
-	time.Sleep(50 * time.Millisecond)
-
-	restore := vol3 - 1
-	fmt.Printf("Sending CC20 (Volume=%d) to restore...\n", restore)
-	writer.SendCC(0, types.CCVolumeAbs, restore, "midiprobe")
-	vol4 := waitForVolume(responses, 1*time.Second)
-	fmt.Printf("  Volume after restore: %d (expected %d)\n", vol4, restore)
-
-	fmt.Println("  (settling 200ms...)")
-	time.Sleep(50 * time.Millisecond)
-
-	// Test 3: Just CC21 alone — does it always trigger a response?
-	fmt.Println("\n=== Test 3: CC21 (Vol+) x3 — reliability check ===")
-	for i := 1; i <= 3; i++ {
-		fmt.Printf("Sending CC21 #%d...\n", i)
-		writer.SendCC(0, types.CCVolUp, 127, "midiprobe")
-		v := waitForVolume(responses, 1*time.Second)
-		fmt.Printf("  Volume: %d\n", v)
-		time.Sleep(50 * time.Millisecond)
-	}
-
-	// Restore: send 3x CC22 to undo
-	fmt.Println("\nRestoring: 3x CC22 (Vol-)...")
-	for i := 0; i < 3; i++ {
-		writer.SendCC(0, types.CCVolDown, 127, "midiprobe")
-		waitForVolume(responses, 1*time.Second)
-		time.Sleep(50 * time.Millisecond)
-	}
-	fmt.Println("Done.")
-
+	fmt.Println("=== Probe complete ===")
 	return nil
 }
 
-func waitForVolume(ch chan msg, timeout time.Duration) int {
+// waitMessages waits for up to maxMsgs messages within the timeout.
+// Returns as soon as maxMsgs are received or timeout expires.
+func waitMessages(ch chan msg, maxMsgs int, timeout time.Duration, sendTime time.Time) []timedMsg {
+	var result []timedMsg
 	deadline := time.After(timeout)
-	for {
+
+	for len(result) < maxMsgs {
 		select {
 		case m := <-ch:
-			name := types.CCNames[m.cc]
-			if name == "" {
-				name = fmt.Sprintf("CC%d", m.cc)
-			}
-			fmt.Printf("    recv: %-8s (CC%d) = %d\n", name, m.cc, m.value)
-			if m.cc == types.CCVolumeAbs {
-				return m.value
-			}
+			result = append(result, timedMsg{
+				msg:     m,
+				elapsed: time.Since(sendTime),
+			})
 		case <-deadline:
-			fmt.Println("    (timeout — no volume response)")
-			return -1
+			return result
 		}
 	}
+	return result
+}
+
+type timedMsg struct {
+	msg
+	elapsed time.Duration
+}
+
+func printMessages(label string, msgs []timedMsg, sendTime time.Time) {
+	if len(msgs) == 0 {
+		fmt.Printf("    %s: (no response)\n", label)
+		return
+	}
+	for i, m := range msgs {
+		ccName := types.CCNames[m.cc]
+		if ccName == "" {
+			ccName = fmt.Sprintf("CC%d", m.cc)
+		}
+		fmt.Printf("    %s recv[%d]: %-8s (CC%d) = %-3d  @ +%dms\n",
+			label, i+1, ccName, m.cc, m.value, m.elapsed.Milliseconds())
+	}
+}
+
+func countVolume(msgs []timedMsg) int {
+	for _, m := range msgs {
+		if m.cc == types.CCVolumeAbs {
+			return m.value
+		}
+	}
+	return -1
+}
+
+func drain(ch chan msg) {
+	for {
+		select {
+		case <-ch:
+		default:
+			return
+		}
+	}
+}
+
+func ts() string {
+	return time.Now().Format("15:04:05.000")
 }
