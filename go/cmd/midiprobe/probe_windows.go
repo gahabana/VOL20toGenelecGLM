@@ -50,7 +50,7 @@ func run() error {
 	return nil
 }
 
-func printResponses(ch chan struct{ cc, value int }, timeout time.Duration) {
+func printResponses(ch chan msg, timeout time.Duration) {
 	deadline := time.After(timeout)
 	count := 0
 	for {
