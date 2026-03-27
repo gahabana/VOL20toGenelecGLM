@@ -36,6 +36,11 @@ func main() {
 
 	log := applog.Setup(cfg.LogLevel, cfg.LogFileName)
 
+	// Set process priority
+	if cfg.HighPriority {
+		setProcessPriority(log)
+	}
+
 	fmt.Printf("vol20toglm v%s\n", version)
 	log.Info("starting",
 		"version", version,

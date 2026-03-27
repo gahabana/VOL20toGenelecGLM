@@ -49,8 +49,9 @@ type Config struct {
 	GLMCPUGating bool
 
 	// Startup automation
-	RDPPriming  bool
-	MIDIRestart bool
+	RDPPriming      bool
+	MIDIRestart     bool
+	HighPriority    bool // Set process priority to AboveNormal
 }
 
 // Parse parses CLI arguments and returns a Config with defaults applied.
@@ -100,6 +101,8 @@ func Parse(args []string) Config {
 	noRDPPriming := fs.Bool("no_rdp_priming", false, "Disable RDP session priming")
 	fs.BoolVar(&cfg.MIDIRestart, "midi_restart", true, "Restart Windows MIDI service at startup")
 	noMIDIRestart := fs.Bool("no_midi_restart", false, "Disable MIDI service restart")
+	fs.BoolVar(&cfg.HighPriority, "high_priority", true, "Set process priority to AboveNormal")
+	noHighPriority := fs.Bool("no_high_priority", false, "Disable elevated process priority")
 
 	fs.Parse(args) //nolint:errcheck
 
@@ -132,6 +135,9 @@ func Parse(args []string) Config {
 	}
 	if *noMIDIRestart {
 		cfg.MIDIRestart = false
+	}
+	if *noHighPriority {
+		cfg.HighPriority = false
 	}
 
 	return cfg

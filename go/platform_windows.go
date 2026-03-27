@@ -232,6 +232,23 @@ func listHIDDevices() {
 	}
 }
 
+func setProcessPriority(log *slog.Logger) {
+	handle, err := windows.GetCurrentProcess()
+	if err != nil {
+		log.Warn("could not get current process handle", "err", err)
+		return
+	}
+	// ABOVE_NORMAL_PRIORITY_CLASS = 0x8000
+	ret, _, err := windows.NewLazySystemDLL("kernel32.dll").NewProc("SetPriorityClass").Call(
+		uintptr(handle), 0x8000,
+	)
+	if ret == 0 {
+		log.Warn("SetPriorityClass failed", "err", err)
+	} else {
+		log.Info("process priority set to AboveNormal")
+	}
+}
+
 func runStartupTasks(cfg config.Config, log *slog.Logger) {
 	// RDP priming
 	if cfg.RDPPriming {
