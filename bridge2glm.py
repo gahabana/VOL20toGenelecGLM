@@ -5,7 +5,7 @@ Bridges a Fosi Audio VOL20 USB volume knob to Genelec GLM software via MIDI.
 Supports volume control, mute, dim, and power management with UI automation.
 """
 
-__version__ = "3.2.33"
+__version__ = "3.2.34"
 
 import time
 import signal
@@ -978,30 +978,47 @@ class HIDToMIDIDaemon:
                                     self._rx_seq = []
                                     continue
 
-                                # Power pattern detected - toggle state then verify via pixel read
+                                # Power pattern detected - toggle state immediately, verify later
                                 new_power = glm_controller.toggle_power_from_midi_pattern()
                                 logger.info(f"power.pattern: RF power toggle detected - now {'ON' if new_power else 'OFF'}")
 
-                                # Verify via pixel read if power controller is available
+                                # Start power cooldown (blocks further power commands, but NOT volume/mute/dim)
+                                # Unlike start_power_transition(), this only sets the timestamp
+                                # without _power_settling, so can_accept_command() still allows through.
+                                with glm_controller._lock:
+                                    glm_controller._power_transition_start = time.time()
+
+                                # Deferred verification via pixel read (non-blocking)
+                                # OFFLINE labels take ~1.5s to appear/disappear after power toggle,
+                                # so we wait before checking. Runs in a daemon thread to avoid
+                                # blocking MIDI reader.
                                 if self._power_controller:
-                                    if ensure_session_connected:
-                                        ensure_session_connected(logger=logger)
-                                    try:
-                                        actual_state = self._power_controller.get_state()
-                                        if actual_state in ("on", "off"):
-                                            actual_power = (actual_state == "on")
-                                            if actual_power != new_power:
-                                                # Pattern toggle was wrong - correct it
-                                                with glm_controller._lock:
-                                                    glm_controller.power = actual_power
-                                                glm_controller._notify_state_change()
-                                                logger.warning(f"power.pattern: Pixel read corrected state to {'ON' if actual_power else 'OFF'} (pattern said {'ON' if new_power else 'OFF'})")
+                                    power_controller = self._power_controller
+                                    def _deferred_power_verify(expected_power=new_power):
+                                        time.sleep(1.5)
+                                        if ensure_session_connected:
+                                            ensure_session_connected(logger=logger)
+                                        try:
+                                            actual_state = power_controller.get_state()
+                                            if actual_state in ("on", "off"):
+                                                actual_power = (actual_state == "on")
+                                                if actual_power != expected_power:
+                                                    with glm_controller._lock:
+                                                        glm_controller.power = actual_power
+                                                    glm_controller._notify_state_change()
+                                                    logger.warning(f"power.verify: Corrected state to {'ON' if actual_power else 'OFF'} (pattern said {'ON' if expected_power else 'OFF'})")
+                                                else:
+                                                    logger.debug(f"power.verify: Confirmed {'ON' if actual_power else 'OFF'}")
                                             else:
-                                                logger.debug(f"power.pattern: Pixel read confirmed {'ON' if actual_power else 'OFF'}")
-                                        else:
-                                            logger.debug(f"power.pattern: Pixel read returned '{actual_state}', keeping pattern result")
-                                    except Exception as e:
-                                        logger.debug(f"power.pattern: Pixel verify failed: {e}, keeping pattern result")
+                                                logger.debug(f"power.verify: Read returned '{actual_state}', keeping pattern result")
+                                        except Exception as e:
+                                            logger.debug(f"power.verify: Failed: {e}, keeping pattern result")
+
+                                    threading.Thread(
+                                        target=_deferred_power_verify,
+                                        daemon=True,
+                                        name="PowerVerify",
+                                    ).start()
 
                                 self._rx_seq = []  # Clear after detection
 
