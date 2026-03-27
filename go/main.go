@@ -18,6 +18,7 @@ import (
 	"vol20toglm/controller"
 	"vol20toglm/glm"
 	"vol20toglm/hid"
+	applog "vol20toglm/logging"
 	"vol20toglm/midi"
 	"vol20toglm/types"
 )
@@ -27,16 +28,7 @@ const version = "0.6.0"
 func main() {
 	cfg := config.Parse(os.Args[1:])
 
-	var logLevel slog.Level
-	switch cfg.LogLevel {
-	case "DEBUG":
-		logLevel = slog.LevelDebug
-	case "INFO":
-		logLevel = slog.LevelInfo
-	default:
-		logLevel = slog.LevelInfo
-	}
-	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: logLevel}))
+	log := applog.Setup(cfg.LogLevel, cfg.LogFileName)
 
 	fmt.Printf("vol20toglm v%s\n", version)
 	log.Info("starting",

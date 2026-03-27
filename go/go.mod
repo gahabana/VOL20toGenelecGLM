@@ -5,3 +5,5 @@ go 1.26.1
 require golang.org/x/sys v0.42.0
 
 require nhooyr.io/websocket v1.8.17
+
+require gopkg.in/lumberjack.v2 v2.0.0 // indirect
