@@ -65,8 +65,8 @@ func Parse(args []string) Config {
 	var vidPid string
 	fs.StringVar(&vidPid, "device", "0x07d7,0x0000", "HID device VID,PID in hex")
 
-	fs.StringVar(&cfg.MIDIInChannel, "midi_in_channel", "GLMMIDI 1", "MIDI input port name (commands TO GLM)")
-	fs.StringVar(&cfg.MIDIOutChannel, "midi_out_channel", "GLMOUT 1", "MIDI output port name (state FROM GLM)")
+	fs.StringVar(&cfg.MIDIInChannel, "midi_in_channel", "GLMMIDI", "MIDI input port name (commands TO GLM)")
+	fs.StringVar(&cfg.MIDIOutChannel, "midi_out_channel", "GLMOUT", "MIDI output port name (state FROM GLM)")
 
 	var startupVolume int
 	fs.IntVar(&startupVolume, "startup_volume", -1, "Startup volume (0-127), -1 to query")

@@ -20,11 +20,11 @@ func TestDefaults(t *testing.T) {
 	if cfg.PID != 0x0000 {
 		t.Errorf("PID = 0x%04x, want 0x0000", cfg.PID)
 	}
-	if cfg.MIDIInChannel != "GLMMIDI 1" {
-		t.Errorf("MIDIInChannel = %q, want GLMMIDI 1", cfg.MIDIInChannel)
+	if cfg.MIDIInChannel != "GLMMIDI" {
+		t.Errorf("MIDIInChannel = %q, want GLMMIDI", cfg.MIDIInChannel)
 	}
-	if cfg.MIDIOutChannel != "GLMOUT 1" {
-		t.Errorf("MIDIOutChannel = %q, want GLMOUT 1", cfg.MIDIOutChannel)
+	if cfg.MIDIOutChannel != "GLMOUT" {
+		t.Errorf("MIDIOutChannel = %q, want GLMOUT", cfg.MIDIOutChannel)
 	}
 	if cfg.APIPort != 8080 {
 		t.Errorf("APIPort = %d, want 8080", cfg.APIPort)
