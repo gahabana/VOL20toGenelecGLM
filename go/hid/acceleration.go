@@ -45,9 +45,10 @@ func (a *AccelerationHandler) CalculateSpeed(currentTime float64, button int) in
 		a.count = 1
 		a.firstTime = currentTime
 	} else {
-		// Accelerate: count maps 1..len to indices 0..len-1
-		// Beyond list length, use last element (caps acceleration)
-		idx := a.count - 1
+		// Accelerate: 1st click always resets to 1, then list[count] from 2nd click.
+		// list[0] = 2nd click delta, list[1] = 3rd click delta, etc.
+		// Beyond list length, last element repeats (caps acceleration).
+		idx := a.count
 		if idx >= a.listLen {
 			idx = a.listLen - 1
 		}
