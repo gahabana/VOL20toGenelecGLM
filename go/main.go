@@ -37,13 +37,8 @@ func main() {
 
 	log := applog.Setup(cfg.LogLevel, cfg.LogFileName)
 
-	// Set process priority
-	if cfg.HighPriority {
-		setProcessPriority(log)
-	}
-
 	fmt.Printf("vol20toglm v%s\n", version)
-	log.Info("starting",
+	log.Info("========== vol20toglm start ==========",
 		"version", version,
 		"vid", fmt.Sprintf("0x%04x", cfg.VID),
 		"pid", fmt.Sprintf("0x%04x", cfg.PID),
@@ -51,6 +46,11 @@ func main() {
 		"midi_out", cfg.MIDIOutChannel,
 		"api_port", cfg.APIPort,
 	)
+
+	// Set process priority
+	if cfg.HighPriority {
+		setProcessPriority(log)
+	}
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
