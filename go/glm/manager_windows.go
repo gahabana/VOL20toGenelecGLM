@@ -352,18 +352,29 @@ func (m *WindowsManager) waitForWindowStable(targetPID int) (uintptr, error) {
 			sig += fmt.Sprintf("%X;", w.hwnd)
 		}
 
-		// Log all matching windows each poll
+		// Log summary per poll (compact).
+		// To see every individual window, change the block below to log each entry.
+		// See git history for the verbose per-window logging variant.
 		if len(windows) == 0 {
 			m.log.Debug("window poll: no JUCE+GLM windows found", "poll", poll, "pid", targetPID)
 		} else {
+			titled := ""
+			titledHwnd := ""
+			untitled := 0
 			for _, w := range windows {
-				m.log.Debug("window poll: found",
-					"poll", poll,
-					"hwnd", fmt.Sprintf("0x%X", w.hwnd),
-					"class", w.className,
-					"title", w.title,
-				)
+				if w.title != "" {
+					titled = w.title
+					titledHwnd = fmt.Sprintf("0x%X", w.hwnd)
+				} else {
+					untitled++
+				}
 			}
+			m.log.Debug("window poll",
+				"poll", poll,
+				"hwnd", titledHwnd,
+				"title", titled,
+				"others", untitled,
+			)
 		}
 
 		if sig == lastSignature && sig != "" {
