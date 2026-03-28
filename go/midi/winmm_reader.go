@@ -6,8 +6,9 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
-	"syscall"
 	"unsafe"
+
+	"golang.org/x/sys/windows"
 )
 
 var (
@@ -88,12 +89,12 @@ func OpenWinMMReader(portName string, log *slog.Logger) (*WinMMReader, error) {
 			continue
 		}
 
-		deviceName := syscall.UTF16ToString(caps.szPname[:])
+		deviceName := windows.UTF16ToString(caps.szPname[:])
 		if strings.Contains(strings.ToLower(deviceName), portNameLower) {
 			// Set up the global channel before opening
 			globalMidiInCh = make(chan midiMsg, midiInBufSize)
 
-			callbackPointer := syscall.NewCallback(midiInProc)
+			callbackPointer := windows.NewCallback(midiInProc)
 
 			var handle uintptr
 			ret, _, err := midiInOpen.Call(
@@ -178,7 +179,7 @@ func ListInputPorts() []string {
 		var caps midiInCaps
 		ret, _, _ := midiInGetDevCapsW.Call(i, uintptr(unsafe.Pointer(&caps)), unsafe.Sizeof(caps))
 		if ret == 0 {
-			inputPorts = append(inputPorts, syscall.UTF16ToString(caps.szPname[:]))
+			inputPorts = append(inputPorts, windows.UTF16ToString(caps.szPname[:]))
 		}
 	}
 	return inputPorts

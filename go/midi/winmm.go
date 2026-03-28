@@ -7,14 +7,14 @@ import (
 	"log/slog"
 	"strings"
 	"sync"
-	"syscall"
 	"unsafe"
 
+	"golang.org/x/sys/windows"
 	"vol20toglm/types"
 )
 
 var (
-	winmm              = syscall.NewLazyDLL("winmm.dll")
+	winmm              = windows.NewLazySystemDLL("winmm.dll")
 	midiOutGetNumDevs  = winmm.NewProc("midiOutGetNumDevs")
 	midiOutGetDevCapsW = winmm.NewProc("midiOutGetDevCapsW")
 	midiOutOpen        = winmm.NewProc("midiOutOpen")
@@ -57,7 +57,7 @@ func OpenWinMMWriter(portName string, log *slog.Logger) (*WinMMWriter, error) {
 			continue
 		}
 
-		deviceName := syscall.UTF16ToString(caps.szPname[:])
+		deviceName := windows.UTF16ToString(caps.szPname[:])
 		if strings.Contains(strings.ToLower(deviceName), portNameLower) {
 			var handle uintptr
 			ret, _, err := midiOutOpen.Call(
@@ -122,7 +122,7 @@ func ListOutputPorts() []string {
 		var caps midiOutCaps
 		ret, _, _ := midiOutGetDevCapsW.Call(i, uintptr(unsafe.Pointer(&caps)), unsafe.Sizeof(caps))
 		if ret == 0 {
-			outputPorts = append(outputPorts, syscall.UTF16ToString(caps.szPname[:]))
+			outputPorts = append(outputPorts, windows.UTF16ToString(caps.szPname[:]))
 		}
 	}
 	return outputPorts
