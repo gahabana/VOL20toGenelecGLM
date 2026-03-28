@@ -12,7 +12,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 	"unsafe"
 
@@ -238,7 +237,7 @@ func listHIDDevices() {
 		ret, _, _ = procHidD_GetProductString.Call(uintptr(handle), uintptr(unsafe.Pointer(&productBuf[0])), 128*2)
 		product := ""
 		if ret != 0 {
-			product = strings.TrimRight(syscall.UTF16ToString(productBuf), "\x00")
+			product = strings.TrimRight(windows.UTF16ToString(productBuf), "\x00")
 		}
 
 		// Get manufacturer
@@ -246,7 +245,7 @@ func listHIDDevices() {
 		ret, _, _ = procHidD_GetManufacturerString.Call(uintptr(handle), uintptr(unsafe.Pointer(&mfgBuf[0])), 128*2)
 		manufacturer := ""
 		if ret != 0 {
-			manufacturer = strings.TrimRight(syscall.UTF16ToString(mfgBuf), "\x00")
+			manufacturer = strings.TrimRight(windows.UTF16ToString(mfgBuf), "\x00")
 		}
 
 		windows.CloseHandle(handle)
@@ -318,7 +317,7 @@ func runStartupTasks(cfg config.Config, log *slog.Logger) {
 // if the task hasn't been done this boot, and writes the flag file.
 func needsBootOnceTask(flagFile string, log *slog.Logger) bool {
 	flagPath := filepath.Join(os.TempDir(), flagFile)
-	currentBoot := bootTimestampMs()
+	currentBoot := rdp.BootTimestamp()
 
 	data, err := os.ReadFile(flagPath)
 	if err == nil {
@@ -329,17 +328,8 @@ func needsBootOnceTask(flagFile string, log *slog.Logger) bool {
 		}
 	}
 
-	if err := os.WriteFile(flagPath, []byte(fmt.Sprintf("%.1f", currentBoot)), 0644); err != nil {
-		log.Warn("failed to write boot flag", "flag", flagFile, "error", err)
+	if writeErr := os.WriteFile(flagPath, []byte(fmt.Sprintf("%.1f", currentBoot)), 0644); writeErr != nil {
+		log.Warn("failed to write boot flag", "flag", flagFile, "error", writeErr)
 	}
 	return true
-}
-
-// bootTimestampMs returns approximate boot time as seconds since epoch.
-func bootTimestampMs() float64 {
-	var getTickCount64 = syscall.NewLazyDLL("kernel32.dll").NewProc("GetTickCount64")
-	ret, _, _ := getTickCount64.Call()
-	uptimeMs := uint64(ret)
-	nowMs := uint64(time.Now().UnixMilli())
-	return float64(nowMs-uptimeMs) / 1000.0
 }

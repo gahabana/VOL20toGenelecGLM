@@ -353,8 +353,6 @@ func (m *WindowsManager) waitForWindowStable(targetPID int) (uintptr, error) {
 		}
 
 		// Log summary per poll (compact).
-		// To see every individual window, change the block below to log each entry.
-		// See git history for the verbose per-window logging variant.
 		if len(windows) == 0 {
 			m.log.Debug("window poll: no JUCE+GLM windows found", "poll", poll, "pid", targetPID)
 		} else {

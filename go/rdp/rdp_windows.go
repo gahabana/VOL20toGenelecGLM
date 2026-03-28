@@ -60,9 +60,9 @@ func flagPath() string {
 	return filepath.Join(os.TempDir(), flagFileName)
 }
 
-// bootTimestamp returns the approximate boot time as seconds since epoch.
+// BootTimestamp returns the approximate boot time as seconds since epoch.
 // It uses GetTickCount64 to compute (now - uptime).
-func bootTimestamp() float64 {
+func BootTimestamp() float64 {
 	ret, _, _ := procGetTickCount64.Call()
 	uptimeMs := uint64(ret)
 	nowMs := uint64(time.Now().UnixMilli())
@@ -73,7 +73,7 @@ func bootTimestamp() float64 {
 // It compares the stored boot timestamp in the flag file with the current
 // boot timestamp. If they differ by more than 60 seconds, priming is needed.
 func (w *WindowsPrimer) NeedsPriming() bool {
-	currentBoot := bootTimestamp()
+	currentBoot := BootTimestamp()
 
 	data, err := os.ReadFile(flagPath())
 	if err == nil {
@@ -228,7 +228,7 @@ func (w *WindowsPrimer) Prime() error {
 		w.Log.Info("reconnected console session via tscon", "session_id", discSessionID)
 	}
 
-	// Step 7: Final settle time
+	// Step 8: Final settle time
 	time.Sleep(1 * time.Second)
 
 	w.Log.Info("RDP session primed successfully")
