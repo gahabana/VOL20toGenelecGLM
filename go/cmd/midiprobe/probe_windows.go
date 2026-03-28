@@ -80,6 +80,10 @@ func run() error {
 			fmt.Printf("  *** MISSED at settle=%dms ***", settle.Milliseconds())
 		}
 		fmt.Println()
+
+		// Settle before next round (same gap between Vol+ response and next Vol-)
+		fmt.Printf("  [%s] settling %dms before next round...\n", ts(), settle.Milliseconds())
+		time.Sleep(settle)
 		fmt.Println()
 
 		settle = time.Duration(float64(settle) * 0.9)
