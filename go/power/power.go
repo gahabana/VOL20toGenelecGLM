@@ -6,4 +6,8 @@ type Controller interface {
 	GetState() (bool, error)
 	// Toggle clicks the power button in the GLM window.
 	Toggle() error
+	// BringToForeground brings the GLM window to the foreground so pixel
+	// scanning can read it. Required before GetState when another window
+	// may be covering GLM.
+	BringToForeground() error
 }

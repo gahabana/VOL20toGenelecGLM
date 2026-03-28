@@ -351,6 +351,17 @@ func (wc *WindowsController) getWindowRect(hwnd uintptr) (rect, error) {
 	return windowRect, nil
 }
 
+// BringToForeground brings the GLM window to the foreground.
+func (wc *WindowsController) BringToForeground() error {
+	hwnd, err := wc.findGLMWindow()
+	if err != nil {
+		return err
+	}
+	procSetForegroundWindow.Call(hwnd) //nolint:errcheck
+	time.Sleep(100 * time.Millisecond) // let window paint
+	return nil
+}
+
 // GetState returns the current power state of the GLM application.
 // Returns true if GLM is powered on, false if powered off.
 func (wc *WindowsController) GetState() (bool, error) {

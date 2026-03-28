@@ -166,13 +166,26 @@ func main() {
 	// Probe GLM state at startup (uses raw midiOut, before gate is active)
 	probeGLMState(midiOut, probeCh, log)
 
-	// Detect initial power state from pixel scan
+	// Detect initial power state from pixel scan.
+	// Bring GLM to foreground first (console may be covering it), then retry
+	// a few times to allow splash screen to clear after fresh launch.
 	if powerCtrl != nil {
-		if initialPower, err := powerCtrl.GetState(); err == nil {
+		powerCtrl.BringToForeground()
+		var initialPower bool
+		var scanErr error
+		for attempt := 1; attempt <= 5; attempt++ {
+			initialPower, scanErr = powerCtrl.GetState()
+			if scanErr == nil {
+				break
+			}
+			log.Debug("power scan attempt failed, retrying", "attempt", attempt, "err", scanErr)
+			time.Sleep(1 * time.Second)
+		}
+		if scanErr == nil {
 			ctrl.SetPower(initialPower)
 			log.Info("initial power state from pixel scan", "power", initialPower)
 		} else {
-			log.Warn("could not read initial power state, assuming ON", "err", err)
+			log.Warn("could not read initial power state, assuming ON", "err", scanErr)
 		}
 	}
 
