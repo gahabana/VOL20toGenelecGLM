@@ -211,7 +211,9 @@ func (w *WindowsPrimer) Prime() error {
 
 	// Step 6: Wait 1s then find the disconnected session to reconnect
 	time.Sleep(1 * time.Second)
-	discSessionID := findSessionID("disc", username, w.Log)
+	// Strip .\  prefix (added for NLA) — query session shows bare username
+	sessionUser := strings.TrimPrefix(username, ".\\")
+	discSessionID := findSessionID("disc", sessionUser, w.Log)
 	if discSessionID == "" {
 		w.Log.Warn("no disconnected session found for user, trying fallback", "username", username)
 		discSessionID = "1"
