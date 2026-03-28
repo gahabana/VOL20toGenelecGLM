@@ -326,28 +326,59 @@ func (m *WindowsManager) setPriority(pid int) error {
 }
 
 // waitForWindowStable polls for the GLM window matching the given PID until the
-// same HWND is seen for windowStableCount consecutive polls, or a timeout occurs.
+// window handle has settled. For fresh launches, it waits for the handle to change
+// at least once (splash → main window) before requiring stability. For existing
+// processes, it requires the handle to be the same for windowStableCount consecutive polls.
 func (m *WindowsManager) waitForWindowStable(targetPID int) (uintptr, error) {
 	deadline := time.Now().Add(windowTimeout)
+	var firstHWND uintptr
 	var lastHWND uintptr
+	handleChanged := false
 	consecutiveCount := 0
 
 	for time.Now().Before(deadline) {
 		hwnd, err := findWindowByPID(targetPID)
 		if err == nil && hwnd != 0 {
+			// Track the very first handle we see
+			if firstHWND == 0 {
+				firstHWND = hwnd
+			}
+
 			if hwnd == lastHWND {
 				consecutiveCount++
 			} else {
+				if lastHWND != 0 {
+					handleChanged = true
+					m.log.Debug("GLM window handle changed",
+						"old", fmt.Sprintf("0x%X", lastHWND),
+						"new", fmt.Sprintf("0x%X", hwnd))
+				}
 				lastHWND = hwnd
 				consecutiveCount = 1
 			}
 
 			if consecutiveCount >= windowStableCount {
-				return hwnd, nil
+				if !handleChanged {
+					// Handle never changed — likely attached to existing GLM (no splash).
+					// Or splash hasn't transitioned yet. Wait a bit more to be sure.
+					if consecutiveCount >= windowStableCount+3 {
+						// 5 consecutive = 5s of same handle, safe to assume no splash
+						return hwnd, nil
+					}
+				} else {
+					// Handle changed at least once (splash → main), now stable
+					return hwnd, nil
+				}
 			}
 		}
 
 		time.Sleep(windowPollInterval)
+	}
+
+	// If we found a window but it never changed, use it (best effort)
+	if lastHWND != 0 {
+		m.log.Warn("GLM window handle never changed, using last seen", "hwnd", fmt.Sprintf("0x%X", lastHWND))
+		return lastHWND, nil
 	}
 
 	return 0, fmt.Errorf("GLM window for PID %d did not stabilize within %v", targetPID, windowTimeout)
