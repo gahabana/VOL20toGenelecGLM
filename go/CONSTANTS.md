@@ -83,6 +83,14 @@ All tunable constants that define the behavior of the Go binary. When adding new
 | `PowerPatternPreGap` | 0.12s | Min silence before pattern starts |
 | `PowerStartupWindow` | 3.0s | Second pattern within this = GLM startup, suppress |
 
+## Startup Probe (`main.go`)
+
+| Constant | Value | Purpose |
+|----------|-------|---------|
+| Probe settle delay | 100ms | Gap between Vol+ response and Vol- send during startup probe. GLM needs ~30ms min between commands; 100ms gives 3x margin. |
+| Probe response timeout | 1s | Max wait for GLM to respond to a probe command |
+| Pre-probe delay | 100ms | Delay before first probe to let MIDI reader goroutine start |
+
 ## MIDI Reader (`midi/winmm_reader.go`)
 
 | Constant | Value | Purpose |

@@ -234,6 +234,9 @@ func probeGLMState(midiOut midi.Writer, probeCh <-chan int, log *slog.Logger) {
 		return
 	}
 
+	// GLM needs ~30ms between commands; 100ms gives 3x margin
+	time.Sleep(100 * time.Millisecond)
+
 	// Step 2: Send CC22 (Vol-) — restores original volume
 	start2 := time.Now()
 	if err := midiOut.SendCC(0, types.CCVolDown, 127, "probe"); err != nil {
