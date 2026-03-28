@@ -33,7 +33,7 @@ const (
 const (
 	postStartDelay     = 3 * time.Second
 	windowPollInterval = 1 * time.Second
-	windowStableCount  = 2
+	windowStableCount  = 5
 	windowTimeout      = 60 * time.Second
 )
 
@@ -325,81 +325,101 @@ func (m *WindowsManager) setPriority(pid int) error {
 	return nil
 }
 
-// waitForWindowStable polls for the GLM window matching the given PID until the
-// window handle has settled. For fresh launches, it waits for the handle to change
-// at least once (splash → main window) before requiring stability. For existing
-// processes, it requires the handle to be the same for windowStableCount consecutive polls.
+// windowInfo holds details about a discovered JUCE/GLM window.
+type windowInfo struct {
+	hwnd      uintptr
+	className string
+	title     string
+}
+
+// waitForWindowStable polls for GLM windows matching the given PID until the
+// set of matching windows has been identical for windowStableCount consecutive polls.
+// Logs all discovered windows each poll for diagnostic visibility.
 func (m *WindowsManager) waitForWindowStable(targetPID int) (uintptr, error) {
 	deadline := time.Now().Add(windowTimeout)
-	var firstHWND uintptr
-	var lastHWND uintptr
-	handleChanged := false
+	var lastSignature string
+	var lastWindows []windowInfo
 	consecutiveCount := 0
+	poll := 0
 
 	for time.Now().Before(deadline) {
-		hwnd, err := findWindowByPID(targetPID)
-		if err == nil && hwnd != 0 {
-			// Track the very first handle we see
-			if firstHWND == 0 {
-				firstHWND = hwnd
-			}
+		poll++
+		windows := findAllWindowsByPID(targetPID)
 
-			if hwnd == lastHWND {
-				consecutiveCount++
-			} else {
-				if lastHWND != 0 {
-					handleChanged = true
-					m.log.Debug("GLM window handle changed",
-						"old", fmt.Sprintf("0x%X", lastHWND),
-						"new", fmt.Sprintf("0x%X", hwnd))
-				}
-				lastHWND = hwnd
-				consecutiveCount = 1
-			}
+		// Build a signature string from all handles for comparison
+		sig := ""
+		for _, w := range windows {
+			sig += fmt.Sprintf("%X;", w.hwnd)
+		}
 
-			if consecutiveCount >= windowStableCount {
-				if !handleChanged {
-					// Handle never changed — likely attached to existing GLM (no splash).
-					// Or splash hasn't transitioned yet. Wait a bit more to be sure.
-					if consecutiveCount >= windowStableCount+3 {
-						// 5 consecutive = 5s of same handle, safe to assume no splash
-						return hwnd, nil
-					}
-				} else {
-					// Handle changed at least once (splash → main), now stable
-					return hwnd, nil
+		// Log all matching windows each poll
+		if len(windows) == 0 {
+			m.log.Debug("window poll: no JUCE+GLM windows found", "poll", poll, "pid", targetPID)
+		} else {
+			for _, w := range windows {
+				m.log.Debug("window poll: found",
+					"poll", poll,
+					"hwnd", fmt.Sprintf("0x%X", w.hwnd),
+					"class", w.className,
+					"title", w.title,
+				)
+			}
+		}
+
+		if sig == lastSignature && sig != "" {
+			consecutiveCount++
+		} else {
+			if lastSignature != "" && sig != lastSignature {
+				m.log.Info("window set changed",
+					"poll", poll,
+					"old_count", len(lastWindows),
+					"new_count", len(windows),
+				)
+			}
+			lastSignature = sig
+			lastWindows = windows
+			consecutiveCount = 1
+		}
+
+		if consecutiveCount >= windowStableCount {
+			// Pick the best window: prefer the one with the longest title
+			// (main window typically has "GLM v5.x.x" vs splash which may be shorter)
+			best := lastWindows[0]
+			for _, w := range lastWindows[1:] {
+				if len(w.title) > len(best.title) {
+					best = w
 				}
 			}
+			m.log.Info("window set stabilized",
+				"polls", poll,
+				"consecutive", consecutiveCount,
+				"window_count", len(lastWindows),
+				"hwnd", fmt.Sprintf("0x%X", best.hwnd),
+				"title", best.title,
+			)
+			return best.hwnd, nil
 		}
 
 		time.Sleep(windowPollInterval)
 	}
 
-	// If we found a window but it never changed, use it (best effort)
-	if lastHWND != 0 {
-		m.log.Warn("GLM window handle never changed, using last seen", "hwnd", fmt.Sprintf("0x%X", lastHWND))
-		return lastHWND, nil
-	}
-
 	return 0, fmt.Errorf("GLM window for PID %d did not stabilize within %v", targetPID, windowTimeout)
 }
 
-// findWindowByPID enumerates top-level windows and finds the JUCE+GLM window
-// that belongs to the given PID.
-func findWindowByPID(targetPID int) (uintptr, error) {
-	var foundHWND uintptr
+// findAllWindowsByPID enumerates ALL top-level windows matching JUCE+GLM
+// for the given PID. Returns all matches, not just the first.
+func findAllWindowsByPID(targetPID int) []windowInfo {
+	var results []windowInfo
 	classNameBuf := make([]uint16, 256)
 	windowTextBuf := make([]uint16, 256)
 
 	callback := windows.NewCallback(func(hwnd uintptr, lParam uintptr) uintptr {
-		// Check if the window belongs to the target PID.
 		var windowPID uint32
 		procGetWindowThreadProcessId.Call(hwnd, uintptr(unsafe.Pointer(&windowPID)))
 		if int(windowPID) != targetPID {
-			return 1 // continue enumeration
+			return 1
 		}
 
-		// Get class name.
 		ret, _, _ := procGetClassNameGLM.Call(hwnd, uintptr(unsafe.Pointer(&classNameBuf[0])), 256)
 		if ret == 0 {
 			return 1
@@ -410,27 +430,20 @@ func findWindowByPID(targetPID int) (uintptr, error) {
 			return 1
 		}
 
-		// Get window title.
 		ret, _, _ = procGetWindowTextGLM.Call(hwnd, uintptr(unsafe.Pointer(&windowTextBuf[0])), 256)
-		if ret == 0 {
-			return 1
+		title := ""
+		if ret > 0 {
+			title = windows.UTF16ToString(windowTextBuf[:ret])
 		}
-		windowTitle := windows.UTF16ToString(windowTextBuf[:ret])
 
-		if strings.Contains(windowTitle, "GLM") {
-			foundHWND = hwnd
-			return 0 // stop enumeration
+		if strings.Contains(title, "GLM") || title == "" {
+			results = append(results, windowInfo{hwnd: hwnd, className: className, title: title})
 		}
-		return 1
+		return 1 // continue — find ALL matches
 	})
 
 	procEnumWindowsGLM.Call(callback, 0) //nolint:errcheck
-
-	if foundHWND == 0 {
-		return 0, fmt.Errorf("GLM window not found for PID %d", targetPID)
-	}
-
-	return foundHWND, nil
+	return results
 }
 
 // watchdogLoop monitors the GLM process and restarts it if it dies or hangs.
