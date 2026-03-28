@@ -20,10 +20,11 @@ import (
 	"vol20toglm/hid"
 	applog "vol20toglm/logging"
 	"vol20toglm/midi"
+	"vol20toglm/midigate"
 	"vol20toglm/types"
 )
 
-const version = "0.6.0"
+const version = "0.7.0"
 
 func main() {
 	cfg := config.Parse(os.Args[1:])
@@ -108,6 +109,12 @@ func main() {
 	// Channel for startup volume probe (buffered, non-blocking send from callback)
 	probeCh := make(chan int, 10)
 
+	// Response-gated MIDI sender (sits between consumer and raw MIDI writer)
+	var gate *midigate.Gate
+	if midiOut != nil {
+		gate = midigate.New(midiOut, log.With("component", "midigate"))
+	}
+
 	// Acceleration handler
 	accel := hid.NewAccelerationHandler(cfg.MinClickTime, cfg.MaxAvgClickTime, cfg.VolumeIncreases)
 
@@ -115,25 +122,6 @@ func main() {
 	hidReader := createHIDReader(cfg, accel, traceGen, log)
 
 	var wg sync.WaitGroup
-
-	// Start consumer goroutine
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		if midiOut == nil {
-			log.Warn("no MIDI output, consumer running in dry-run mode")
-		}
-		consumer.Run(ctx, actions, ctrl, midiOut, 0, powerCtrl, log.With("component", "consumer"))
-	}()
-
-	// Start HID reader goroutine
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		if err := hidReader.Run(ctx, actions); err != nil && ctx.Err() == nil {
-			log.Error("HID reader exited with error", "err", err)
-		}
-	}()
 
 	// Start MIDI input reader goroutine
 	wg.Add(1)
@@ -157,6 +145,11 @@ func main() {
 			// Feed to power pattern detector
 			powerDetector.Feed(cc, value, now)
 
+			// Notify gate about GLM response (for send gating)
+			if gate != nil {
+				gate.NotifyReceive(cc)
+			}
+
 			// Feed volume to startup probe (non-blocking)
 			if cc == types.CCVolumeAbs {
 				select {
@@ -170,8 +163,42 @@ func main() {
 		}
 	}()
 
-	// Probe GLM state at startup
+	// Probe GLM state at startup (uses raw midiOut, before gate is active)
 	probeGLMState(midiOut, probeCh, log)
+
+	// Start gate goroutine (after probe, before consumer)
+	if gate != nil {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			gate.Run(ctx)
+		}()
+	}
+
+	// Start consumer goroutine (uses gate for response-gated sending)
+	var consumerWriter midi.Writer
+	if gate != nil {
+		consumerWriter = gate
+	} else if midiOut != nil {
+		consumerWriter = midiOut
+	}
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		if consumerWriter == nil {
+			log.Warn("no MIDI output, consumer running in dry-run mode")
+		}
+		consumer.Run(ctx, actions, ctrl, consumerWriter, 0, powerCtrl, log.With("component", "consumer"))
+	}()
+
+	// Start HID reader goroutine
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		if err := hidReader.Run(ctx, actions); err != nil && ctx.Err() == nil {
+			log.Error("HID reader exited with error", "err", err)
+		}
+	}()
 
 	// Start API server
 	if cfg.APIPort > 0 {

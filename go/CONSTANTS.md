@@ -83,6 +83,17 @@ All tunable constants that define the behavior of the Go binary. When adding new
 | `PowerPatternPreGap` | 0.12s | Min silence before pattern starts |
 | `PowerStartupWindow` | 3.0s | Second pattern within this = GLM startup, suppress |
 
+## MIDI Gate (`midigate/gate.go`)
+
+| Constant | Value | Purpose |
+|----------|-------|---------|
+| `SettleDelay` | 50ms | Gap after GLM's state burst (Volume CC20) before sending next command. GLM needs ~30ms min; 50ms gives 67% margin. |
+| `ResponseTimeout` | 2s | Max wait for GLM state burst before giving up and sending next queued command. p99 from production logs is ~600ms, max observed 1.9s. |
+| `sendChSize` | 32 | Buffered channel so consumer never blocks on SendCC |
+| `recvChSize` | 10 | Buffered channel so MIDI callback never blocks on NotifyReceive |
+
+Volume commands coalesce (latest wins). Mute/dim/power are queued individually (each toggle matters). Non-volume commands have priority over coalesced volume.
+
 ## Startup Probe (`main.go`)
 
 | Constant | Value | Purpose |
