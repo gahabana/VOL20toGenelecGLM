@@ -30,6 +30,9 @@
 
 ## Technical Context
 
+### Known Issues (Open)
+- **RDP priming may detect stale sessions** - The fast session detection (42ms) may detect a leftover `rdp-tcp#` session from a previous run rather than the new FreeRDP connection. This is mostly harmless (priming still works) but worth monitoring. The hardcoded `tscon 1` was fixed in Go to dynamically detect the session ID. Python still hardcodes it.
+
 ### Known Issues (Resolved)
 - **High CPU after RDP disconnect** - FIXED with RDP session priming
   - **Root cause**: GLM (OpenGL app) encounters Windows display driver context issues when tscon switches session from disconnected RDP back to console. The Windows USER subsystem gets stuck in `UserSessionSwitchLeaveCrit`, causing high CPU.

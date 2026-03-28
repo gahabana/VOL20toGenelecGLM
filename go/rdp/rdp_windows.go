@@ -184,19 +184,20 @@ func (w *WindowsPrimer) Prime() error {
 	w.Log.Info("launched FreeRDP", "pid", cmd.Process.Pid)
 
 	// Step 3: Poll for RDP session (up to 10s, every 500ms)
-	sessionDetected := false
+	rdpSessionID := ""
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
-		if detectRDPSession() {
-			sessionDetected = true
-			w.Log.Info("RDP session detected")
+		if id := detectRDPSessionID(); id != "" {
+			rdpSessionID = id
+			w.Log.Info("RDP session detected", "session_id", rdpSessionID)
 			break
 		}
 		time.Sleep(500 * time.Millisecond)
 	}
 
-	if !sessionDetected {
+	if rdpSessionID == "" {
 		w.Log.Warn("RDP session not detected within timeout, proceeding anyway")
+		rdpSessionID = "1" // fallback to legacy hardcoded value
 	}
 
 	// Step 4: Wait 1s after session detected
@@ -209,12 +210,12 @@ func (w *WindowsPrimer) Prime() error {
 	_ = cmd.Wait() // reap the process
 	w.Log.Info("killed FreeRDP process")
 
-	// Step 6: Reconnect console via tscon
-	tsconCmd := exec.Command("tscon", "1", "/dest:console")
+	// Step 6: Reconnect console via tscon using the detected session ID
+	tsconCmd := exec.Command("tscon", rdpSessionID, "/dest:console")
 	if output, err := tsconCmd.CombinedOutput(); err != nil {
-		w.Log.Warn("tscon failed", "error", err, "output", string(output))
+		w.Log.Warn("tscon failed", "error", err, "output", string(output), "session_id", rdpSessionID)
 	} else {
-		w.Log.Info("reconnected console session via tscon")
+		w.Log.Info("reconnected console session via tscon", "session_id", rdpSessionID)
 	}
 
 	// Step 7: Final settle time
@@ -226,21 +227,32 @@ func (w *WindowsPrimer) Prime() error {
 
 // detectRDPSession runs "query session" and looks for "rdp-tcp#" in the output,
 // which indicates an active RDP session.
-func detectRDPSession() bool {
+// detectRDPSessionID parses `query session` output and returns the session ID
+// of the active RDP session (rdp-tcp#N line), or "" if not found.
+func detectRDPSessionID() string {
 	cmd := exec.Command("query", "session")
 	// Use CombinedOutput — query session may return non-zero exit code
 	// while still printing session info to stdout.
 	output, _ := cmd.CombinedOutput()
 	if len(output) == 0 {
-		return false
+		return ""
 	}
 
 	scanner := bufio.NewScanner(strings.NewReader(string(output)))
 	for scanner.Scan() {
-		line := strings.ToLower(scanner.Text())
-		if strings.Contains(line, "rdp-tcp#") {
-			return true
+		line := scanner.Text()
+		if strings.Contains(strings.ToLower(line), "rdp-tcp#") {
+			// Parse session ID from the line. Format:
+			//  rdp-tcp#0             zh                        2  Active
+			// Fields are whitespace-separated; ID is the numeric field after username.
+			fields := strings.Fields(line)
+			for _, f := range fields {
+				// Session ID is a small number (1-65535)
+				if id, err := strconv.Atoi(f); err == nil && id > 0 && id < 65536 {
+					return strconv.Itoa(id)
+				}
+			}
 		}
 	}
-	return false
+	return ""
 }
