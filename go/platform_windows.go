@@ -6,7 +6,11 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"math"
+	"os"
 	"os/exec"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -296,13 +300,46 @@ func runStartupTasks(cfg config.Config, log *slog.Logger) {
 		}
 	}
 
-	// MIDI service restart
+	// MIDI service restart (once per boot)
 	if cfg.MIDIRestart {
-		log.Info("restarting Windows MIDI service")
-		exec.Command("net", "stop", "midisrv").Run()
-		time.Sleep(1 * time.Second)
-		exec.Command("net", "start", "midisrv").Run()
-		time.Sleep(1 * time.Second)
-		log.Info("MIDI service restarted")
+		if needsBootOnceTask("midi_restarted.flag", log) {
+			log.Info("restarting Windows MIDI service")
+			exec.Command("net", "stop", "midisrv").Run()
+			time.Sleep(1 * time.Second)
+			exec.Command("net", "start", "midisrv").Run()
+			time.Sleep(1 * time.Second)
+			log.Info("MIDI service restarted")
+		}
 	}
+}
+
+// needsBootOnceTask checks whether a once-per-boot task needs to run.
+// Uses a flag file in %TEMP% containing the boot timestamp. Returns true
+// if the task hasn't been done this boot, and writes the flag file.
+func needsBootOnceTask(flagFile string, log *slog.Logger) bool {
+	flagPath := filepath.Join(os.TempDir(), flagFile)
+	currentBoot := bootTimestampMs()
+
+	data, err := os.ReadFile(flagPath)
+	if err == nil {
+		storedBoot, parseErr := strconv.ParseFloat(strings.TrimSpace(string(data)), 64)
+		if parseErr == nil && math.Abs(storedBoot-currentBoot) < 60.0 {
+			log.Info("already done this boot, skipping", "flag", flagFile)
+			return false
+		}
+	}
+
+	if err := os.WriteFile(flagPath, []byte(fmt.Sprintf("%.1f", currentBoot)), 0644); err != nil {
+		log.Warn("failed to write boot flag", "flag", flagFile, "error", err)
+	}
+	return true
+}
+
+// bootTimestampMs returns approximate boot time as seconds since epoch.
+func bootTimestampMs() float64 {
+	var getTickCount64 = syscall.NewLazyDLL("kernel32.dll").NewProc("GetTickCount64")
+	ret, _, _ := getTickCount64.Call()
+	uptimeMs := uint64(ret)
+	nowMs := uint64(time.Now().UnixMilli())
+	return float64(nowMs-uptimeMs) / 1000.0
 }
