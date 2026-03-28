@@ -187,7 +187,7 @@ func (w *WindowsPrimer) Prime() error {
 	rdpDetected := false
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
-		if findSessionID("rdp-tcp#", "") != "" {
+		if findSessionID("rdp-tcp#", "", w.Log) != "" {
 			rdpDetected = true
 			w.Log.Info("RDP session detected")
 			break
@@ -211,7 +211,7 @@ func (w *WindowsPrimer) Prime() error {
 
 	// Step 6: Wait 1s then find the disconnected session to reconnect
 	time.Sleep(1 * time.Second)
-	discSessionID := findSessionID("disc", username)
+	discSessionID := findSessionID("disc", username, w.Log)
 	if discSessionID == "" {
 		w.Log.Warn("no disconnected session found for user, trying fallback", "username", username)
 		discSessionID = "1"
@@ -235,21 +235,31 @@ func (w *WindowsPrimer) Prime() error {
 
 // findSessionID runs "query session" and finds a session matching the given
 // keyword (e.g. "rdp-tcp#" or "disc") and optionally a username. Returns
-// the session ID as a string, or "" if not found.
-func findSessionID(keyword, username string) string {
+// the session ID as a string, or "" if not found. Logs all sessions at DEBUG level.
+func findSessionID(keyword, username string, log *slog.Logger) string {
 	cmd := exec.Command("query", "session")
 	output, _ := cmd.CombinedOutput()
 	if len(output) == 0 {
+		log.Debug("query session returned empty output")
 		return ""
 	}
 
 	keyword = strings.ToLower(keyword)
 	username = strings.ToLower(username)
+	matchedID := ""
 
 	scanner := bufio.NewScanner(strings.NewReader(string(output)))
 	for scanner.Scan() {
 		line := scanner.Text()
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
 		lower := strings.ToLower(line)
+
+		// Log every session line for diagnostics
+		log.Debug("query session", "line", trimmed)
+
 		if !strings.Contains(lower, keyword) {
 			continue
 		}
@@ -260,9 +270,12 @@ func findSessionID(keyword, username string) string {
 		fields := strings.Fields(line)
 		for _, f := range fields {
 			if id, err := strconv.Atoi(f); err == nil && id > 0 && id < 65536 {
-				return strconv.Itoa(id)
+				matchedID = strconv.Itoa(id)
+				log.Debug("session matched", "keyword", keyword, "username", username, "session_id", matchedID)
+				return matchedID
 			}
 		}
 	}
+	log.Debug("no session matched", "keyword", keyword, "username", username)
 	return ""
 }
