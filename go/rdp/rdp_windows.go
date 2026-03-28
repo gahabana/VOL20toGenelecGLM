@@ -228,8 +228,10 @@ func (w *WindowsPrimer) Prime() error {
 // which indicates an active RDP session.
 func detectRDPSession() bool {
 	cmd := exec.Command("query", "session")
-	output, err := cmd.Output()
-	if err != nil {
+	// Use CombinedOutput — query session may return non-zero exit code
+	// while still printing session info to stdout.
+	output, _ := cmd.CombinedOutput()
+	if len(output) == 0 {
 		return false
 	}
 
