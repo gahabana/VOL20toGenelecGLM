@@ -12,6 +12,7 @@ type StubController struct {
 
 func (s *StubController) GetState() (bool, error)    { return s.State, nil }
 func (s *StubController) BringToForeground() error    { return nil }
+func (s *StubController) RestoreForeground()          {}
 func (s *StubController) Toggle() error {
 	s.State = !s.State
 	s.Log.Info("power stub: toggled", "state", s.State)

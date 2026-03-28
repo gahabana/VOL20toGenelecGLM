@@ -77,6 +77,7 @@ var (
 	procSetCursorPos         = user32.NewProc("SetCursorPos")
 	procMouseEvent           = user32.NewProc("mouse_event")
 	procSetForegroundWindow  = user32.NewProc("SetForegroundWindow")
+	procGetForegroundWindow  = user32.NewProc("GetForegroundWindow")
 
 	procCreateCompatibleDC     = gdi32.NewProc("CreateCompatibleDC")
 	procCreateCompatibleBitmap = gdi32.NewProc("CreateCompatibleBitmap")
@@ -90,10 +91,11 @@ var (
 // WindowsController detects GLM power state via pixel analysis and toggles
 // power by simulating mouse clicks on the GLM window.
 type WindowsController struct {
-	log        *slog.Logger
-	mu         sync.Mutex
-	cachedHWND uintptr
-	cacheTime  time.Time
+	log                 *slog.Logger
+	mu                  sync.Mutex
+	cachedHWND          uintptr
+	cacheTime           time.Time
+	prevForegroundHwnd  uintptr
 }
 
 // NewWindowsController creates a new WindowsController.
@@ -351,15 +353,35 @@ func (wc *WindowsController) getWindowRect(hwnd uintptr) (rect, error) {
 	return windowRect, nil
 }
 
-// BringToForeground brings the GLM window to the foreground.
+// BringToForeground brings the GLM window to the foreground for pixel scanning.
+// Returns a restore function that brings the previous foreground window back.
 func (wc *WindowsController) BringToForeground() error {
+	prevHwnd, _, _ := procGetForegroundWindow.Call()
+
 	hwnd, err := wc.findGLMWindow()
 	if err != nil {
 		return err
 	}
 	procSetForegroundWindow.Call(hwnd) //nolint:errcheck
 	time.Sleep(100 * time.Millisecond) // let window paint
+
+	// Save previous window handle so RestoreForeground can use it
+	wc.mu.Lock()
+	wc.prevForegroundHwnd = prevHwnd
+	wc.mu.Unlock()
 	return nil
+}
+
+// RestoreForeground restores the window that was in foreground before BringToForeground.
+func (wc *WindowsController) RestoreForeground() {
+	wc.mu.Lock()
+	prev := wc.prevForegroundHwnd
+	wc.prevForegroundHwnd = 0
+	wc.mu.Unlock()
+
+	if prev != 0 {
+		procSetForegroundWindow.Call(prev) //nolint:errcheck
+	}
 }
 
 // GetState returns the current power state of the GLM application.

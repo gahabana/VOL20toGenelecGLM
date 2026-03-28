@@ -10,4 +10,7 @@ type Controller interface {
 	// scanning can read it. Required before GetState when another window
 	// may be covering GLM.
 	BringToForeground() error
+	// RestoreForeground restores the window that was in foreground before
+	// BringToForeground was called.
+	RestoreForeground()
 }

@@ -187,6 +187,7 @@ func main() {
 		} else {
 			log.Warn("could not read initial power state, assuming ON", "err", scanErr)
 		}
+		powerCtrl.RestoreForeground()
 	}
 
 	// Start gate goroutine (after probe, before consumer)
