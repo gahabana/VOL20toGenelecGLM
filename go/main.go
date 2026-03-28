@@ -166,6 +166,16 @@ func main() {
 	// Probe GLM state at startup (uses raw midiOut, before gate is active)
 	probeGLMState(midiOut, probeCh, log)
 
+	// Detect initial power state from pixel scan
+	if powerCtrl != nil {
+		if initialPower, err := powerCtrl.GetState(); err == nil {
+			ctrl.SetPower(initialPower)
+			log.Info("initial power state from pixel scan", "power", initialPower)
+		} else {
+			log.Warn("could not read initial power state, assuming ON", "err", err)
+		}
+	}
+
 	// Start gate goroutine (after probe, before consumer)
 	if gate != nil {
 		wg.Add(1)

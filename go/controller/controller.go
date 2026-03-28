@@ -148,6 +148,16 @@ func (c *Controller) EndPowerTransition(success bool, actualState *bool) {
 	c.fireCallbacks(oldState, newState)
 }
 
+// SetPower sets the power state directly (e.g. from initial pixel scan at startup).
+func (c *Controller) SetPower(on bool) {
+	c.mu.Lock()
+	oldState := c.state
+	c.state.Power = on
+	newState := c.state
+	c.mu.Unlock()
+	c.fireCallbacks(oldState, newState)
+}
+
 // TogglePowerFromMIDIPattern toggles power when RF remote pattern is detected.
 // Returns the new power state.
 func (c *Controller) TogglePowerFromMIDIPattern() bool {
