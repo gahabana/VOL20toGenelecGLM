@@ -99,6 +99,15 @@ func main() {
 	// Power controller — platform-specific
 	powerCtrl := createPowerController(log)
 
+	// Pass GLM PID to power controller so it finds the correct window (not splash)
+	if glmMgr != nil && powerCtrl != nil {
+		powerCtrl.SetPID(glmMgr.GetPID())
+		// Also update PID on GLM restart
+		glmMgr.SetRestartCallback(func(pid int) {
+			powerCtrl.SetPID(pid)
+		})
+	}
+
 	// Power pattern detector
 	midiLog := log.With("component", "midi-in")
 	powerDetector := controller.NewPowerPatternDetector(func() {

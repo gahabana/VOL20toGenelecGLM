@@ -10,7 +10,8 @@ type StubController struct {
 	State bool
 }
 
-func (s *StubController) GetState() (bool, error)    { return s.State, nil }
+func (s *StubController) SetPID(pid int)              {}
+func (s *StubController) GetState() (bool, error)     { return s.State, nil }
 func (s *StubController) BringToForeground() error    { return nil }
 func (s *StubController) RestoreForeground()          {}
 func (s *StubController) Toggle() error {

@@ -76,8 +76,9 @@ var (
 	procReleaseDC            = user32.NewProc("ReleaseDC")
 	procSetCursorPos         = user32.NewProc("SetCursorPos")
 	procMouseEvent           = user32.NewProc("mouse_event")
-	procSetForegroundWindow  = user32.NewProc("SetForegroundWindow")
-	procGetForegroundWindow  = user32.NewProc("GetForegroundWindow")
+	procSetForegroundWindow        = user32.NewProc("SetForegroundWindow")
+	procGetForegroundWindow        = user32.NewProc("GetForegroundWindow")
+	procGetWindowThreadProcessId   = user32.NewProc("GetWindowThreadProcessId")
 
 	procCreateCompatibleDC     = gdi32.NewProc("CreateCompatibleDC")
 	procCreateCompatibleBitmap = gdi32.NewProc("CreateCompatibleBitmap")
@@ -93,6 +94,7 @@ var (
 type WindowsController struct {
 	log                 *slog.Logger
 	mu                  sync.Mutex
+	pid                 int
 	cachedHWND          uintptr
 	cacheTime           time.Time
 	prevForegroundHwnd  uintptr
@@ -103,19 +105,39 @@ func NewWindowsController(log *slog.Logger) *WindowsController {
 	return &WindowsController{log: log}
 }
 
+// SetPID sets the GLM process ID for window filtering.
+func (wc *WindowsController) SetPID(pid int) {
+	wc.mu.Lock()
+	defer wc.mu.Unlock()
+	wc.pid = pid
+	wc.cachedHWND = 0 // invalidate cache when PID changes
+	wc.cacheTime = time.Time{}
+}
+
 // findGLMWindow locates the GLM window by enumerating top-level windows.
 // It matches windows whose class name starts with "JUCE_" and whose title
-// contains "GLM". The result is cached for hwndCacheTTL.
+// contains "GLM". When PID is set, only windows belonging to that process match.
+// The result is cached for hwndCacheTTL.
 func (wc *WindowsController) findGLMWindow() (uintptr, error) {
 	if wc.cachedHWND != 0 && time.Since(wc.cacheTime) < hwndCacheTTL {
 		return wc.cachedHWND, nil
 	}
 
+	targetPID := wc.pid
 	var foundHWND uintptr
 	classNameBuf := make([]uint16, 256)
 	windowTextBuf := make([]uint16, 256)
 
 	callback := windows.NewCallback(func(hwnd uintptr, lParam uintptr) uintptr {
+		// Filter by PID if set.
+		if targetPID > 0 {
+			var windowPID uint32
+			procGetWindowThreadProcessId.Call(hwnd, uintptr(unsafe.Pointer(&windowPID)))
+			if int(windowPID) != targetPID {
+				return 1 // wrong process, continue
+			}
+		}
+
 		// Get class name.
 		ret, _, _ := procGetClassNameW.Call(hwnd, uintptr(unsafe.Pointer(&classNameBuf[0])), 256)
 		if ret == 0 {
