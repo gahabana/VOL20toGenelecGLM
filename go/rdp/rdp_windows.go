@@ -184,23 +184,22 @@ func (w *WindowsPrimer) Prime() error {
 	w.Log.Info("launched FreeRDP", "pid", cmd.Process.Pid)
 
 	// Step 3: Poll for RDP session (up to 10s, every 500ms)
-	rdpSessionID := ""
+	rdpDetected := false
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
-		if id := detectRDPSessionID(); id != "" {
-			rdpSessionID = id
-			w.Log.Info("RDP session detected", "session_id", rdpSessionID)
+		if findSessionID("rdp-tcp#", "") != "" {
+			rdpDetected = true
+			w.Log.Info("RDP session detected")
 			break
 		}
 		time.Sleep(500 * time.Millisecond)
 	}
 
-	if rdpSessionID == "" {
+	if !rdpDetected {
 		w.Log.Warn("RDP session not detected within timeout, proceeding anyway")
-		rdpSessionID = "1" // fallback to legacy hardcoded value
 	}
 
-	// Step 4: Wait 1s after session detected
+	// Step 4: Wait 1s for Windows to fully register session
 	time.Sleep(1 * time.Second)
 
 	// Step 5: Kill FreeRDP
@@ -210,12 +209,21 @@ func (w *WindowsPrimer) Prime() error {
 	_ = cmd.Wait() // reap the process
 	w.Log.Info("killed FreeRDP process")
 
-	// Step 6: Reconnect console via tscon using the detected session ID
-	tsconCmd := exec.Command("tscon", rdpSessionID, "/dest:console")
+	// Step 6: Wait 1s then find the disconnected session to reconnect
+	time.Sleep(1 * time.Second)
+	discSessionID := findSessionID("disc", username)
+	if discSessionID == "" {
+		w.Log.Warn("no disconnected session found for user, trying fallback", "username", username)
+		discSessionID = "1"
+	}
+
+	// Step 7: Reconnect disconnected session to console via tscon
+	w.Log.Info("reconnecting session to console", "session_id", discSessionID, "username", username)
+	tsconCmd := exec.Command("tscon", discSessionID, "/dest:console")
 	if output, err := tsconCmd.CombinedOutput(); err != nil {
-		w.Log.Warn("tscon failed", "error", err, "output", string(output), "session_id", rdpSessionID)
+		w.Log.Warn("tscon failed", "error", err, "output", string(output), "session_id", discSessionID)
 	} else {
-		w.Log.Info("reconnected console session via tscon", "session_id", rdpSessionID)
+		w.Log.Info("reconnected console session via tscon", "session_id", discSessionID)
 	}
 
 	// Step 7: Final settle time
@@ -225,32 +233,34 @@ func (w *WindowsPrimer) Prime() error {
 	return nil
 }
 
-// detectRDPSession runs "query session" and looks for "rdp-tcp#" in the output,
-// which indicates an active RDP session.
-// detectRDPSessionID parses `query session` output and returns the session ID
-// of the active RDP session (rdp-tcp#N line), or "" if not found.
-func detectRDPSessionID() string {
+// findSessionID runs "query session" and finds a session matching the given
+// keyword (e.g. "rdp-tcp#" or "disc") and optionally a username. Returns
+// the session ID as a string, or "" if not found.
+func findSessionID(keyword, username string) string {
 	cmd := exec.Command("query", "session")
-	// Use CombinedOutput — query session may return non-zero exit code
-	// while still printing session info to stdout.
 	output, _ := cmd.CombinedOutput()
 	if len(output) == 0 {
 		return ""
 	}
 
+	keyword = strings.ToLower(keyword)
+	username = strings.ToLower(username)
+
 	scanner := bufio.NewScanner(strings.NewReader(string(output)))
 	for scanner.Scan() {
 		line := scanner.Text()
-		if strings.Contains(strings.ToLower(line), "rdp-tcp#") {
-			// Parse session ID from the line. Format:
-			//  rdp-tcp#0             zh                        2  Active
-			// Fields are whitespace-separated; ID is the numeric field after username.
-			fields := strings.Fields(line)
-			for _, f := range fields {
-				// Session ID is a small number (1-65535)
-				if id, err := strconv.Atoi(f); err == nil && id > 0 && id < 65536 {
-					return strconv.Itoa(id)
-				}
+		lower := strings.ToLower(line)
+		if !strings.Contains(lower, keyword) {
+			continue
+		}
+		if username != "" && !strings.Contains(lower, username) {
+			continue
+		}
+		// Extract session ID: first numeric field in the line
+		fields := strings.Fields(line)
+		for _, f := range fields {
+			if id, err := strconv.Atoi(f); err == nil && id > 0 && id < 65536 {
+				return strconv.Itoa(id)
 			}
 		}
 	}
