@@ -2,6 +2,7 @@ package config
 
 import (
 	"flag"
+	"os"
 	"strings"
 )
 
@@ -104,7 +105,9 @@ func Parse(args []string) Config {
 	fs.BoolVar(&cfg.HighPriority, "high_priority", true, "Set process priority to AboveNormal")
 	noHighPriority := fs.Bool("no_high_priority", false, "Disable elevated process priority")
 
-	fs.Parse(args) //nolint:errcheck
+	if err := fs.Parse(args); err != nil {
+		os.Exit(0)
+	}
 
 	// Parse volume increases list
 	if volumeList != "" {
