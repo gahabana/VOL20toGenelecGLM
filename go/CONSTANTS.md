@@ -70,7 +70,9 @@ All tunable constants that define the behavior of the Go binary. When adding new
 | `CCVolDown` | 22 | Volume decrement (momentary) |
 | `CCMute` | 23 | Mute (toggle) |
 | `CCDim` | 24 | Dim (toggle) |
-| `CCPower` | 28 | System Power (momentary, no MIDI feedback) |
+| `CCPower` | 28 | System Power — in Toggle mode: 0=OFF, >0=ON (deterministic). No MIDI feedback (CC28 never sent by GLM). |
+
+**GLM MIDI Settings prerequisite:** Power, Mute, and Dim must be set to **"Toggle"** (not "Momentary") for deterministic control. Toggle mode: value 0=OFF, value >0=ON (absolute switch, idempotent). Momentary mode: value >0=blind toggle, value 0=ignored. Corresponds to `powerMessageType=0` in `glmv5.cfg`.
 
 ### Power Pattern Detection
 

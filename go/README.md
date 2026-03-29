@@ -38,16 +38,22 @@ go build -ldflags="-s -w" -o vol20toglm.exe .
 
 ## Quick Start
 
-**Desktop user** (GLM already running, monitor attached):
+**Desktop user** (GLM already running, user interacting with screen):
 
 ```cmd
-vol20toglm.exe --no_glm_manager --no_rdp_priming --no_midi_restart
+vol20toglm.exe --no_glm_manager --no_rdp_priming --no_midi_restart --no_ui_automation
 ```
 
-**Headless VM** (full automation — launches GLM, primes RDP, restarts MIDI):
+**Headless VM** (full automation — launches GLM, primes RDP, restarts MIDI, pixel verification):
 
 ```cmd
-vol20toglm.exe
+vol20toglm.exe --headless
+```
+
+**Headless VM with UI-based power** (fallback if MIDI power causes speaker disconnects):
+
+```cmd
+vol20toglm.exe --headless --ui_power
 ```
 
 ## CLI Flags
@@ -123,6 +129,25 @@ Port matching is substring-based — `GLMMIDI` matches `GLMMIDI 1`, `GLMMIDI 2`,
 | `--high_priority` | `true` | Set process priority to AboveNormal |
 | `--no_high_priority` | | Run at normal priority |
 
+### Power Control Mode
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--no_ui_automation` | `false` | Disable all pixel reading and mouse clicks. Power via MIDI CC28 only. Best for desktop use. |
+| `--headless` | `false` | Enable UI automation for pixel verification and speaker health monitoring. Power still via MIDI CC28 unless `--ui_power` is set. |
+| `--ui_power` | `false` | Use UI click for power instead of MIDI. Requires `--headless`. Fallback if MIDI power causes speaker disconnects. |
+
+**Modes summary:**
+
+| Flags | Power control | Screen reading | Use case |
+|-------|--------------|----------------|----------|
+| `--no_ui_automation` | MIDI CC28 | Disabled | Desktop, user interacting with GLM |
+| `--headless` | MIDI CC28 | Enabled (verify + health) | Headless VM, unattended |
+| `--headless --ui_power` | UI click | Enabled | Fallback if MIDI power unreliable |
+| *(no flags)* | MIDI CC28 | Disabled | Same as `--no_ui_automation` |
+
+**GLM prerequisite:** MIDI Settings must have Power, Mute, and Dim set to **"Toggle"** (not "Momentary") for deterministic MIDI control. See `RESEARCH-glm-midi-cc28-power.md` Section 11 for details.
+
 ### Discovery
 
 | Flag | Description |
@@ -138,7 +163,7 @@ Port matching is substring-based — `GLMMIDI` matches `GLMMIDI 1`, `GLMMIDI 2`,
 | `POST` | `/api/volume/adjust` | Adjust volume: `{"delta": int}` |
 | `POST` | `/api/mute` | Toggle mute (empty body) or set: `{"state": bool}` |
 | `POST` | `/api/dim` | Toggle dim (empty body) or set: `{"state": bool}` |
-| `POST` | `/api/power` | Toggle power (empty body) or set: `{"state": bool}` |
+| `POST` | `/api/power` | Power control: `{"state": "on"}`, `{"state": "off"}`, `{"state": "toggle"}`, `{"state": bool}`, or empty body (toggle) |
 | `GET` | `/api/health` | Health check |
 | `WS` | `/ws/state` | WebSocket — real-time state updates |
 | `GET` | `/` | Web UI |
