@@ -278,6 +278,7 @@ func main() {
 	// the MIDICommander's consumerWriter (gate) can process the send immediately.
 	if midiCmd, ok := powerCmd.(*power.MIDICommander); ok {
 		log.Info("forcing power ON at startup via MIDI")
+		ctrl.SetPowerCommandPending() // suppress ACK pattern from being treated as external
 		if err := midiCmd.PowerOn("startup"); err != nil {
 			log.Warn("startup power-on MIDI send failed", "err", err)
 		}
