@@ -80,7 +80,7 @@ func Parse(args []string) Config {
 	fs.StringVar(&cfg.MIDIOutChannel, "midi_out_channel", "GLMOUT", "MIDI output port name (state FROM GLM)")
 
 	var startupVolume int
-	fs.IntVar(&startupVolume, "startup_volume", -1, "Startup volume (0-127), -1 to query")
+	fs.IntVar(&startupVolume, "startup_volume", -1, "Startup volume (0-127), -1 to probe via Vol+/Vol- round-trip")
 
 	fs.IntVar(&cfg.APIPort, "api_port", 8080, "REST API port (0 to disable)")
 
