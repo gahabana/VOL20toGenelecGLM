@@ -257,39 +257,157 @@ This is a deliberate design choice, not a JUCE limitation.
 
 ## 9. Conclusions: Can We Get Reliable Power State from MIDI?
 
-### Direct answer: NO, not via CC28
+### ~~Direct answer: NO, not via CC28~~ — CORRECTED, see Section 11
 
-There is **no way** to:
-1. Send CC28 to explicitly set power ON or OFF (it's always a toggle)
-2. Receive CC28 feedback from GLM (power state is never sent on MIDI output)
-3. Configure GLM to change CC28 behavior to absolute mode
+~~There is **no way** to:~~
+1. ~~Send CC28 to explicitly set power ON or OFF (it's always a toggle)~~
+2. ~~Receive CC28 feedback from GLM (power state is never sent on MIDI output)~~ — Still true
+3. ~~Configure GLM to change CC28 behavior to absolute mode~~ — It already IS absolute in Toggle mode
 
 ### What IS available via MIDI output
 
 GLM sends the following on its MIDI output port when power is toggled:
 - **A burst of CC23 (Mute) + CC20 (Volume) + CC24 (Dim) messages** — the same pattern our codebase already detects
-- These messages contain the **new state values** for mute, volume, and dim
+- ~~These messages contain the **new state values** for mute, volume, and dim~~ — See Section 11: pattern is identical for ON, OFF, and no-op
 - The burst is indistinguishable from a group change burst
 
-### Current approach (already implemented) is optimal
+### ~~Current approach (already implemented) is optimal~~ — See Section 11
 
 Our codebase's power pattern detection (`bridge2glm.py`) is already the best available approach:
 1. Monitor GLM MIDI output for the 5-message CC burst pattern
 2. Use timing analysis (pre-gap, max-gap, total-gap) to distinguish power toggle from group change
-3. Track power state internally as a toggle (each detected pattern = flip state)
+3. ~~Track power state internally as a toggle (each detected pattern = flip state)~~ — WRONG, see Section 11
 4. Use UI automation (pixel sampling) as ground truth when available
 
 ### Possible improvements
 
 1. **Upgrade to GLM 5.2+**: The fix for "MIDI issue causing messages from GLM to MIDI controller to fail" may improve reliability of the CC burst we depend on for pattern detection
 
-2. **Use Mute/Volume state changes as power indicators**: When power goes OFF, GLM likely sends CC23=127 (muted) and CC20=0 (volume 0). When power comes ON, it restores the previous volume and mute state. We could potentially use the CC20 value in the burst to infer power direction (OFF→ON vs ON→OFF).
+2. ~~**Use Mute/Volume state changes as power indicators**~~ — Disproven: pattern is identical regardless of power direction (see Section 11)
 
 3. **Contact Genelec directly**: Request that CC28 be added to the MIDI output feedback. Given the GLM 5.2 MIDI fix, Genelec appears to be actively improving MIDI functionality. A feature request for power state feedback seems reasonable.
 
-4. **Feature request for absolute mode**: Ask Genelec to support CC28 value=127 for ON, value=0 for OFF (like Mute/Dim already work in their output direction). This would solve the problem entirely.
+4. ~~**Feature request for absolute mode**~~ — Already works in Toggle mode! (see Section 11)
 
 5. **genlc as nuclear option**: If we absolutely need deterministic power control without GLM, the genlc project demonstrates it's possible to talk to the hardware directly, but this is a fundamentally different architecture.
+
+---
+
+## 11. Empirical Testing — GLM 5.2.0 (2026-03-28/29)
+
+**This section supersedes conclusions in Section 9.** Tested on GLM 5.2.0 running on Windows, using `glm_midi_test.py` to send/receive MIDI messages independently of the bridge.
+
+### Finding 1: Toggle mode gives deterministic ON/OFF control
+
+GLM MIDI Settings has two modes per control: **"Toggle"** and **"Momentary"**. These correspond to `MessageType=0` and `MessageType=1` in `glmv5.cfg` (stored at `%APPDATA%\Genelec\glmv5.cfg`).
+
+**Toggle mode (MessageType=0) — RECOMMENDED:**
+
+| Control | CC | Send value 0 | Send value >0 (1 or 127) |
+|---------|------|--------------|--------------------------|
+| Power | 28 | Speakers OFF | Speakers ON |
+| Mute | 23 | Unmute | Mute |
+| Dim | 24 | Undim | Dim |
+
+- Commands are **deterministic and idempotent** — sending CC28=127 five times keeps speakers ON, no toggling
+- This is absolute switch behavior, matching JUCE's default `AudioParameterBool` mapping
+- The GLM manual's description of "Toggle" refers to the controller type (alternates 127/0 per press), not GLM's response
+
+**Momentary mode (MessageType=1):**
+
+| Send value 0 | Send value >0 |
+|--------------|---------------|
+| Ignored (no action) | Flips/toggles current state |
+
+- This is a blind toggle — no way to set explicit ON or OFF
+- Matches what the GLM manual describes as toggle behavior
+
+### Finding 2: MIDI output pattern is an ACK, not a state indicator
+
+When ANY power command is processed (ON, OFF, or idempotent no-op), GLM sends the same 5-message pattern on its MIDI output:
+
+```
+CC23 (Mute)=0 → CC20 (Volume)=81 → CC24 (Dim)=0 → CC23 (Mute)=0 → CC20 (Volume)=81
+```
+
+- Pattern is **identical** regardless of whether power went ON, OFF, or didn't change
+- CC28 (Power) is **never** sent on MIDI output
+- The pattern is an acknowledgment ("command processed"), NOT a state transition indicator
+- **The power pattern detector must NOT flip internal state on each detection** — this causes state drift
+
+### Finding 3: Architecture implications
+
+**Control path (sending commands):**
+- Use MIDI CC in Toggle mode for Power, Mute, Dim — deterministic, no UI automation needed
+- Trust the sent value as the current state (idempotent commands can't desync)
+- No dependency on console session, pixel sampling, or window focus for power control
+
+**Observation path (detecting external changes):**
+- 5-message pattern still useful to detect power changes from RF remote or GLM GUI
+- Pattern cannot determine direction — if source is external, trigger a pixel read to resolve
+- Pixel sampling demoted from primary control mechanism to external-change verification
+
+### Setup prerequisite
+
+GLM MIDI Settings **must** have Power, Mute, and Dim set to **"Toggle"** (not "Momentary") for deterministic control. This can be validated at startup by reading `glmv5.cfg` and checking:
+- `powerMessageType` = `0`
+- `muteMessageType` = `0`
+- `dimMessageType` = `0`
+
+If any are set to `1` (Momentary), the bridge should warn that deterministic control is unavailable.
+
+### Test methodology
+
+Tests performed using `glm_midi_test.py`:
+- `--list` to verify MIDI port names (`GLMMIDI 1` for input, `GLMOUT 1` for output)
+- `--cc 28 --value 127` / `--cc 28 --value 0` to test power ON/OFF
+- `--cc 23 --value 127` / `--cc 23 --value 0` to test mute ON/OFF
+- `--cc 24 --value 127` / `--cc 24 --value 0` to test dim ON/OFF
+- `--listen --duration 120` in parallel to capture GLM MIDI output responses
+- Repeated idempotent sends (e.g., CC28=127 four times) to verify no toggling occurs
+- Compared behavior with "Toggle" vs "Momentary" GLM MIDI settings
+
+---
+
+## 12. GLM 5.2.x Release Stability and Speaker Disconnect Issues (2026-03-29)
+
+### GLM version status (as of 2026-03-29)
+
+| Version | Status | Notes |
+|---------|--------|-------|
+| 5.2.0 | **Current stable** | MIDI fix, but power management bugs remain |
+| 5.2.1 | **Pulled from downloads** | Had power/ISS fixes but was withdrawn by Genelec |
+| 5.2.2 | **Pulled/replaced** | Briefly available, had worse issues than 5.2.1 |
+
+Genelec is actively struggling with the power management code path in 5.2.x. The 5.2.0 release may be the most stable available despite its known issues.
+
+### Speaker disconnect / OFFLINE issue
+
+Observed behavior on 5.2.0: after power on or power off operations, one or more speakers (out of 3: subwoofer + 2 front L/R) occasionally disconnect and show as OFFLINE in GLM. The speaker remains unreachable until physically power-cycled (mains unplug/replug).
+
+**Anecdotal observation:** This appears to happen more frequently when power is toggled via MIDI CC28 than via the GUI power button (UI automation click). Not conclusively proven but consistently suspected.
+
+**Possible explanations:**
+1. **Same internal code path, different timing** — GUI and MIDI CC28 likely trigger the same GLM power toggle function internally. However, the GUI path has natural delays (UI rendering, our pixel verification, settling windows) that give speakers more time to boot. MIDI sends instantly with no inherent delay.
+2. **Speaker boot time from GNet standby: 2-5 seconds** — The `genlc` reverse-engineered code shows GLM sends a broadcast wakeup (`CID_WAKEUP 0x3A`) with zero delay before attempting RACE discovery. If some speakers boot slower than others, they may miss the discovery window.
+3. **RS-485 bus contention** — Multiple speakers booting simultaneously may cause transient bus issues, though the RACE protocol is designed to handle this.
+4. **Known community issues** — 9301A goes permanently OFFLINE after standby/wake (mains cycle required). 8341A users report speakers "drop out all the time when GLM is running."
+
+### Impact on pixel-based power detection
+
+When one speaker is OFFLINE but others are ON:
+- The gold pixel detector finds ~1700 gold pixels from a single OFFLINE label (threshold is 50) → **incorrectly reports OFF**
+- The power button is green (ON) but the fallback button patch may not be reached due to the primary detector's false positive
+- This is a real bug in our detection algorithm (see Section 11 analysis)
+
+### Defensive recommendations for bridge code
+
+1. **Use MIDI CC28 for power control** — deterministic ON/OFF regardless of speaker health
+2. **Extended settling window after power commands** — 5-6 seconds instead of 3.5s to allow all speakers to boot from GNet standby
+3. **Separate power state from speaker health** — power button color = power state, OFFLINE label count = speaker health (independent metrics)
+4. **Post-power health check** — after settling, scan honeycomb for OFFLINE labels and report as health warning, not power state
+5. **Cannot rely on Genelec fixing this soon** — 5.2.1 and 5.2.2 were pulled, indicating active instability in the power management code
+6. **If OFFLINE detected after power-on** — consider retry (send CC28=127 again after delay) or report as health warning to user via MQTT/API
 
 ---
 
