@@ -21,10 +21,11 @@ import (
 	applog "vol20toglm/logging"
 	"vol20toglm/midi"
 	"vol20toglm/midigate"
+	"vol20toglm/power"
 	"vol20toglm/types"
 )
 
-const version = "0.7.0"
+const version = "0.8.0"
 
 func main() {
 	cfg := config.Parse(os.Args[1:])
@@ -96,23 +97,50 @@ func main() {
 	midiIn := createMIDIReader(cfg, ctx, log)
 	defer midiIn.Close()
 
-	// Power controller — platform-specific
-	powerCtrl := createPowerController(log)
+	// Power commander and observer — selected based on config flags.
+	// Path A (--no-ui-automation): MIDI-only, no screen interaction.
+	// Path B (--headless, no --ui-power): MIDI power, pixel verification.
+	// Path B+ui (--headless --ui-power): UI click power, pixel verification.
+	// Default (no flags): MIDI power, no verification.
+	var powerCmd power.Commander
+	var powerObs power.Observer
 
-	// Pass GLM PID to power controller so it finds the correct window (not splash)
-	if glmMgr != nil && powerCtrl != nil {
-		powerCtrl.SetPID(glmMgr.GetPID())
-		// Also update PID on GLM restart
-		glmMgr.SetRestartCallback(func(pid int) {
-			powerCtrl.SetPID(pid)
-		})
+	// We need a gated writer for MIDICommander but gate is set up later.
+	// Use a deferred assignment via a closure so the right writer is used.
+	// For now, create MIDICommander with a placeholder; we'll reassign after gate is set up.
+	// Actually we build the commander after gate is ready — see below after gate creation.
+
+	// Power observer (windows controller for pixel scanning)
+	var winPowerCtrl power.Controller // retained for startup pixel scan + legacy PID wiring
+
+	if cfg.NoUIAutomation {
+		// Path A: MIDI-only
+		winPowerCtrl = nil
+	} else if cfg.Headless {
+		// Paths B and B+ui: need pixel scanning
+		winPowerCtrl = createPowerController(log)
+	} else {
+		// Default: no pixel scanning
+		winPowerCtrl = nil
+	}
+
+	// Pass GLM PID to pixel-scanning controller so it finds the correct window (not splash).
+	// The restart callback is wired later after powerObs is resolved.
+	if glmMgr != nil && winPowerCtrl != nil {
+		winPowerCtrl.SetPID(glmMgr.GetPID())
 	}
 
 	// Power pattern detector
 	midiLog := log.With("component", "midi-in")
 	powerDetector := controller.NewPowerPatternDetector(func() {
+		if ctrl.IsPowerCommandPending() {
+			// Pattern was triggered by our own command — ignore, we already track state.
+			// No need to clear: the 3-second timestamp window expires automatically.
+			midiLog.Debug("power pattern detected (self-initiated, ignoring)")
+			return
+		}
 		newPower := ctrl.TogglePowerFromMIDIPattern()
-		midiLog.Info("power pattern detected", "new_power_state", newPower)
+		midiLog.Info("power pattern detected (external)", "new_power_state", newPower)
 	})
 
 	// Channel for startup volume probe (buffered, non-blocking send from callback)
@@ -178,12 +206,12 @@ func main() {
 	// Detect initial power state from pixel scan.
 	// Bring GLM to foreground first (console may be covering it), then retry
 	// a few times to allow splash screen to clear after fresh launch.
-	if powerCtrl != nil {
-		powerCtrl.BringToForeground()
+	if winPowerCtrl != nil {
+		winPowerCtrl.BringToForeground()
 		var initialPower bool
 		var scanErr error
 		for attempt := 1; attempt <= 5; attempt++ {
-			initialPower, scanErr = powerCtrl.GetState()
+			initialPower, scanErr = winPowerCtrl.GetState()
 			if scanErr == nil {
 				break
 			}
@@ -196,7 +224,7 @@ func main() {
 		} else {
 			log.Warn("could not read initial power state, assuming ON", "err", scanErr)
 		}
-		powerCtrl.RestoreForeground()
+		winPowerCtrl.RestoreForeground()
 	}
 
 	// Start gate goroutine (after probe, before consumer)
@@ -208,20 +236,75 @@ func main() {
 		}()
 	}
 
-	// Start consumer goroutine (uses gate for response-gated sending)
+	// Resolve the MIDI writer for the consumer (gated if available, else raw)
 	var consumerWriter midi.Writer
 	if gate != nil {
 		consumerWriter = gate
 	} else if midiOut != nil {
 		consumerWriter = midiOut
 	}
+
+	// Build Commander and Observer now that consumerWriter is resolved.
+	if cfg.NoUIAutomation {
+		// Path A: MIDI-only, no screen interaction
+		powerCmd = power.NewMIDICommander(consumerWriter, 0, log.With("component", "power-midi"))
+		powerObs = nil
+	} else if cfg.Headless {
+		if cfg.UIPower {
+			// Path B+ui: UI click for power, pixel for verification
+			// winPowerCtrl implements both Commander and Observer
+			if wc, ok := winPowerCtrl.(interface {
+				power.Commander
+				power.Observer
+			}); ok {
+				powerCmd = wc
+				powerObs = wc
+			}
+		} else {
+			// Path B: MIDI for power, pixel for verification
+			powerCmd = power.NewMIDICommander(consumerWriter, 0, log.With("component", "power-midi"))
+			if obs, ok := winPowerCtrl.(power.Observer); ok {
+				powerObs = obs
+			}
+		}
+	} else {
+		// Default (no flags): MIDI power, no verification
+		powerCmd = power.NewMIDICommander(consumerWriter, 0, log.With("component", "power-midi"))
+		powerObs = nil
+	}
+
+	// Startup: force known ON state via MIDI (ensures GLM is synced).
+	// ORDERING: gate goroutine must already be running (started above) so that
+	// the MIDICommander's consumerWriter (gate) can process the send immediately.
+	if midiCmd, ok := powerCmd.(*power.MIDICommander); ok {
+		log.Info("forcing power ON at startup via MIDI")
+		if err := midiCmd.PowerOn("startup"); err != nil {
+			log.Warn("startup power-on MIDI send failed", "err", err)
+		}
+	} else if powerObs != nil {
+		// UI power mode: read current state instead of forcing
+		if initialState, err := powerObs.GetPowerState(); err == nil {
+			ctrl.SetPower(initialState)
+			log.Info("startup power state read via pixel scan", "power", initialState)
+		}
+	}
+
+	// Wire Observer PID updates from GLM manager
+	if powerObs != nil && glmMgr != nil {
+		powerObs.SetPID(glmMgr.GetPID())
+		glmMgr.SetRestartCallback(func(pid int) {
+			powerObs.SetPID(pid)
+		})
+	}
+
+	// Start consumer goroutine (uses gate for response-gated sending)
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
 		if consumerWriter == nil {
 			log.Warn("no MIDI output, consumer running in dry-run mode")
 		}
-		consumer.Run(ctx, actions, ctrl, consumerWriter, 0, powerCtrl, log.With("component", "consumer"))
+		consumer.Run(ctx, actions, ctrl, consumerWriter, 0, powerCmd, powerObs, log.With("component", "consumer"))
 	}()
 
 	// Start HID reader goroutine

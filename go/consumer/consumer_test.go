@@ -12,6 +12,33 @@ import (
 	"vol20toglm/types"
 )
 
+// mockCommander records the last power action sent and any error to return.
+type mockCommander struct {
+	mu         sync.Mutex
+	lastAction string
+	returnErr  error
+}
+
+func (m *mockCommander) PowerOn(traceID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.lastAction = "on"
+	return m.returnErr
+}
+
+func (m *mockCommander) PowerOff(traceID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.lastAction = "off"
+	return m.returnErr
+}
+
+func (m *mockCommander) getLastAction() string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.lastAction
+}
+
 // mockWriter records MIDI CC messages sent.
 type mockWriter struct {
 	mu   sync.Mutex
@@ -39,21 +66,22 @@ func (m *mockWriter) getSent() []ccMsg {
 	return cp
 }
 
-func newTestSetup() (context.Context, context.CancelFunc, chan types.Action, *controller.Controller, *mockWriter, *slog.Logger) {
+func newTestSetup() (context.Context, context.CancelFunc, chan types.Action, *controller.Controller, *mockWriter, *mockCommander, *slog.Logger) {
 	ctx, cancel := context.WithCancel(context.Background())
 	actions := make(chan types.Action, 10)
 	ctrl := controller.New()
 	ctrl.UpdateFromMIDI(types.CCVolumeAbs, 50) // Initialize volume
 	mw := &mockWriter{}
+	mc := &mockCommander{}
 	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
-	return ctx, cancel, actions, ctrl, mw, log
+	return ctx, cancel, actions, ctrl, mw, mc, log
 }
 
 func TestConsumer_SetVolume(t *testing.T) {
-	ctx, cancel, actions, ctrl, mw, log := newTestSetup()
+	ctx, cancel, actions, ctrl, mw, mc, log := newTestSetup()
 	defer cancel()
 
-	go Run(ctx, actions, ctrl, mw, 0, nil, log)
+	go Run(ctx, actions, ctrl, mw, 0, mc, nil, log)
 
 	actions <- types.Action{
 		Kind:      types.KindSetVolume,
@@ -75,10 +103,10 @@ func TestConsumer_SetVolume(t *testing.T) {
 }
 
 func TestConsumer_AdjustVolume(t *testing.T) {
-	ctx, cancel, actions, ctrl, mw, log := newTestSetup()
+	ctx, cancel, actions, ctrl, mw, mc, log := newTestSetup()
 	defer cancel()
 
-	go Run(ctx, actions, ctrl, mw, 0, nil, log)
+	go Run(ctx, actions, ctrl, mw, 0, mc, nil, log)
 
 	actions <- types.Action{
 		Kind:      types.KindAdjustVolume,
@@ -100,10 +128,10 @@ func TestConsumer_AdjustVolume(t *testing.T) {
 }
 
 func TestConsumer_MuteToggle(t *testing.T) {
-	ctx, cancel, actions, ctrl, mw, log := newTestSetup()
+	ctx, cancel, actions, ctrl, mw, mc, log := newTestSetup()
 	defer cancel()
 
-	go Run(ctx, actions, ctrl, mw, 0, nil, log)
+	go Run(ctx, actions, ctrl, mw, 0, mc, nil, log)
 
 	actions <- types.Action{
 		Kind:      types.KindSetMute,
@@ -125,10 +153,10 @@ func TestConsumer_MuteToggle(t *testing.T) {
 }
 
 func TestConsumer_StaleEventDropped(t *testing.T) {
-	ctx, cancel, actions, ctrl, mw, log := newTestSetup()
+	ctx, cancel, actions, ctrl, mw, mc, log := newTestSetup()
 	defer cancel()
 
-	go Run(ctx, actions, ctrl, mw, 0, nil, log)
+	go Run(ctx, actions, ctrl, mw, 0, mc, nil, log)
 
 	actions <- types.Action{
 		Kind:      types.KindSetVolume,
@@ -147,12 +175,12 @@ func TestConsumer_StaleEventDropped(t *testing.T) {
 }
 
 func TestConsumer_PowerSettlingBlocks(t *testing.T) {
-	ctx, cancel, actions, ctrl, mw, log := newTestSetup()
+	ctx, cancel, actions, ctrl, mw, mc, log := newTestSetup()
 	defer cancel()
 
 	ctrl.StartPowerTransition(false, "test-power")
 
-	go Run(ctx, actions, ctrl, mw, 0, nil, log)
+	go Run(ctx, actions, ctrl, mw, 0, mc, nil, log)
 
 	actions <- types.Action{
 		Kind:      types.KindSetVolume,
@@ -171,11 +199,12 @@ func TestConsumer_PowerSettlingBlocks(t *testing.T) {
 }
 
 func TestConsumer_PowerToggle(t *testing.T) {
-	ctx, cancel, actions, ctrl, mw, log := newTestSetup()
+	ctx, cancel, actions, ctrl, mw, mc, log := newTestSetup()
 	defer cancel()
 
-	go Run(ctx, actions, ctrl, mw, 0, nil, log)
+	go Run(ctx, actions, ctrl, mw, 0, mc, nil, log)
 
+	// Default controller state has Power=true, so Toggle=true → target OFF
 	actions <- types.Action{
 		Kind:      types.KindSetPower,
 		Toggle:    true,
@@ -186,12 +215,15 @@ func TestConsumer_PowerToggle(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 	cancel()
 
-	sent := mw.getSent()
-	if len(sent) != 1 {
-		t.Fatalf("expected 1 message, got %d", len(sent))
+	// Power command goes through Commander, not MIDI writer
+	lastAction := mc.getLastAction()
+	if lastAction != "off" {
+		t.Errorf("expected commander PowerOff (toggle from ON), got %q", lastAction)
 	}
-	if sent[0].cc != types.CCPower || sent[0].value != 127 {
-		t.Errorf("got cc=%d val=%d, want cc=%d val=127", sent[0].cc, sent[0].value, types.CCPower)
+	// No MIDI messages should have been sent for the power action
+	sent := mw.getSent()
+	if len(sent) != 0 {
+		t.Errorf("expected 0 MIDI messages for power toggle, got %d", len(sent))
 	}
 }
 
@@ -201,9 +233,10 @@ func TestConsumer_AdjustVolumeBeforeInit(t *testing.T) {
 	actions := make(chan types.Action, 10)
 	ctrl := controller.New() // Volume NOT initialized
 	mw := &mockWriter{}
+	mc := &mockCommander{}
 	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 
-	go Run(ctx, actions, ctrl, mw, 0, nil, log)
+	go Run(ctx, actions, ctrl, mw, 0, mc, nil, log)
 
 	actions <- types.Action{
 		Kind:      types.KindAdjustVolume,

@@ -209,7 +209,60 @@ func (s *Server) handleDim(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handlePower(w http.ResponseWriter, r *http.Request) {
-	s.handleToggleBool(w, r, types.KindSetPower)
+	// Accept both legacy bool format {"state": true/false} and explicit string
+	// format {"state": "on"|"off"|"toggle"}, as well as empty body for toggle.
+	var rawBody struct {
+		State *json.RawMessage `json:"state"`
+	}
+	bodyErr := json.NewDecoder(r.Body).Decode(&rawBody)
+	if bodyErr != nil && bodyErr.Error() != "EOF" {
+		writeJSONError(w, http.StatusBadRequest, "invalid JSON: "+bodyErr.Error())
+		return
+	}
+
+	if s.checkSettling(w, types.KindSetPower) {
+		return
+	}
+
+	action := types.Action{
+		Kind:      types.KindSetPower,
+		Source:    "api",
+		TraceID:   s.traceID.Next("api"),
+		Timestamp: time.Now(),
+	}
+
+	if rawBody.State != nil {
+		// Try string first ("on", "off", "toggle")
+		var stateStr string
+		if err := json.Unmarshal(*rawBody.State, &stateStr); err == nil {
+			switch stateStr {
+			case "on":
+				action.BoolValue = true
+			case "off":
+				action.BoolValue = false
+			case "toggle":
+				action.Toggle = true
+			default:
+				writeJSONError(w, http.StatusBadRequest,
+					`state must be "on", "off", or "toggle"`)
+				return
+			}
+		} else {
+			// Try bool (legacy format)
+			var stateBool bool
+			if err := json.Unmarshal(*rawBody.State, &stateBool); err != nil {
+				writeJSONError(w, http.StatusBadRequest,
+					`state must be a boolean or "on"/"off"/"toggle"`)
+				return
+			}
+			action.BoolValue = stateBool
+		}
+	} else {
+		// No state field → toggle (backwards-compatible default)
+		action.Toggle = true
+	}
+
+	s.sendAction(w, action)
 }
 
 // handleToggleBool handles endpoints that accept either {} (toggle) or {"state": bool}.

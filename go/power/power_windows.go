@@ -15,33 +15,33 @@ import (
 
 // Windows API constants.
 const (
-	srccopy           = 0x00CC0020
-	dibRGBColors      = 0
-	biRGB             = 0
+	srccopy             = 0x00CC0020
+	dibRGBColors        = 0
+	biRGB               = 0
 	mouseeventfLeftDown = 0x0002
 	mouseeventfLeftUp   = 0x0004
 )
 
 // Pixel analysis thresholds.
 const (
-	goldMinRed       = 150
-	goldMinGreen     = 120
-	goldMaxGreen     = 200
-	goldMaxBlue      = 80
-	goldCountOff     = 50
-	offMaxBrightness = 95
+	goldMinRed        = 150
+	goldMinGreen      = 120
+	goldMaxGreen      = 200
+	goldMaxBlue       = 80
+	goldCountOff      = 50
+	offMaxBrightness  = 95
 	offMaxChannelDiff = 22
-	onMinGreen       = 110
-	onGreenRedDiff   = 35
+	onMinGreen        = 110
+	onGreenRedDiff    = 35
 )
 
 // Timing constants.
 const (
-	pollInterval    = 150 * time.Millisecond
-	verifyTimeout   = 3 * time.Second
-	postClickDelay  = 350 * time.Millisecond
+	pollInterval     = 150 * time.Millisecond
+	verifyTimeout    = 3 * time.Second
+	postClickDelay   = 350 * time.Millisecond
 	clickDownUpDelay = 20 * time.Millisecond
-	hwndCacheTTL    = 5 * time.Second
+	hwndCacheTTL     = 5 * time.Second
 )
 
 // Windows API structs.
@@ -65,20 +65,20 @@ type rect struct {
 
 // Lazy-loaded DLL procedures.
 var (
-	user32   = windows.NewLazySystemDLL("user32.dll")
-	gdi32    = windows.NewLazySystemDLL("gdi32.dll")
+	user32 = windows.NewLazySystemDLL("user32.dll")
+	gdi32  = windows.NewLazySystemDLL("gdi32.dll")
 
-	procEnumWindows          = user32.NewProc("EnumWindows")
-	procGetClassNameW        = user32.NewProc("GetClassNameW")
-	procGetWindowTextW       = user32.NewProc("GetWindowTextW")
-	procGetWindowRect        = user32.NewProc("GetWindowRect")
-	procGetDC                = user32.NewProc("GetDC")
-	procReleaseDC            = user32.NewProc("ReleaseDC")
-	procSetCursorPos         = user32.NewProc("SetCursorPos")
-	procMouseEvent           = user32.NewProc("mouse_event")
-	procSetForegroundWindow        = user32.NewProc("SetForegroundWindow")
-	procGetForegroundWindow        = user32.NewProc("GetForegroundWindow")
-	procGetWindowThreadProcessId   = user32.NewProc("GetWindowThreadProcessId")
+	procEnumWindows              = user32.NewProc("EnumWindows")
+	procGetClassNameW            = user32.NewProc("GetClassNameW")
+	procGetWindowTextW           = user32.NewProc("GetWindowTextW")
+	procGetWindowRect            = user32.NewProc("GetWindowRect")
+	procGetDC                    = user32.NewProc("GetDC")
+	procReleaseDC                = user32.NewProc("ReleaseDC")
+	procSetCursorPos             = user32.NewProc("SetCursorPos")
+	procMouseEvent               = user32.NewProc("mouse_event")
+	procSetForegroundWindow      = user32.NewProc("SetForegroundWindow")
+	procGetForegroundWindow      = user32.NewProc("GetForegroundWindow")
+	procGetWindowThreadProcessId = user32.NewProc("GetWindowThreadProcessId")
 
 	procCreateCompatibleDC     = gdi32.NewProc("CreateCompatibleDC")
 	procCreateCompatibleBitmap = gdi32.NewProc("CreateCompatibleBitmap")
@@ -92,12 +92,12 @@ var (
 // WindowsController detects GLM power state via pixel analysis and toggles
 // power by simulating mouse clicks on the GLM window.
 type WindowsController struct {
-	log                 *slog.Logger
-	mu                  sync.Mutex
-	pid                 int
-	cachedHWND          uintptr
-	cacheTime           time.Time
-	prevForegroundHwnd  uintptr
+	log                *slog.Logger
+	mu                 sync.Mutex
+	pid                int
+	cachedHWND         uintptr
+	cacheTime          time.Time
+	prevForegroundHwnd uintptr
 }
 
 // NewWindowsController creates a new WindowsController.
@@ -442,6 +442,41 @@ func (wc *WindowsController) GetState() (bool, error) {
 	default:
 		return false, fmt.Errorf("unable to determine power state")
 	}
+}
+
+// GetPowerState returns the current power state. Implements Observer.
+func (wc *WindowsController) GetPowerState() (bool, error) {
+	return wc.GetState()
+}
+
+// PowerOn ensures power is ON via UI click. Implements Commander.
+// If power is already on, the click is skipped.
+func (wc *WindowsController) PowerOn(traceID string) error {
+	currentState, err := wc.GetState()
+	if err != nil {
+		return fmt.Errorf("cannot read state: %w", err)
+	}
+	if currentState {
+		wc.log.Info("power already ON, skipping UI click", "trace_id", traceID)
+		return nil
+	}
+	wc.log.Info("power ON via UI click", "trace_id", traceID)
+	return wc.Toggle()
+}
+
+// PowerOff ensures power is OFF via UI click. Implements Commander.
+// If power is already off, the click is skipped.
+func (wc *WindowsController) PowerOff(traceID string) error {
+	currentState, err := wc.GetState()
+	if err != nil {
+		return fmt.Errorf("cannot read state: %w", err)
+	}
+	if !currentState {
+		wc.log.Info("power already OFF, skipping UI click", "trace_id", traceID)
+		return nil
+	}
+	wc.log.Info("power OFF via UI click", "trace_id", traceID)
+	return wc.Toggle()
 }
 
 // Toggle clicks the power button in the GLM window to change the power state.

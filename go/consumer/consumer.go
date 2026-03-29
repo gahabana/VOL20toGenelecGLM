@@ -17,18 +17,20 @@ const (
 
 // Run is the consumer goroutine. It reads actions from the channel,
 // applies them to the controller, and sends the resulting MIDI messages.
-func Run(ctx context.Context, actions <-chan types.Action, ctrl *controller.Controller, midiOut midi.Writer, midiChannel int, powerCtrl power.Controller, log *slog.Logger) {
+// powerCmd sends power on/off commands (MIDI or UI click).
+// powerObs reads power state from screen for verification (nil = no verification).
+func Run(ctx context.Context, actions <-chan types.Action, ctrl *controller.Controller, midiOut midi.Writer, midiChannel int, powerCmd power.Commander, powerObs power.Observer, log *slog.Logger) {
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case a := <-actions:
-			processAction(a, ctrl, midiOut, midiChannel, powerCtrl, log)
+			processAction(a, ctrl, midiOut, midiChannel, powerCmd, powerObs, log)
 		}
 	}
 }
 
-func processAction(a types.Action, ctrl *controller.Controller, midiOut midi.Writer, midiChannel int, powerCtrl power.Controller, log *slog.Logger) {
+func processAction(a types.Action, ctrl *controller.Controller, midiOut midi.Writer, midiChannel int, powerCmd power.Commander, powerObs power.Observer, log *slog.Logger) {
 	// Stale event filter
 	age := time.Since(a.Timestamp).Seconds()
 	if age > MaxEventAge {
@@ -40,7 +42,7 @@ func processAction(a types.Action, ctrl *controller.Controller, midiOut midi.Wri
 		return
 	}
 
-	// Power actions: check power-specific settling, then use pixel toggle or MIDI
+	// Power actions: check power-specific settling, then delegate to Commander
 	if a.Kind == types.KindSetPower {
 		allowed, wait, reason := ctrl.CanAcceptPowerCommand()
 		if !allowed {
@@ -52,41 +54,65 @@ func processAction(a types.Action, ctrl *controller.Controller, midiOut midi.Wri
 			return
 		}
 
-		// Pixel-based power toggle when power controller is available
-		if powerCtrl != nil {
-			log.Info("toggling power via UI automation", "trace_id", a.TraceID)
-			ctrl.StartPowerTransition(!ctrl.GetState().Power, a.TraceID)
+		// Determine target state
+		var targetOn bool
+		if a.Toggle {
+			targetOn = !ctrl.GetState().Power
+		} else {
+			targetOn = a.BoolValue
+		}
 
-			if err := powerCtrl.Toggle(); err != nil {
-				log.Error("power toggle failed", "trace_id", a.TraceID, "err", err)
-				ctrl.EndPowerTransition(false, nil)
-				return
-			}
+		ctrl.StartPowerTransition(targetOn, a.TraceID)
 
-			newState, err := powerCtrl.GetState()
-			if err != nil {
-				log.Error("power state read failed", "trace_id", a.TraceID, "err", err)
-				ctrl.EndPowerTransition(false, nil)
-				return
-			}
+		var commandErr error
+		if targetOn {
+			commandErr = powerCmd.PowerOn(a.TraceID)
+		} else {
+			commandErr = powerCmd.PowerOff(a.TraceID)
+		}
 
-			ctrl.EndPowerTransition(true, &newState)
-			log.Info("power toggle complete", "trace_id", a.TraceID, "power", newState)
+		if commandErr != nil {
+			log.Error("power command failed", "trace_id", a.TraceID, "err", commandErr)
+			ctrl.EndPowerTransition(false, nil)
 			return
 		}
-		// Fall through to MIDI send when powerCtrl is nil
-	} else {
-		// Non-power actions: check general settling
-		allowed, wait, reason := ctrl.CanAcceptCommand()
-		if !allowed {
-			log.Warn("command blocked",
-				"trace_id", a.TraceID,
-				"kind", a.Kind.String(),
-				"reason", reason,
-				"wait_s", wait,
-			)
-			return
+
+		// Optional verification via observer
+		if powerObs != nil {
+			// Wait for GLM to process the command and update its UI before sampling pixels.
+			time.Sleep(1 * time.Second)
+			actualState, verifyErr := powerObs.GetPowerState()
+			if verifyErr != nil {
+				log.Warn("power verify failed", "trace_id", a.TraceID, "err", verifyErr)
+				ctrl.EndPowerTransition(true, &targetOn)
+			} else {
+				ctrl.EndPowerTransition(true, &actualState)
+				if actualState != targetOn {
+					log.Warn("power state mismatch after command",
+						"trace_id", a.TraceID,
+						"expected", targetOn,
+						"actual", actualState,
+					)
+				}
+			}
+		} else {
+			ctrl.EndPowerTransition(true, &targetOn)
 		}
+
+		log.Info("power command complete", "trace_id", a.TraceID, "target", targetOn)
+		return
+	}
+
+	// Non-power actions: check general settling
+	allowed, wait, reason := ctrl.CanAcceptCommand()
+	if !allowed {
+		log.Warn("command blocked",
+			"trace_id", a.TraceID,
+			"kind", a.Kind.String(),
+			"reason", reason,
+			"wait_s", wait,
+		)
+		return
 	}
 
 	// Special handling for AdjustVolume when volume not initialized

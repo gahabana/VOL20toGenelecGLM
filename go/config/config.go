@@ -2,6 +2,7 @@ package config
 
 import (
 	"flag"
+	"fmt"
 	"os"
 	"strings"
 )
@@ -50,9 +51,14 @@ type Config struct {
 	GLMCPUGating bool
 
 	// Startup automation
-	RDPPriming      bool
-	MIDIRestart     bool
-	HighPriority    bool // Set process priority to AboveNormal
+	RDPPriming   bool
+	MIDIRestart  bool
+	HighPriority bool // Set process priority to AboveNormal
+
+	// UI automation mode
+	NoUIAutomation bool // Disable all pixel reading and mouse click simulation
+	Headless       bool // Enable UI automation for screen reading (verification, health monitoring)
+	UIPower        bool // Use UI click for power instead of MIDI (requires --headless)
 }
 
 // Parse parses CLI arguments and returns a Config with defaults applied.
@@ -105,6 +111,10 @@ func Parse(args []string) Config {
 	fs.BoolVar(&cfg.HighPriority, "high_priority", true, "Set process priority to AboveNormal")
 	noHighPriority := fs.Bool("no_high_priority", false, "Disable elevated process priority")
 
+	fs.BoolVar(&cfg.NoUIAutomation, "no_ui_automation", false, "Disable all pixel reading and mouse click simulation (MIDI-only power control)")
+	fs.BoolVar(&cfg.Headless, "headless", false, "Enable UI automation for screen reading (verification, health monitoring)")
+	fs.BoolVar(&cfg.UIPower, "ui_power", false, "Use UI click for power instead of MIDI (requires --headless)")
+
 	if err := fs.Parse(args); err != nil {
 		os.Exit(0)
 	}
@@ -141,6 +151,16 @@ func Parse(args []string) Config {
 	}
 	if *noHighPriority {
 		cfg.HighPriority = false
+	}
+
+	// Validate mutually exclusive / dependent flags
+	if cfg.UIPower && !cfg.Headless {
+		fmt.Fprintln(os.Stderr, "error: --ui_power requires --headless")
+		os.Exit(1)
+	}
+	if cfg.NoUIAutomation && cfg.Headless {
+		fmt.Fprintln(os.Stderr, "error: --no_ui_automation and --headless are mutually exclusive")
+		os.Exit(1)
 	}
 
 	return cfg

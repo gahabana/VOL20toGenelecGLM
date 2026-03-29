@@ -9,9 +9,9 @@ import (
 
 // Timing constants for power transitions.
 const (
-	PowerSettlingTime  = 2.0                                  // Seconds to block ALL commands after power toggle
-	PowerCooldownTime  = 1.5                                  // Seconds to block power commands after settling ends
-	PowerTotalLockout  = PowerSettlingTime + PowerCooldownTime // 3.5s total
+	PowerSettlingTime = 2.0                                   // Seconds to block ALL commands after power toggle
+	PowerCooldownTime = 1.5                                   // Seconds to block power commands after settling ends
+	PowerTotalLockout = PowerSettlingTime + PowerCooldownTime // 3.5s total
 )
 
 var errVolumeNotInitialized = errors.New("volume not initialized from GLM")
@@ -27,8 +27,9 @@ type Controller struct {
 	powerTransitionStart float64 // Unix timestamp when settling started
 	powerSettling        bool
 	powerCooldownStart   float64 // Unix timestamp when cooldown started (0 = no cooldown)
-	powerTarget          *bool
-	powerTraceID         string
+	powerTarget         *bool
+	powerTraceID        string
+	powerCommandSentAt  time.Time // zero value means no command pending; expires after 3 seconds
 }
 
 // New creates a Controller with default state (power on).
@@ -123,12 +124,16 @@ func (c *Controller) StartPowerTransition(targetState bool, traceID string) {
 	c.powerSettling = true
 	c.powerTarget = &targetState
 	c.powerTraceID = traceID
+	c.powerCommandSentAt = time.Now()
 	c.mu.Unlock()
 	c.notifyStateChange(true)
 }
 
 // EndPowerTransition marks the end of a power transition.
 // Settling ends immediately. Cooldown (power-only block) starts from now.
+// powerCommandSentAt is intentionally NOT cleared here — it expires naturally
+// after 3 seconds so the MIDI pattern ACK can still be recognised if it
+// arrives slightly after the transition ends.
 func (c *Controller) EndPowerTransition(success bool, actualState *bool) {
 	c.mu.Lock()
 	c.powerSettling = false
@@ -146,6 +151,34 @@ func (c *Controller) EndPowerTransition(success bool, actualState *bool) {
 	newState := c.state
 	c.mu.Unlock()
 	c.fireCallbacks(oldState, newState)
+}
+
+// SetPowerCommandPending records that a self-initiated power command was just sent.
+func (c *Controller) SetPowerCommandPending() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.powerCommandSentAt = time.Now()
+}
+
+// ClearPowerCommandPending clears the pending timestamp immediately.
+// Normally not needed — IsPowerCommandPending expires after 3 seconds automatically.
+func (c *Controller) ClearPowerCommandPending() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.powerCommandSentAt = time.Time{}
+}
+
+// IsPowerCommandPending returns true when we sent a power command within the
+// last 3 seconds and are waiting for GLM's MIDI pattern acknowledgement.
+// The 3-second window is generous to catch the ACK pattern even if it arrives
+// slightly after EndPowerTransition has been called.
+func (c *Controller) IsPowerCommandPending() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.powerCommandSentAt.IsZero() {
+		return false
+	}
+	return time.Since(c.powerCommandSentAt) < 3*time.Second
 }
 
 // SetPower sets the power state directly (e.g. from initial pixel scan at startup).
@@ -235,6 +268,8 @@ func (c *Controller) ApplyAction(action types.Action) (cc int, value int, err er
 		return types.CCDim, midiValue, nil
 
 	case types.KindSetPower:
+		// NOTE: Power actions are now handled directly by power.Commander in the consumer,
+		// bypassing ApplyAction. This case is retained for completeness but should not be reached.
 		return types.CCPower, 127, nil
 
 	default:

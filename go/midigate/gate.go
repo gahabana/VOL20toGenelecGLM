@@ -16,10 +16,10 @@ import (
 )
 
 const (
-	SettleDelay     = 50 * time.Millisecond  // gap after last burst message before next send
-	ResponseTimeout = 2 * time.Second        // max wait for GLM state burst
-	sendChSize      = 32                     // buffered so consumer never blocks
-	recvChSize      = 10                     // buffered so MIDI callback never blocks
+	SettleDelay     = 50 * time.Millisecond // gap after last burst message before next send
+	ResponseTimeout = 2 * time.Second       // max wait for GLM state burst
+	sendChSize      = 32                    // buffered so consumer never blocks
+	recvChSize      = 10                    // buffered so MIDI callback never blocks
 )
 
 // Gate mediates MIDI sends to ensure GLM has time to process each command.
