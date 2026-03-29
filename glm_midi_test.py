@@ -69,17 +69,25 @@ def list_ports():
         print("  (none found)")
 
 
+def open_port(port_name, direction="output"):
+    """Open a MIDI port with error handling."""
+    try:
+        if direction == "output":
+            return open_output(port_name)
+        else:
+            return open_input(port_name)
+    except (OSError, IOError) as e:
+        print(f"ERROR: Cannot open MIDI {direction} port '{port_name}': {e}")
+        print(f"  Hint: Run with --list to see available ports")
+        sys.exit(1)
+
+
 def send_cc(port_name, channel, cc, value):
     """Send a single MIDI CC message."""
     cc_label = CC_NAMES.get(cc, f"CC{cc}")
 
     print(f"Opening port: {port_name}")
-    try:
-        port = open_output(port_name)
-    except (OSError, IOError) as e:
-        print(f"ERROR: Cannot open MIDI port '{port_name}': {e}")
-        print(f"  Hint: Run with --list to see available ports")
-        sys.exit(1)
+    port = open_port(port_name)
 
     msg = Message('control_change', channel=channel, control=cc, value=value)
     print(f"Sending: CC{cc} ({cc_label}) = {value}  [channel {channel + 1}]")
@@ -93,15 +101,46 @@ def send_cc(port_name, channel, cc, value):
         port.close()
 
 
+def send_sysex_identity(port_name):
+    """Send SysEx Identity Request (Universal Non-Realtime)."""
+    print(f"Opening port: {port_name}")
+    port = open_port(port_name)
+
+    # F0 7E 7F 06 01 F7 — Universal Non-Realtime Identity Request
+    # 7E = Non-Realtime, 7F = all devices, 06 = General Information, 01 = Identity Request
+    msg = Message('sysex', data=[0x7E, 0x7F, 0x06, 0x01])
+    print(f"Sending: SysEx Identity Request (F0 7E 7F 06 01 F7)")
+    try:
+        port.send(msg)
+        print("OK — message sent")
+    except (OSError, IOError) as e:
+        print(f"ERROR: Failed to send: {e}")
+        sys.exit(1)
+    finally:
+        port.close()
+
+
+def send_program_change(port_name, channel, program):
+    """Send a MIDI Program Change message."""
+    print(f"Opening port: {port_name}")
+    port = open_port(port_name)
+
+    msg = Message('program_change', channel=channel, program=program)
+    print(f"Sending: Program Change {program}  [channel {channel + 1}]")
+    try:
+        port.send(msg)
+        print("OK — message sent")
+    except (OSError, IOError) as e:
+        print(f"ERROR: Failed to send: {e}")
+        sys.exit(1)
+    finally:
+        port.close()
+
+
 def listen(port_name, channel, duration):
     """Listen for MIDI messages from GLM and print them."""
     print(f"Opening input port: {port_name}")
-    try:
-        port = open_input(port_name)
-    except (OSError, IOError) as e:
-        print(f"ERROR: Cannot open MIDI port '{port_name}': {e}")
-        print(f"  Hint: Run with --list to see available ports")
-        sys.exit(1)
+    port = open_port(port_name, "input")
 
     print(f"Listening for {duration}s on channel {channel + 1} (Ctrl+C to stop)...")
     print()
@@ -111,14 +150,18 @@ def listen(port_name, channel, duration):
         while time.time() - start < duration:
             msg = port.poll()
             if msg is not None:
+                elapsed = time.time() - start
                 if msg.type == 'control_change':
                     cc_label = CC_NAMES.get(msg.control, f"CC{msg.control}")
-                    elapsed = time.time() - start
                     print(f"  [{elapsed:6.3f}s] CC{msg.control:3d} ({cc_label:20s}) = {msg.value:3d}  ch={msg.channel + 1}")
-                    count += 1
+                elif msg.type == 'sysex':
+                    hex_data = ' '.join(f'{b:02X}' for b in msg.data)
+                    print(f"  [{elapsed:6.3f}s] SysEx: F0 {hex_data} F7")
+                elif msg.type == 'program_change':
+                    print(f"  [{elapsed:6.3f}s] Program Change: {msg.program}  ch={msg.channel + 1}")
                 else:
-                    print(f"  {msg}")
-                    count += 1
+                    print(f"  [{elapsed:6.3f}s] {msg}")
+                count += 1
             else:
                 time.sleep(0.001)  # 1ms poll interval
     except KeyboardInterrupt:
@@ -141,9 +184,12 @@ examples:
   %(prog)s --list                   List available MIDI ports
   %(prog)s --listen                 Listen on GLMOUT 1 for 30s
   %(prog)s --listen --duration 5    Listen for 5s then stop
+  %(prog)s --sysex-id               Send SysEx Identity Request
+  %(prog)s --program 0              Send Program Change 0
+  %(prog)s --cc 121 --value 0       Send Reset All Controllers (CC121)
 
 note:
-  GLM treats CC28 (power) as toggle: value > 0 toggles, value 0 is ignored.
+  GLM Toggle mode: CC28 value 0=OFF, value >0=ON (deterministic, idempotent).
   MIDI channel in GLM settings shows 1-16; mido uses 0-15 (channel 0 = GLM channel 1).
 """)
 
@@ -163,6 +209,10 @@ note:
                         help=f"CC number to send (default: {DEFAULT_CC} = {CC_NAMES.get(DEFAULT_CC, '?')})")
     parser.add_argument("--value", type=int, default=DEFAULT_VALUE,
                         help=f"CC value to send, 0-127 (default: {DEFAULT_VALUE})")
+    parser.add_argument("--sysex-id", action="store_true",
+                        help="Send SysEx Identity Request (F0 7E 7F 06 01 F7)")
+    parser.add_argument("--program", type=int, default=None,
+                        help="Send Program Change message (0-127)")
 
     args = parser.parse_args()
 
@@ -172,6 +222,17 @@ note:
 
     if args.listen:
         listen(args.listen_port, args.channel, args.duration)
+        return
+
+    if args.sysex_id:
+        send_sysex_identity(args.port)
+        return
+
+    if args.program is not None:
+        if not 0 <= args.program <= 127:
+            print(f"ERROR: Program must be 0-127, got {args.program}")
+            sys.exit(1)
+        send_program_change(args.port, args.channel, args.program)
         return
 
     # Validate
