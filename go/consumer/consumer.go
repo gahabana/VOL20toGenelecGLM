@@ -77,8 +77,11 @@ func processAction(a types.Action, ctrl *controller.Controller, midiOut midi.Wri
 			return
 		}
 
-		// Optional verification via observer
-		if powerObs != nil {
+		// Optional verification via observer.
+		// Skip when Commander already verifies internally (e.g., WindowsController
+		// in --ui_power mode does its own pixel check after clicking).
+		_, cmdIsObserver := powerCmd.(power.Observer)
+		if powerObs != nil && !cmdIsObserver {
 			// Wait for GLM to process the command and update its UI before sampling pixels.
 			time.Sleep(controller.PowerVerifyDelay)
 			actualState, verifyErr := powerObs.GetPowerState()
