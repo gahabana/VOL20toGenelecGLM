@@ -368,33 +368,40 @@ func probeGLMState(midiOut midi.Writer, probeCh <-chan int, ctrl *controller.Con
 
 	// Step 0: Send CC28=127 (power ON) — ensures speakers are on before probing volume.
 	// Uses raw writer (not gate) for reliable startup delivery.
+	// Step 1: Send CC28=127 (power ON) — ensures speakers are on.
+	// If speakers were OFF, GLM sends 5-message ACK burst including volume → done.
+	// If speakers were already ON, no ACK → fall through to Vol+/Vol- probe.
 	log.Info("probe: forcing power ON via CC28=127")
 	ctrl.SetPowerCommandPending() // suppress ACK pattern from being treated as external
 	if err := midiOut.SendCC(0, types.CCPower, 127, "startup"); err != nil {
 		log.Warn("probe: failed to send CC28 (power ON)", "err", err)
-	} else {
-		// Wait for CC20 in the ACK burst to confirm GLM processed the command.
-		select {
-		case vol := <-probeCh:
-			log.Info("probe: power ON acknowledged", "volume_in_ack", vol)
-		case <-time.After(2 * time.Second):
-			// No ACK — speakers were likely already ON (GLM skips ACK for no-ops)
-			log.Info("probe: no power ACK (speakers likely already ON)")
-		}
-		// Drain any remaining burst messages
+		return
+	}
+
+	// Wait for CC20 in the ACK burst.
+	select {
+	case vol := <-probeCh:
+		// Speakers were OFF, now ON. ACK burst contains volume — we're done.
+		log.Info("probe: power ON acknowledged, volume from ACK", "volume", vol)
+		// Drain remaining burst messages
 		time.Sleep(200 * time.Millisecond)
 		for {
 			select {
 			case <-probeCh:
 			default:
-				goto drained
+				goto probeComplete
 			}
 		}
-	drained:
+	probeComplete:
+		log.Info("probe: GLM state initialized", "volume", vol)
+		return
+
+	case <-time.After(2 * time.Second):
+		// No ACK — speakers were already ON. Need Vol+/Vol- to discover volume.
+		log.Info("probe: no power ACK (speakers already ON), probing volume...")
 	}
 
-	// Step 1: Send CC21 (Vol+) — triggers GLM state burst
-	log.Info("probing GLM state...")
+	// Step 2: Send CC21 (Vol+) — only reached if speakers were already ON.
 	start := time.Now()
 	if err := midiOut.SendCC(0, types.CCVolUp, 127, "probe"); err != nil {
 		log.Warn("probe: failed to send CC21 (Vol+)", "err", err)
@@ -414,7 +421,7 @@ func probeGLMState(midiOut midi.Writer, probeCh <-chan int, ctrl *controller.Con
 	// GLM needs ~30ms between commands; 100ms gives 3x margin
 	time.Sleep(100 * time.Millisecond)
 
-	// Step 2: Send CC22 (Vol-) — restores original volume
+	// Step 3: Send CC22 (Vol-) — restores original volume.
 	start2 := time.Now()
 	if err := midiOut.SendCC(0, types.CCVolDown, 127, "probe"); err != nil {
 		log.Warn("probe: failed to send CC22 (Vol-)", "err", err)
@@ -425,9 +432,6 @@ func probeGLMState(midiOut midi.Writer, probeCh <-chan int, ctrl *controller.Con
 	case volDown := <-probeCh:
 		elapsed2 := time.Since(start2)
 		log.Info("probe: Vol- response", "volume", volDown, "response_time", elapsed2.Round(time.Millisecond))
-
-		// volDown is the original volume (Vol+ then Vol- = net zero)
-		// If GLM clamped the Vol+ (at max), volUp == volDown and both are correct
 		log.Info("probe: GLM state initialized", "volume", volDown)
 
 	case <-time.After(3 * time.Second):
