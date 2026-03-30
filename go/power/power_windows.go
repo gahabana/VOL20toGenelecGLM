@@ -468,11 +468,13 @@ func (wc *WindowsController) prepareWindow(hwnd uintptr) (restoreInfo, error) {
 		needsAdjustment = true
 	}
 
-	// Check if window center is outside work area bounds.
-	centerX := int(originalRect.Left) + windowWidth/2
-	centerY := int(originalRect.Top) + windowHeight/2
-	if centerX < int(workArea.Left) || centerX > int(workArea.Right) ||
-		centerY < int(workArea.Top) || centerY > int(workArea.Bottom) {
+	// Check if any edge of the window extends beyond the work area.
+	// The power button is at width-28 (right edge) and pixel analysis
+	// needs the full window visible, so partial off-screen is not acceptable.
+	if int(originalRect.Left) < int(workArea.Left) ||
+		int(originalRect.Top) < int(workArea.Top) ||
+		int(originalRect.Right) > int(workArea.Right) ||
+		int(originalRect.Bottom) > int(workArea.Bottom) {
 		targetX = int(workArea.Left)
 		targetY = int(workArea.Top)
 		needsAdjustment = true
