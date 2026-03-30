@@ -394,7 +394,7 @@ func probeGLMState(midiOut midi.Writer, probeCh <-chan int, ctrl *controller.Con
 	}
 
 	// Phase 2: Force speakers ON via CC28=127.
-	// GLM always responds with 5-message ACK (pattern: Mute→Vol→Dim→Mute→Vol, 2 CC20s).
+	// GLM responds with 5-message pattern (Mute→Vol→Dim→Mute→Vol, 2 CC20s).
 	if midiOut == nil {
 		return
 	}
@@ -435,14 +435,14 @@ func consumeStartupBurst(probeCh <-chan int, startupConsuming *atomic.Bool,
 		"elapsed", time.Since(probeStart).Round(time.Millisecond))
 }
 
-// sendPowerOnProbe sends CC28=127 and waits for the 5-message ACK.
-// The ACK pattern is Mute→Vol→Dim→Mute→Vol — 2 CC20 messages.
+// sendPowerOnProbe sends CC28=127 and waits for the 5-message power ON response.
+// The response pattern is Mute→Vol→Dim→Mute→Vol — 2 CC20 messages.
 func sendPowerOnProbe(midiOut midi.Writer, probeCh <-chan int,
 	ctrl *controller.Controller, log *slog.Logger) {
 
-	const expectedCC20 = 2                // ACK has 2 CC20 messages
-	const ackTimeout = 3 * time.Second    // max wait for first ACK CC20
-	const msgTimeout = 2 * time.Second    // max wait between CC20s within ACK
+	const expectedCC20 = 2                // response has 2 CC20 messages
+	const respTimeout = 3 * time.Second   // max wait for first response CC20
+	const msgTimeout = 2 * time.Second    // max wait between CC20s within response
 
 	log.Info("probe: forcing power ON via CC28=127")
 	ctrl.SetPowerCommandPending()
@@ -451,24 +451,24 @@ func sendPowerOnProbe(midiOut midi.Writer, probeCh <-chan int,
 		return
 	}
 
-	ackStart := time.Now()
+	respStart := time.Now()
 	for i := 0; i < expectedCC20; i++ {
 		timeout := msgTimeout
 		if i == 0 {
-			timeout = ackTimeout
+			timeout = respTimeout
 		}
 		select {
 		case <-probeCh:
 		case <-time.After(timeout):
 			if i == 0 {
-				log.Info("probe: no power ACK within timeout")
+				log.Info("probe: no power ON response within timeout")
 			} else {
-				log.Warn("probe: power ACK incomplete", "received", i, "expected", expectedCC20)
+				log.Warn("probe: power ON response incomplete", "received", i, "expected", expectedCC20)
 			}
 			goto done
 		}
 	}
-	log.Info("probe: power ON ACK complete", "elapsed", time.Since(ackStart).Round(time.Millisecond))
+	log.Info("probe: power ON response complete", "elapsed", time.Since(respStart).Round(time.Millisecond))
 
 done:
 	state := ctrl.GetState()
