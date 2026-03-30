@@ -10,6 +10,9 @@ type Manager interface {
 	IsAlive() bool
 	// GetPID returns the current GLM process ID (0 if not running).
 	GetPID() int
+	// SetPreRestartCallback sets a function called before GLM is relaunched.
+	// Use this to prepare for the startup burst (e.g., suppress pattern detection).
+	SetPreRestartCallback(fn func())
 	// SetRestartCallback sets a function called after GLM restarts.
 	SetRestartCallback(fn func(pid int))
 }

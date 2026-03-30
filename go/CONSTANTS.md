@@ -102,9 +102,11 @@ Volume commands coalesce (latest wins). Mute/dim/power are queued individually (
 
 | Constant | Value | Purpose |
 |----------|-------|---------|
-| Probe settle delay | 100ms | Gap between Vol+ response and Vol- send during startup probe. GLM needs ~30ms min between commands; 100ms gives 3x margin. |
-| Probe response timeout | 1s | Max wait for GLM to respond to a probe command |
-| Pre-probe delay | 100ms | Delay before first probe to let MIDI reader goroutine start |
+| `burstSettle` | 1.5s | Silence after last CC20 = startup burst or ACK complete. Must exceed GLM's ~600ms gap between sub-bursts. |
+| `burstTimeout` | 15s | Max wait for first CC20 from GLM startup burst. GLM typically emits at ~9s after launch. |
+| Power ACK timeout | 3s | Max wait for CC28=127 ACK (5-message response from GLM) |
+
+**Startup sequence (when managed):** MIDI reader starts → GLM launched → reader captures 12-message startup burst (volume/mute/dim) → CC28=127 forces power ON → 5-message ACK. Vol+/Vol- probing is not needed — volume is discovered passively from GLM's MIDI output.
 
 ## MIDI Reader (`midi/winmm_reader.go`)
 

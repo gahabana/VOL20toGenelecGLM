@@ -16,4 +16,5 @@ func (s *StubManager) Start() error {
 func (s *StubManager) Stop()                               {}
 func (s *StubManager) IsAlive() bool                       { return false }
 func (s *StubManager) GetPID() int                         { return 0 }
+func (s *StubManager) SetPreRestartCallback(fn func())     {}
 func (s *StubManager) SetRestartCallback(fn func(pid int)) {}

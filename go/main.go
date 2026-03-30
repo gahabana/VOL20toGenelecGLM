@@ -9,6 +9,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -25,7 +26,7 @@ import (
 	"vol20toglm/types"
 )
 
-const version = "0.8.0"
+const version = "0.9.0"
 
 func main() {
 	cfg := config.Parse(os.Args[1:])
@@ -59,17 +60,12 @@ func main() {
 	// === Startup automation (headless VM) ===
 	runStartupTasks(cfg, log)
 
-	// GLM Manager (launch/attach, watchdog)
+	// GLM Manager — created here, started after MIDI reader is running
+	// so the reader captures GLM's 12-message startup burst.
 	var glmMgr glm.Manager
 	if cfg.GLMManager {
 		glmMgr = createGLMManager(cfg, log)
-		if err := glmMgr.Start(); err != nil {
-			log.Error("GLM manager start failed", "err", err)
-		} else {
-			defer glmMgr.Stop()
-		}
 	}
-	_ = glmMgr
 
 	// Core components
 	ctrl := controller.New()
@@ -124,12 +120,6 @@ func main() {
 		winPowerCtrl = nil
 	}
 
-	// Pass GLM PID to pixel-scanning controller so it finds the correct window (not splash).
-	// The restart callback is wired later after powerObs is resolved.
-	if glmMgr != nil && winPowerCtrl != nil {
-		winPowerCtrl.SetPID(glmMgr.GetPID())
-	}
-
 	// Power pattern detector
 	midiLog := log.With("component", "midi-in")
 	powerDetector := controller.NewPowerPatternDetector(func() {
@@ -173,6 +163,9 @@ func main() {
 	// HID reader — platform-specific
 	hidReader := createHIDReader(cfg, accel, traceGen, log)
 
+	// Flag to suppress power pattern detector during GLM startup burst consumption.
+	var startupConsuming atomic.Bool
+
 	var wg sync.WaitGroup
 
 	// Start MIDI input reader goroutine
@@ -194,8 +187,10 @@ func main() {
 				midiLog.Debug("state updated from MIDI", "cc", ccName, "value", value)
 			}
 
-			// Feed to power pattern detector
-			powerDetector.Feed(cc, value, now)
+			// Feed to power pattern detector (skip during startup burst consumption)
+			if !startupConsuming.Load() {
+				powerDetector.Feed(cc, value, now)
+			}
 
 			// Notify gate about GLM response (for send gating)
 			if gate != nil {
@@ -215,9 +210,24 @@ func main() {
 		}
 	}()
 
-	// Probe GLM state at startup (uses raw midiOut, before gate is active).
-	// Also sends CC28=127 to force speakers ON before probing volume.
-	probeGLMState(midiOut, probeCh, ctrl, log)
+	// Start GLM Manager now that MIDI reader is capturing.
+	// GLM's 12-message startup burst will be caught by the reader.
+	if glmMgr != nil {
+		startupConsuming.Store(true)
+		if err := glmMgr.Start(); err != nil {
+			log.Error("GLM manager start failed", "err", err)
+			startupConsuming.Store(false)
+		} else {
+			defer glmMgr.Stop()
+		}
+		// Pass GLM PID to pixel-scanning controller
+		if winPowerCtrl != nil {
+			winPowerCtrl.SetPID(glmMgr.GetPID())
+		}
+	}
+
+	// Probe GLM state: consume startup burst (if managed) then force power ON.
+	probeGLMState(midiOut, probeCh, ctrl, &startupConsuming, log)
 
 	// Detect initial power state from pixel scan.
 	// Retry a few times to allow splash screen to clear after fresh launch.
@@ -301,13 +311,16 @@ func main() {
 		if powerObs != nil {
 			powerObs.SetPID(glmMgr.GetPID())
 		}
+		glmMgr.SetPreRestartCallback(func() {
+			startupConsuming.Store(true)
+		})
 		glmMgr.SetRestartCallback(func(pid int) {
 			if powerObs != nil {
 				powerObs.SetPID(pid)
 			}
-			// Re-probe after GLM restart — state is unknown (volume, power may have changed).
+			// Re-probe after GLM restart — consume startup burst + force power ON.
 			log.Info("re-probing GLM state after restart")
-			probeGLMState(midiOut, probeCh, ctrl, log)
+			probeGLMState(midiOut, probeCh, ctrl, &startupConsuming, log)
 		})
 	}
 
@@ -362,87 +375,100 @@ func main() {
 	log.Info("shutdown complete")
 }
 
-// probeGLMState sends CC21 (Vol+) then CC22 (Vol-) to discover GLM's state.
-// The Vol- response gives us the original volume (handles GLM's min/max clamping).
-// Net zero volume change in all cases.
-func probeGLMState(midiOut midi.Writer, probeCh <-chan int, ctrl *controller.Controller, log *slog.Logger) {
+// probeGLMState discovers GLM state at startup or after restart.
+// Phase 1: If startupConsuming is set (we launched GLM), waits for GLM's
+//
+//	12-message startup burst which provides volume/mute/dim via UpdateFromMIDI.
+//
+// Phase 2: Sends CC28=127 to force speakers ON. GLM responds with 5-message ACK.
+// Vol+/Vol- probing is not needed — volume is discovered passively from MIDI output.
+func probeGLMState(midiOut midi.Writer, probeCh <-chan int, ctrl *controller.Controller,
+	startupConsuming *atomic.Bool, log *slog.Logger) {
+
+	const burstSettle = 1500 * time.Millisecond // silence after last CC20 = burst complete
+	const burstTimeout = 15 * time.Second       // max wait for first startup CC20
+
+	// Phase 1: Consume GLM startup burst (if we launched GLM).
+	// GLM emits 12 messages in 2 bursts (~1s total) when starting.
+	// UpdateFromMIDI (in the MIDI reader callback) captures state automatically.
+	// Power pattern detector is suppressed via startupConsuming flag.
+	if startupConsuming != nil && startupConsuming.Load() {
+		consumeStartupBurst(probeCh, startupConsuming, burstTimeout, burstSettle, ctrl, log)
+	}
+
+	// Phase 2: Force speakers ON via CC28=127.
+	// GLM always responds with 5-message ACK including volume (CC20).
 	if midiOut == nil {
 		return
 	}
+	sendPowerOnProbe(midiOut, probeCh, burstSettle, ctrl, log)
+}
 
-	// Small delay to let MIDI reader goroutine start
-	time.Sleep(100 * time.Millisecond)
+// consumeStartupBurst waits for and drains GLM's 12-message startup burst.
+func consumeStartupBurst(probeCh <-chan int, startupConsuming *atomic.Bool,
+	timeout, settle time.Duration, ctrl *controller.Controller, log *slog.Logger) {
 
-	// Step 0: Send CC28=127 (power ON) — ensures speakers are on before probing volume.
-	// Uses raw writer (not gate) for reliable startup delivery.
-	// Step 1: Send CC28=127 (power ON) — ensures speakers are on.
-	// If speakers were OFF, GLM sends 5-message ACK burst including volume → done.
-	// If speakers were already ON, no ACK → fall through to Vol+/Vol- probe.
+	probeStart := time.Now()
+	msgCount := 0
+
+	// Wait for first CC20 — should already be buffered from GlmManager.Start() blocking.
+	select {
+	case <-probeCh:
+		msgCount++
+	case <-time.After(timeout):
+		log.Warn("probe: no startup burst within timeout", "timeout", timeout)
+		startupConsuming.Store(false)
+		return
+	}
+
+	// Drain remaining burst (settle duration of silence = burst complete).
+	draining := true
+	for draining {
+		select {
+		case <-probeCh:
+			msgCount++
+		case <-time.After(settle):
+			draining = false
+		}
+	}
+
+	startupConsuming.Store(false)
+	state := ctrl.GetState()
+	log.Info("probe: startup burst consumed",
+		"cc20_count", msgCount,
+		"volume", state.Volume, "mute", state.Mute, "dim", state.Dim,
+		"elapsed", time.Since(probeStart).Round(time.Millisecond))
+}
+
+// sendPowerOnProbe sends CC28=127 and waits for the 5-message ACK.
+func sendPowerOnProbe(midiOut midi.Writer, probeCh <-chan int, settle time.Duration,
+	ctrl *controller.Controller, log *slog.Logger) {
+
 	log.Info("probe: forcing power ON via CC28=127")
-	ctrl.SetPowerCommandPending() // suppress ACK pattern from being treated as external
+	ctrl.SetPowerCommandPending()
 	if err := midiOut.SendCC(0, types.CCPower, 127, "startup"); err != nil {
 		log.Warn("probe: failed to send CC28 (power ON)", "err", err)
 		return
 	}
 
-	// Wait for CC20 in the ACK burst.
+	// Wait for 5-message ACK (~1s with internal gap).
 	select {
 	case vol := <-probeCh:
-		// Speakers were OFF, now ON. ACK burst contains volume — we're done.
-		log.Info("probe: power ON acknowledged, volume from ACK", "volume", vol)
-		// Drain remaining burst messages
-		time.Sleep(200 * time.Millisecond)
-		for {
+		log.Info("probe: power ON ACK", "volume", vol)
+		// Drain remaining ACK messages.
+		draining := true
+		for draining {
 			select {
 			case <-probeCh:
-			default:
-				goto probeComplete
+			case <-time.After(settle):
+				draining = false
 			}
 		}
-	probeComplete:
-		log.Info("probe: GLM state initialized", "volume", vol)
-		return
-
-	case <-time.After(2 * time.Second):
-		// No ACK — speakers were already ON. Need Vol+/Vol- to discover volume.
-		log.Info("probe: no power ACK (speakers already ON), probing volume...")
-	}
-
-	// Step 2: Send CC21 (Vol+) — only reached if speakers were already ON.
-	start := time.Now()
-	if err := midiOut.SendCC(0, types.CCVolUp, 127, "probe"); err != nil {
-		log.Warn("probe: failed to send CC21 (Vol+)", "err", err)
-		return
-	}
-
-	var volUp int
-	select {
-	case volUp = <-probeCh:
-		elapsed := time.Since(start)
-		log.Info("probe: Vol+ response", "volume", volUp, "response_time", elapsed.Round(time.Millisecond))
 	case <-time.After(3 * time.Second):
-		log.Warn("probe: no response from GLM within 3s (volume not initialized)")
-		return
+		log.Info("probe: no power ACK within 3s")
 	}
 
-	// GLM needs ~30ms between commands; 100ms gives 3x margin
-	time.Sleep(100 * time.Millisecond)
-
-	// Step 3: Send CC22 (Vol-) — restores original volume.
-	start2 := time.Now()
-	if err := midiOut.SendCC(0, types.CCVolDown, 127, "probe"); err != nil {
-		log.Warn("probe: failed to send CC22 (Vol-)", "err", err)
-		return
-	}
-
-	select {
-	case volDown := <-probeCh:
-		elapsed2 := time.Since(start2)
-		log.Info("probe: Vol- response", "volume", volDown, "response_time", elapsed2.Round(time.Millisecond))
-		log.Info("probe: GLM state initialized", "volume", volDown)
-
-	case <-time.After(3 * time.Second):
-		// Vol- didn't respond, but Vol+ did — use volUp-1 as best guess
-		log.Warn("probe: Vol- no response, using Vol+ value", "volume", volUp)
-	}
+	state := ctrl.GetState()
+	log.Info("probe: GLM state initialized",
+		"volume", state.Volume, "mute", state.Mute, "dim", state.Dim)
 }

@@ -91,8 +91,9 @@ type WindowsManager struct {
 	log             *slog.Logger
 	pid             int
 	hwnd            uintptr
-	restartCallback func(pid int)
-	stopCh          chan struct{}
+	preRestartCallback func()
+	restartCallback    func(pid int)
+	stopCh             chan struct{}
 	mu              sync.Mutex
 }
 
@@ -193,6 +194,13 @@ func (m *WindowsManager) GetPID() int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.pid
+}
+
+// SetPreRestartCallback sets a function called before GLM is relaunched.
+func (m *WindowsManager) SetPreRestartCallback(fn func()) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.preRestartCallback = fn
 }
 
 // SetRestartCallback sets a function called after GLM restarts.
@@ -529,6 +537,14 @@ func (m *WindowsManager) killProcess() {
 // restart launches a new GLM process, sets priority, stabilizes the window,
 // and invokes the restart callback.
 func (m *WindowsManager) restart() {
+	// Notify caller before relaunch so it can prepare for startup burst.
+	m.mu.Lock()
+	preCallback := m.preRestartCallback
+	m.mu.Unlock()
+	if preCallback != nil {
+		preCallback()
+	}
+
 	time.Sleep(restartDelay)
 
 	m.log.Info("restarting GLM", "path", m.glmPath)
