@@ -496,6 +496,12 @@ func (wc *WindowsController) prepareWindow(hwnd uintptr) (restoreInfo, error) {
 		needsAdjustment = true
 	}
 
+	// Bring window to foreground first — GPU/display driver gives foreground
+	// windows rendering priority, so subsequent resize repaints faster.
+	wc.log.Debug("prepareWindow: bringing to foreground")
+	procSetForegroundWindow.Call(hwnd) //nolint:errcheck
+	time.Sleep(100 * time.Millisecond)
+
 	if needsAdjustment {
 		wc.log.Debug("prepareWindow: repositioning (off-screen/oversized)",
 			"original", originalRect,
@@ -511,11 +517,6 @@ func (wc *WindowsController) prepareWindow(hwnd uintptr) (restoreInfo, error) {
 		time.Sleep(powerPrepareDelay)
 		info.wasRepositioned = true
 	}
-
-	// Bring window to foreground and let it paint.
-	wc.log.Debug("prepareWindow: bringing to foreground")
-	procSetForegroundWindow.Call(hwnd) //nolint:errcheck
-	time.Sleep(100 * time.Millisecond)
 
 	return info, nil
 }
