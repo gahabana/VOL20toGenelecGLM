@@ -296,11 +296,18 @@ func main() {
 		}
 	}
 
-	// Wire Observer PID updates from GLM manager
-	if powerObs != nil && glmMgr != nil {
-		powerObs.SetPID(glmMgr.GetPID())
+	// Wire Observer PID updates and re-probe on GLM restart
+	if glmMgr != nil {
+		if powerObs != nil {
+			powerObs.SetPID(glmMgr.GetPID())
+		}
 		glmMgr.SetRestartCallback(func(pid int) {
-			powerObs.SetPID(pid)
+			if powerObs != nil {
+				powerObs.SetPID(pid)
+			}
+			// Re-probe after GLM restart — state is unknown (volume, power may have changed).
+			log.Info("re-probing GLM state after restart")
+			probeGLMState(midiOut, probeCh, ctrl, log)
 		})
 	}
 
