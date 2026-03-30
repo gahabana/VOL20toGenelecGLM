@@ -215,8 +215,9 @@ func main() {
 		}
 	}()
 
-	// Probe GLM state at startup (uses raw midiOut, before gate is active)
-	probeGLMState(midiOut, probeCh, log)
+	// Probe GLM state at startup (uses raw midiOut, before gate is active).
+	// Also sends CC28=127 to force speakers ON before probing volume.
+	probeGLMState(midiOut, probeCh, ctrl, log)
 
 	// Detect initial power state from pixel scan.
 	// Retry a few times to allow splash screen to clear after fresh launch.
@@ -286,17 +287,9 @@ func main() {
 		powerObs = nil
 	}
 
-	// Startup: force known ON state via MIDI (ensures GLM is synced).
-	// ORDERING: gate goroutine must already be running (started above) so that
-	// the MIDICommander's consumerWriter (gate) can process the send immediately.
-	if midiCmd, ok := powerCmd.(*power.MIDICommander); ok {
-		log.Info("forcing power ON at startup via MIDI")
-		ctrl.SetPowerCommandPending() // suppress ACK pattern from being treated as external
-		if err := midiCmd.PowerOn("startup"); err != nil {
-			log.Warn("startup power-on MIDI send failed", "err", err)
-		}
-	} else if powerObs != nil {
-		// UI power mode: read current state instead of forcing
+	// UI power mode: read current state via pixel scan (don't force via MIDI).
+	// For MIDI modes, power-on is handled inside probeGLMState above.
+	if _, isMIDI := powerCmd.(*power.MIDICommander); !isMIDI && powerObs != nil {
 		if initialState, err := powerObs.GetPowerState(); err == nil {
 			ctrl.SetPower(initialState)
 			log.Info("startup power state read via pixel scan", "power", initialState)
@@ -365,13 +358,40 @@ func main() {
 // probeGLMState sends CC21 (Vol+) then CC22 (Vol-) to discover GLM's state.
 // The Vol- response gives us the original volume (handles GLM's min/max clamping).
 // Net zero volume change in all cases.
-func probeGLMState(midiOut midi.Writer, probeCh <-chan int, log *slog.Logger) {
+func probeGLMState(midiOut midi.Writer, probeCh <-chan int, ctrl *controller.Controller, log *slog.Logger) {
 	if midiOut == nil {
 		return
 	}
 
 	// Small delay to let MIDI reader goroutine start
 	time.Sleep(100 * time.Millisecond)
+
+	// Step 0: Send CC28=127 (power ON) — ensures speakers are on before probing volume.
+	// Uses raw writer (not gate) for reliable startup delivery.
+	log.Info("probe: forcing power ON via CC28=127")
+	ctrl.SetPowerCommandPending() // suppress ACK pattern from being treated as external
+	if err := midiOut.SendCC(0, types.CCPower, 127, "startup"); err != nil {
+		log.Warn("probe: failed to send CC28 (power ON)", "err", err)
+	} else {
+		// Wait for CC20 in the ACK burst to confirm GLM processed the command.
+		select {
+		case vol := <-probeCh:
+			log.Info("probe: power ON acknowledged", "volume_in_ack", vol)
+		case <-time.After(2 * time.Second):
+			// No ACK — speakers were likely already ON (GLM skips ACK for no-ops)
+			log.Info("probe: no power ACK (speakers likely already ON)")
+		}
+		// Drain any remaining burst messages
+		time.Sleep(200 * time.Millisecond)
+		for {
+			select {
+			case <-probeCh:
+			default:
+				goto drained
+			}
+		}
+	drained:
+	}
 
 	// Step 1: Send CC21 (Vol+) — triggers GLM state burst
 	log.Info("probing GLM state...")
