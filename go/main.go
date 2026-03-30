@@ -406,8 +406,8 @@ func probeGLMState(midiOut midi.Writer, probeCh <-chan int, ctrl *controller.Con
 	case volUp = <-probeCh:
 		elapsed := time.Since(start)
 		log.Info("probe: Vol+ response", "volume", volUp, "response_time", elapsed.Round(time.Millisecond))
-	case <-time.After(1 * time.Second):
-		log.Warn("probe: no response from GLM within 1s (volume not initialized)")
+	case <-time.After(3 * time.Second):
+		log.Warn("probe: no response from GLM within 3s (volume not initialized)")
 		return
 	}
 
@@ -430,7 +430,7 @@ func probeGLMState(midiOut midi.Writer, probeCh <-chan int, ctrl *controller.Con
 		// If GLM clamped the Vol+ (at max), volUp == volDown and both are correct
 		log.Info("probe: GLM state initialized", "volume", volDown)
 
-	case <-time.After(1 * time.Second):
+	case <-time.After(3 * time.Second):
 		// Vol- didn't respond, but Vol+ did — use volUp-1 as best guess
 		log.Warn("probe: Vol- no response, using Vol+ value", "volume", volUp)
 	}
