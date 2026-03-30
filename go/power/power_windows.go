@@ -528,18 +528,21 @@ func (wc *WindowsController) restoreWindow(hwnd uintptr, info restoreInfo) {
 			wc.log.Warn("restoreWindow: MoveWindow failed")
 		}
 	}
-	if info.wasMinimized {
-		wc.log.Debug("restoreWindow: re-minimizing")
-		ret, _, _ := procShowWindow.Call(hwnd, swMinimize)
-		if ret == 0 {
-			wc.log.Warn("restoreWindow: ShowWindow(minimize) failed")
-		}
-	}
+	// Restore foreground BEFORE re-minimizing — while GLM is still the
+	// foreground window we have "permission" to call SetForegroundWindow.
+	// After minimizing, we lose foreground status and the call may fail.
 	if info.prevForeground != 0 {
 		wc.log.Debug("restoreWindow: restoring foreground")
 		ret, _, _ := procSetForegroundWindow.Call(info.prevForeground)
 		if ret == 0 {
 			wc.log.Warn("restoreWindow: SetForegroundWindow failed")
+		}
+	}
+	if info.wasMinimized {
+		wc.log.Debug("restoreWindow: re-minimizing")
+		ret, _, _ := procShowWindow.Call(hwnd, swMinimize)
+		if ret == 0 {
+			wc.log.Warn("restoreWindow: ShowWindow(minimize) failed")
 		}
 	}
 }
