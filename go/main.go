@@ -139,8 +139,23 @@ func main() {
 			midiLog.Debug("power pattern detected (self-initiated, ignoring)")
 			return
 		}
-		newPower := ctrl.TogglePowerFromMIDIPattern()
-		midiLog.Info("power pattern detected (external)", "new_power_state", newPower)
+		// External power change detected. If observer is available, verify via pixel read.
+		if powerObs != nil {
+			time.Sleep(time.Duration(controller.PowerVerifyDelay * float64(time.Second)))
+			actualState, err := powerObs.GetPowerState()
+			if err != nil {
+				// Pixel read failed — fall back to toggle
+				newPower := ctrl.TogglePowerFromMIDIPattern()
+				midiLog.Warn("power pattern detected (external), pixel verify failed, toggled", "new_power_state", newPower, "err", err)
+			} else {
+				ctrl.SetPower(actualState)
+				midiLog.Info("power pattern detected (external), verified via pixel", "power", actualState)
+			}
+		} else {
+			// No observer — blind toggle
+			newPower := ctrl.TogglePowerFromMIDIPattern()
+			midiLog.Info("power pattern detected (external)", "new_power_state", newPower)
+		}
 	})
 
 	// Channel for startup volume probe (buffered, non-blocking send from callback)

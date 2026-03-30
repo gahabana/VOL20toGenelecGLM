@@ -80,7 +80,7 @@ func processAction(a types.Action, ctrl *controller.Controller, midiOut midi.Wri
 		// Optional verification via observer
 		if powerObs != nil {
 			// Wait for GLM to process the command and update its UI before sampling pixels.
-			time.Sleep(1 * time.Second)
+			time.Sleep(time.Duration(controller.PowerVerifyDelay * float64(time.Second)))
 			actualState, verifyErr := powerObs.GetPowerState()
 			if verifyErr != nil {
 				log.Warn("power verify failed", "trace_id", a.TraceID, "err", verifyErr)
