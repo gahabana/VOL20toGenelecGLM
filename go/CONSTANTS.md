@@ -36,6 +36,7 @@ All tunable constants that define the behavior of the Go binary. When adding new
 | `postClickDelay` | 350ms | Delay after click before starting to poll |
 | `clickDownUpDelay` | 20ms | Delay between mouse down and mouse up events |
 | `hwndCacheTTL` | 5s | Window handle cache lifetime |
+| `powerPrepareDelay` | 250ms | Wait for GLM to repaint after window resize/move (unexported) |
 
 ## Controller (`controller/controller.go`)
 

@@ -219,10 +219,9 @@ func main() {
 	probeGLMState(midiOut, probeCh, log)
 
 	// Detect initial power state from pixel scan.
-	// Bring GLM to foreground first (console may be covering it), then retry
-	// a few times to allow splash screen to clear after fresh launch.
+	// Retry a few times to allow splash screen to clear after fresh launch.
+	// prepareWindow/restoreWindow are called internally by GetState.
 	if winPowerCtrl != nil {
-		winPowerCtrl.BringToForeground()
 		var initialPower bool
 		var scanErr error
 		for attempt := 1; attempt <= 5; attempt++ {
@@ -239,7 +238,6 @@ func main() {
 		} else {
 			log.Warn("could not read initial power state, assuming ON", "err", scanErr)
 		}
-		winPowerCtrl.RestoreForeground()
 	}
 
 	// Start gate goroutine (after probe, before consumer)

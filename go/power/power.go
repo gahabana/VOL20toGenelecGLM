@@ -9,16 +9,11 @@ type Commander interface {
 }
 
 // Observer reads power state from the screen (optional — nil in MIDI-only mode).
+// Window preparation (foreground, unminimize, on-screen placement) is handled
+// internally before each pixel read.
 type Observer interface {
 	// GetPowerState returns the current power state by inspecting the GLM window.
 	GetPowerState() (bool, error)
-	// BringToForeground brings the GLM window to the foreground so pixel
-	// scanning can read it. Required before GetPowerState when another window
-	// may be covering GLM.
-	BringToForeground() error
-	// RestoreForeground restores the window that was in foreground before
-	// BringToForeground was called.
-	RestoreForeground()
 	// SetPID sets the GLM process ID for window filtering.
 	SetPID(pid int)
 }
@@ -35,11 +30,4 @@ type Controller interface {
 	GetState() (bool, error)
 	// Toggle clicks the power button in the GLM window.
 	Toggle() error
-	// BringToForeground brings the GLM window to the foreground so pixel
-	// scanning can read it. Required before GetState when another window
-	// may be covering GLM.
-	BringToForeground() error
-	// RestoreForeground restores the window that was in foreground before
-	// BringToForeground was called.
-	RestoreForeground()
 }

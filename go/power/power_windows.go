@@ -20,6 +20,10 @@ const (
 	biRGB               = 0
 	mouseeventfLeftDown = 0x0002
 	mouseeventfLeftUp   = 0x0004
+
+	swRestore      = 9
+	swMinimize     = 6
+	spiGetWorkArea = 0x0030
 )
 
 // Pixel analysis thresholds.
@@ -37,11 +41,12 @@ const (
 
 // Timing constants.
 const (
-	pollInterval     = 150 * time.Millisecond
-	verifyTimeout    = 3 * time.Second
-	postClickDelay   = 350 * time.Millisecond
-	clickDownUpDelay = 20 * time.Millisecond
-	hwndCacheTTL     = 5 * time.Second
+	pollInterval      = 150 * time.Millisecond
+	verifyTimeout     = 3 * time.Second
+	postClickDelay    = 350 * time.Millisecond
+	clickDownUpDelay  = 20 * time.Millisecond
+	hwndCacheTTL      = 5 * time.Second
+	powerPrepareDelay = 250 * time.Millisecond // Wait for GLM to repaint after window resize/move
 )
 
 // Windows API structs.
@@ -79,6 +84,10 @@ var (
 	procSetForegroundWindow      = user32.NewProc("SetForegroundWindow")
 	procGetForegroundWindow      = user32.NewProc("GetForegroundWindow")
 	procGetWindowThreadProcessId = user32.NewProc("GetWindowThreadProcessId")
+	procIsIconic                 = user32.NewProc("IsIconic")
+	procShowWindow               = user32.NewProc("ShowWindow")
+	procMoveWindow               = user32.NewProc("MoveWindow")
+	procSystemParametersInfoW    = user32.NewProc("SystemParametersInfoW")
 
 	procCreateCompatibleDC     = gdi32.NewProc("CreateCompatibleDC")
 	procCreateCompatibleBitmap = gdi32.NewProc("CreateCompatibleBitmap")
@@ -89,15 +98,23 @@ var (
 	procDeleteObject           = gdi32.NewProc("DeleteObject")
 )
 
+// restoreInfo holds window state captured before pixel operations,
+// allowing exact restoration afterward.
+type restoreInfo struct {
+	prevForeground  uintptr
+	wasMinimized    bool
+	wasRepositioned bool
+	originalRect    rect
+}
+
 // WindowsController detects GLM power state via pixel analysis and toggles
 // power by simulating mouse clicks on the GLM window.
 type WindowsController struct {
-	log                *slog.Logger
-	mu                 sync.Mutex
-	pid                int
-	cachedHWND         uintptr
-	cacheTime          time.Time
-	prevForegroundHwnd uintptr
+	log        *slog.Logger
+	mu         sync.Mutex
+	pid        int
+	cachedHWND uintptr
+	cacheTime  time.Time
 }
 
 // NewWindowsController creates a new WindowsController.
@@ -114,11 +131,12 @@ func (wc *WindowsController) SetPID(pid int) {
 	wc.cacheTime = time.Time{}
 }
 
-// findGLMWindow locates the GLM window by enumerating top-level windows.
+// findGLMWindowLocked locates the GLM window by enumerating top-level windows.
 // It matches windows whose class name starts with "JUCE_" and whose title
 // contains "GLM". When PID is set, only windows belonging to that process match.
 // The result is cached for hwndCacheTTL.
-func (wc *WindowsController) findGLMWindow() (uintptr, error) {
+// Caller must hold wc.mu.
+func (wc *WindowsController) findGLMWindowLocked() (uintptr, error) {
 	if wc.cachedHWND != 0 && time.Since(wc.cacheTime) < hwndCacheTTL {
 		return wc.cachedHWND, nil
 	}
@@ -173,6 +191,14 @@ func (wc *WindowsController) findGLMWindow() (uintptr, error) {
 	wc.cachedHWND = foundHWND
 	wc.cacheTime = time.Now()
 	return foundHWND, nil
+}
+
+// findGLMWindow is the mutex-acquiring wrapper around findGLMWindowLocked.
+// Use findGLMWindowLocked when the caller already holds wc.mu.
+func (wc *WindowsController) findGLMWindow() (uintptr, error) {
+	wc.mu.Lock()
+	defer wc.mu.Unlock()
+	return wc.findGLMWindowLocked()
 }
 
 // captureScreen captures a rectangular region of the screen and returns
@@ -375,54 +401,147 @@ func (wc *WindowsController) getWindowRect(hwnd uintptr) (rect, error) {
 	return windowRect, nil
 }
 
-// BringToForeground brings the GLM window to the foreground for pixel scanning.
-// Returns a restore function that brings the previous foreground window back.
-func (wc *WindowsController) BringToForeground() error {
-	prevHwnd, _, _ := procGetForegroundWindow.Call()
+// prepareWindow ensures the GLM window is visible, on-screen, and in the
+// foreground before pixel operations. It returns a restoreInfo that captures
+// the previous window state so restoreWindow can undo every change.
+// Caller must hold wc.mu.
+func (wc *WindowsController) prepareWindow(hwnd uintptr) (restoreInfo, error) {
+	var info restoreInfo
 
-	hwnd, err := wc.findGLMWindow()
-	if err != nil {
-		return err
+	// Save current foreground window.
+	info.prevForeground, _, _ = procGetForegroundWindow.Call()
+
+	// Restore if minimized.
+	isIconicRet, _, _ := procIsIconic.Call(hwnd)
+	info.wasMinimized = isIconicRet != 0
+	if info.wasMinimized {
+		wc.log.Debug("prepareWindow: un-minimizing")
+		procShowWindow.Call(hwnd, swRestore) //nolint:errcheck
+		time.Sleep(100 * time.Millisecond)   // wait for window to fully restore
 	}
+
+	// Capture original position/size.
+	originalRect, err := wc.getWindowRect(hwnd)
+	if err != nil {
+		return info, fmt.Errorf("GetWindowRect failed: %w", err)
+	}
+	info.originalRect = originalRect
+
+	// Get available screen work area (excludes taskbar).
+	var workArea rect
+	ret, _, _ := procSystemParametersInfoW.Call(spiGetWorkArea, 0, uintptr(unsafe.Pointer(&workArea)), 0)
+	if ret == 0 {
+		wc.log.Warn("prepareWindow: SystemParametersInfoW failed, skipping bounds check")
+		wc.log.Debug("prepareWindow: bringing to foreground")
+		procSetForegroundWindow.Call(hwnd) //nolint:errcheck
+		time.Sleep(100 * time.Millisecond)
+		return info, nil
+	}
+
+	// Validate work area is reasonable.
+	workAreaWidth := int(workArea.Right - workArea.Left)
+	workAreaHeight := int(workArea.Bottom - workArea.Top)
+	if workAreaWidth <= 0 || workAreaHeight <= 0 {
+		wc.log.Warn("prepareWindow: invalid work area, skipping bounds check", "workArea", workArea)
+		wc.log.Debug("prepareWindow: bringing to foreground")
+		procSetForegroundWindow.Call(hwnd) //nolint:errcheck
+		time.Sleep(100 * time.Millisecond)
+		return info, nil
+	}
+
+	windowWidth := int(originalRect.Right - originalRect.Left)
+	windowHeight := int(originalRect.Bottom - originalRect.Top)
+
+	// Determine whether the window needs repositioning or resizing.
+	targetX := int(originalRect.Left)
+	targetY := int(originalRect.Top)
+	targetW := windowWidth
+	targetH := windowHeight
+	needsAdjustment := false
+
+	if windowWidth > workAreaWidth {
+		targetW = workAreaWidth * 80 / 100
+		needsAdjustment = true
+	}
+	if windowHeight > workAreaHeight {
+		targetH = workAreaHeight * 80 / 100
+		needsAdjustment = true
+	}
+
+	// Check if window center is outside work area bounds.
+	centerX := int(originalRect.Left) + windowWidth/2
+	centerY := int(originalRect.Top) + windowHeight/2
+	if centerX < int(workArea.Left) || centerX > int(workArea.Right) ||
+		centerY < int(workArea.Top) || centerY > int(workArea.Bottom) {
+		targetX = int(workArea.Left)
+		targetY = int(workArea.Top)
+		needsAdjustment = true
+	}
+
+	if needsAdjustment {
+		wc.log.Debug("prepareWindow: repositioning (off-screen/oversized)",
+			"original", originalRect,
+			"targetX", targetX, "targetY", targetY,
+			"targetW", targetW, "targetH", targetH,
+		)
+		procMoveWindow.Call(
+			hwnd,
+			uintptr(targetX), uintptr(targetY),
+			uintptr(targetW), uintptr(targetH),
+			1, // repaint = TRUE
+		) //nolint:errcheck
+		time.Sleep(powerPrepareDelay)
+		info.wasRepositioned = true
+	}
+
+	// Bring window to foreground and let it paint.
+	wc.log.Debug("prepareWindow: bringing to foreground")
 	procSetForegroundWindow.Call(hwnd) //nolint:errcheck
-	time.Sleep(100 * time.Millisecond) // let window paint
+	time.Sleep(100 * time.Millisecond)
 
-	// Save previous window handle so RestoreForeground can use it
-	wc.mu.Lock()
-	wc.prevForegroundHwnd = prevHwnd
-	wc.mu.Unlock()
-	return nil
+	return info, nil
 }
 
-// RestoreForeground restores the window that was in foreground before BringToForeground.
-func (wc *WindowsController) RestoreForeground() {
-	wc.mu.Lock()
-	prev := wc.prevForegroundHwnd
-	wc.prevForegroundHwnd = 0
-	wc.mu.Unlock()
-
-	if prev != 0 {
-		procSetForegroundWindow.Call(prev) //nolint:errcheck
+// restoreWindow undoes every change made by prepareWindow, in reverse order.
+// Caller must hold wc.mu.
+func (wc *WindowsController) restoreWindow(hwnd uintptr, info restoreInfo) {
+	if info.wasRepositioned {
+		wc.log.Debug("restoreWindow: repositioning back to original", "rect", info.originalRect)
+		ret, _, _ := procMoveWindow.Call(
+			hwnd,
+			uintptr(info.originalRect.Left), uintptr(info.originalRect.Top),
+			uintptr(info.originalRect.Right-info.originalRect.Left),
+			uintptr(info.originalRect.Bottom-info.originalRect.Top),
+			1, // repaint = TRUE
+		)
+		if ret == 0 {
+			wc.log.Warn("restoreWindow: MoveWindow failed")
+		}
+	}
+	if info.wasMinimized {
+		wc.log.Debug("restoreWindow: re-minimizing")
+		ret, _, _ := procShowWindow.Call(hwnd, swMinimize)
+		if ret == 0 {
+			wc.log.Warn("restoreWindow: ShowWindow(minimize) failed")
+		}
+	}
+	if info.prevForeground != 0 {
+		wc.log.Debug("restoreWindow: restoring foreground")
+		ret, _, _ := procSetForegroundWindow.Call(info.prevForeground)
+		if ret == 0 {
+			wc.log.Warn("restoreWindow: SetForegroundWindow failed")
+		}
 	}
 }
 
-// GetState returns the current power state of the GLM application.
-// Returns true if GLM is powered on, false if powered off.
-func (wc *WindowsController) GetState() (bool, error) {
-	hwnd, err := wc.findGLMWindow()
-	if err != nil {
-		return false, err
-	}
-
-	windowRect, err := wc.getWindowRect(hwnd)
-	if err != nil {
-		return false, err
-	}
-
+// readStateLocked captures the current pixel state of the GLM window.
+// windowRect must already be post-prepare (accurate current position/size).
+// Caller must hold wc.mu.
+func (wc *WindowsController) readStateLocked(windowRect rect) (pixelState, error) {
 	windowWidth := int(windowRect.Right - windowRect.Left)
 	windowHeight := int(windowRect.Bottom - windowRect.Top)
 	if windowWidth <= 0 || windowHeight <= 0 {
-		return false, fmt.Errorf("invalid window dimensions: %dx%d", windowWidth, windowHeight)
+		return stateUnknown, fmt.Errorf("invalid window dimensions: %dx%d", windowWidth, windowHeight)
 	}
 
 	pixels, err := wc.captureScreen(
@@ -430,10 +549,89 @@ func (wc *WindowsController) GetState() (bool, error) {
 		windowWidth, windowHeight,
 	)
 	if err != nil {
-		return false, fmt.Errorf("screen capture failed: %w", err)
+		return stateUnknown, fmt.Errorf("screen capture failed: %w", err)
 	}
 
-	state := analyzePixels(pixels, windowWidth, windowHeight)
+	return analyzePixels(pixels, windowWidth, windowHeight), nil
+}
+
+// clickPowerButtonLocked clicks the power button and polls until the state
+// changes from previousState, or verifyTimeout elapses.
+// windowRect must be accurate (post-prepare).
+// Caller must hold wc.mu.
+func (wc *WindowsController) clickPowerButtonLocked(windowRect rect, previousState pixelState) error {
+	// Calculate button click position (absolute screen coordinates).
+	clickX := int(windowRect.Right) - 28
+	clickY := int(windowRect.Top) + 80
+
+	// Window is already in foreground (prepareWindow called SetForegroundWindow).
+	procSetCursorPos.Call(uintptr(clickX), uintptr(clickY)) //nolint:errcheck
+	time.Sleep(10 * time.Millisecond)
+
+	procMouseEvent.Call(mouseeventfLeftDown, 0, 0, 0, 0) //nolint:errcheck
+	time.Sleep(clickDownUpDelay)
+	procMouseEvent.Call(mouseeventfLeftUp, 0, 0, 0, 0) //nolint:errcheck
+
+	wc.log.Info("clickPowerButton: clicked power button", "x", clickX, "y", clickY)
+
+	// Wait for state change.
+	time.Sleep(postClickDelay)
+
+	deadline := time.Now().Add(verifyTimeout)
+	for time.Now().Before(deadline) {
+		currentState, err := wc.readStateLocked(windowRect)
+		if err != nil {
+			wc.log.Warn("clickPowerButton: verification capture failed", "error", err)
+			time.Sleep(pollInterval)
+			continue
+		}
+
+		if currentState != stateUnknown && currentState != previousState {
+			wc.log.Info("clickPowerButton: state changed", "from", previousState, "to", currentState)
+			return nil
+		}
+
+		time.Sleep(pollInterval)
+	}
+
+	// If previous state was unknown, we can't verify — assume success.
+	if previousState == stateUnknown {
+		wc.log.Warn("clickPowerButton: could not verify state change (previous state unknown)")
+		return nil
+	}
+
+	return fmt.Errorf("clickPowerButton: state did not change within %v", verifyTimeout)
+}
+
+// GetState returns the current power state of the GLM application.
+// Returns true if GLM is powered on, false if powered off.
+// The full prepare→capture→analyze→restore sequence runs under wc.mu.
+func (wc *WindowsController) GetState() (bool, error) {
+	wc.mu.Lock()
+	defer wc.mu.Unlock()
+
+	hwnd, err := wc.findGLMWindowLocked()
+	if err != nil {
+		return false, err
+	}
+
+	info, err := wc.prepareWindow(hwnd)
+	if err != nil {
+		return false, fmt.Errorf("prepare window failed: %w", err)
+	}
+	defer wc.restoreWindow(hwnd, info)
+
+	// Re-read the window rect — it may have changed after prepare.
+	windowRect, err := wc.getWindowRect(hwnd)
+	if err != nil {
+		return false, err
+	}
+
+	state, err := wc.readStateLocked(windowRect)
+	if err != nil {
+		return false, err
+	}
+
 	switch state {
 	case stateOn:
 		return true, nil
@@ -450,113 +648,108 @@ func (wc *WindowsController) GetPowerState() (bool, error) {
 }
 
 // PowerOn ensures power is ON via UI click. Implements Commander.
-// If power is already on, the click is skipped.
+// If power is already on, the click is skipped (idempotent).
+// Holds wc.mu for the entire read-check-click-verify sequence to eliminate TOCTOU.
 func (wc *WindowsController) PowerOn(traceID string) error {
-	currentState, err := wc.GetState()
-	if err != nil {
-		return fmt.Errorf("cannot read state: %w", err)
-	}
-	if currentState {
-		wc.log.Info("power already ON, skipping UI click", "trace_id", traceID)
-		return nil
-	}
-	wc.log.Info("power ON via UI click", "trace_id", traceID)
-	return wc.Toggle()
-}
-
-// PowerOff ensures power is OFF via UI click. Implements Commander.
-// If power is already off, the click is skipped.
-func (wc *WindowsController) PowerOff(traceID string) error {
-	currentState, err := wc.GetState()
-	if err != nil {
-		return fmt.Errorf("cannot read state: %w", err)
-	}
-	if !currentState {
-		wc.log.Info("power already OFF, skipping UI click", "trace_id", traceID)
-		return nil
-	}
-	wc.log.Info("power OFF via UI click", "trace_id", traceID)
-	return wc.Toggle()
-}
-
-// Toggle clicks the power button in the GLM window to change the power state.
-// It captures the current state, performs the click, then polls until the
-// state changes or a timeout is reached.
-func (wc *WindowsController) Toggle() error {
 	wc.mu.Lock()
 	defer wc.mu.Unlock()
 
-	hwnd, err := wc.findGLMWindow()
+	hwnd, err := wc.findGLMWindowLocked()
 	if err != nil {
-		return fmt.Errorf("cannot toggle: %w", err)
+		return fmt.Errorf("cannot find GLM window: %w", err)
 	}
 
-	// Capture current state before clicking.
+	info, err := wc.prepareWindow(hwnd)
+	if err != nil {
+		return fmt.Errorf("prepare window failed: %w", err)
+	}
+	defer wc.restoreWindow(hwnd, info)
+
 	windowRect, err := wc.getWindowRect(hwnd)
 	if err != nil {
 		return fmt.Errorf("cannot get window rect: %w", err)
 	}
 
-	windowWidth := int(windowRect.Right - windowRect.Left)
-	windowHeight := int(windowRect.Bottom - windowRect.Top)
+	currentState, err := wc.readStateLocked(windowRect)
+	if err != nil {
+		return fmt.Errorf("cannot read state: %w", err)
+	}
 
-	pixels, err := wc.captureScreen(
-		int(windowRect.Left), int(windowRect.Top),
-		windowWidth, windowHeight,
-	)
+	if currentState == stateOn {
+		wc.log.Info("power already ON, skipping UI click", "trace_id", traceID)
+		return nil
+	}
+
+	wc.log.Info("power ON via UI click", "trace_id", traceID)
+	return wc.clickPowerButtonLocked(windowRect, currentState)
+}
+
+// PowerOff ensures power is OFF via UI click. Implements Commander.
+// If power is already off, the click is skipped (idempotent).
+// Holds wc.mu for the entire read-check-click-verify sequence to eliminate TOCTOU.
+func (wc *WindowsController) PowerOff(traceID string) error {
+	wc.mu.Lock()
+	defer wc.mu.Unlock()
+
+	hwnd, err := wc.findGLMWindowLocked()
+	if err != nil {
+		return fmt.Errorf("cannot find GLM window: %w", err)
+	}
+
+	info, err := wc.prepareWindow(hwnd)
+	if err != nil {
+		return fmt.Errorf("prepare window failed: %w", err)
+	}
+	defer wc.restoreWindow(hwnd, info)
+
+	windowRect, err := wc.getWindowRect(hwnd)
+	if err != nil {
+		return fmt.Errorf("cannot get window rect: %w", err)
+	}
+
+	currentState, err := wc.readStateLocked(windowRect)
+	if err != nil {
+		return fmt.Errorf("cannot read state: %w", err)
+	}
+
+	if currentState == stateOff {
+		wc.log.Info("power already OFF, skipping UI click", "trace_id", traceID)
+		return nil
+	}
+
+	wc.log.Info("power OFF via UI click", "trace_id", traceID)
+	return wc.clickPowerButtonLocked(windowRect, currentState)
+}
+
+// Toggle clicks the power button in the GLM window to change the power state.
+// It prepares the window, captures the current state, performs the click, then
+// polls until the state changes or a timeout is reached, then restores the window.
+func (wc *WindowsController) Toggle() error {
+	wc.mu.Lock()
+	defer wc.mu.Unlock()
+
+	hwnd, err := wc.findGLMWindowLocked()
+	if err != nil {
+		return fmt.Errorf("cannot toggle: %w", err)
+	}
+
+	info, err := wc.prepareWindow(hwnd)
+	if err != nil {
+		return fmt.Errorf("prepare window failed: %w", err)
+	}
+	defer wc.restoreWindow(hwnd, info)
+
+	// Re-read window rect after prepare (position/size may have changed).
+	windowRect, err := wc.getWindowRect(hwnd)
+	if err != nil {
+		return fmt.Errorf("cannot get window rect: %w", err)
+	}
+
+	previousState, err := wc.readStateLocked(windowRect)
 	if err != nil {
 		return fmt.Errorf("pre-toggle capture failed: %w", err)
 	}
 
-	previousState := analyzePixels(pixels, windowWidth, windowHeight)
 	wc.log.Info("toggle: current state", "state", previousState)
-
-	// Calculate button click position (absolute screen coordinates).
-	clickX := int(windowRect.Right) - 28
-	clickY := int(windowRect.Top) + 80
-
-	// Focus window and click.
-	procSetForegroundWindow.Call(hwnd) //nolint:errcheck
-	time.Sleep(50 * time.Millisecond)
-
-	procSetCursorPos.Call(uintptr(clickX), uintptr(clickY)) //nolint:errcheck
-	time.Sleep(10 * time.Millisecond)
-
-	procMouseEvent.Call(mouseeventfLeftDown, 0, 0, 0, 0) //nolint:errcheck
-	time.Sleep(clickDownUpDelay)
-	procMouseEvent.Call(mouseeventfLeftUp, 0, 0, 0, 0) //nolint:errcheck
-
-	wc.log.Info("toggle: clicked power button", "x", clickX, "y", clickY)
-
-	// Wait for state change.
-	time.Sleep(postClickDelay)
-
-	deadline := time.Now().Add(verifyTimeout)
-	for time.Now().Before(deadline) {
-		pixels, err = wc.captureScreen(
-			int(windowRect.Left), int(windowRect.Top),
-			windowWidth, windowHeight,
-		)
-		if err != nil {
-			wc.log.Warn("toggle: verification capture failed", "error", err)
-			time.Sleep(pollInterval)
-			continue
-		}
-
-		currentState := analyzePixels(pixels, windowWidth, windowHeight)
-		if currentState != stateUnknown && currentState != previousState {
-			wc.log.Info("toggle: state changed", "from", previousState, "to", currentState)
-			return nil
-		}
-
-		time.Sleep(pollInterval)
-	}
-
-	// If previous state was unknown, we can't verify — assume success.
-	if previousState == stateUnknown {
-		wc.log.Warn("toggle: could not verify state change (previous state unknown)")
-		return nil
-	}
-
-	return fmt.Errorf("toggle: state did not change within %v", verifyTimeout)
+	return wc.clickPowerButtonLocked(windowRect, previousState)
 }
