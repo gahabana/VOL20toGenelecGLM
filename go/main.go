@@ -451,16 +451,14 @@ func sendPowerOnProbe(midiOut midi.Writer, probeCh <-chan int,
 		return
 	}
 
+	ackStart := time.Now()
 	for i := 0; i < expectedCC20; i++ {
 		timeout := msgTimeout
 		if i == 0 {
 			timeout = ackTimeout
 		}
 		select {
-		case vol := <-probeCh:
-			if i == 0 {
-				log.Info("probe: power ON ACK", "volume", vol)
-			}
+		case <-probeCh:
 		case <-time.After(timeout):
 			if i == 0 {
 				log.Info("probe: no power ACK within timeout")
@@ -470,6 +468,7 @@ func sendPowerOnProbe(midiOut midi.Writer, probeCh <-chan int,
 			goto done
 		}
 	}
+	log.Info("probe: power ON ACK complete", "elapsed", time.Since(ackStart).Round(time.Millisecond))
 
 done:
 	state := ctrl.GetState()
