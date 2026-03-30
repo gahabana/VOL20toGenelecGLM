@@ -141,7 +141,7 @@ func main() {
 		}
 		// External power change detected. If observer is available, verify via pixel read.
 		if powerObs != nil {
-			time.Sleep(time.Duration(controller.PowerVerifyDelay * float64(time.Second)))
+			time.Sleep(controller.PowerVerifyDelay)
 			actualState, err := powerObs.GetPowerState()
 			if err != nil {
 				// Pixel read failed — fall back to toggle

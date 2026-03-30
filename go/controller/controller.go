@@ -12,7 +12,7 @@ const (
 	PowerSettlingTime  = 2.0                                   // Seconds to block ALL commands after power toggle
 	PowerCooldownTime  = 1.5                                   // Seconds to block power commands after settling ends
 	PowerTotalLockout  = PowerSettlingTime + PowerCooldownTime // 3.5s total
-	PowerVerifyDelay   = 1.0                                   // Seconds to wait before pixel-verifying power state after command/external change
+	PowerVerifyDelay   = 1 * time.Second                       // Wait before pixel-verifying power state after command/external change
 )
 
 var errVolumeNotInitialized = errors.New("volume not initialized from GLM")
