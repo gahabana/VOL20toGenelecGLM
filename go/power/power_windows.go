@@ -113,16 +113,17 @@ type restoreInfo struct {
 // WindowsController detects GLM power state via pixel analysis and toggles
 // power by simulating mouse clicks on the GLM window.
 type WindowsController struct {
-	log        *slog.Logger
-	mu         sync.Mutex
-	pid        int
-	cachedHWND uintptr
-	cacheTime  time.Time
+	log           *slog.Logger
+	mu            sync.Mutex
+	pid           int
+	cachedHWND    uintptr
+	cacheTime     time.Time
+	debugCaptures bool
 }
 
 // NewWindowsController creates a new WindowsController.
-func NewWindowsController(log *slog.Logger) *WindowsController {
-	return &WindowsController{log: log}
+func NewWindowsController(log *slog.Logger, debugCaptures bool) *WindowsController {
+	return &WindowsController{log: log, debugCaptures: debugCaptures}
 }
 
 // SetPID sets the GLM process ID for window filtering.
@@ -579,7 +580,9 @@ func (wc *WindowsController) readStateLocked(windowRect rect) (pixelState, error
 	state := analyzePixels(pixels, windowWidth, windowHeight)
 
 	// Debug: dump captured pixels to BMP file for inspection.
-	wc.dumpPixelsBMP(pixels, windowWidth, windowHeight, state)
+	if wc.debugCaptures {
+		wc.dumpPixelsBMP(pixels, windowWidth, windowHeight, state)
+	}
 
 	return state, nil
 }

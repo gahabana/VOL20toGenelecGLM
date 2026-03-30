@@ -118,7 +118,7 @@ func main() {
 		winPowerCtrl = nil
 	} else if cfg.Headless {
 		// Paths B and B+ui: need pixel scanning
-		winPowerCtrl = createPowerController(log)
+		winPowerCtrl = createPowerController(log, cfg.DebugCaptures)
 	} else {
 		// Default: no pixel scanning
 		winPowerCtrl = nil

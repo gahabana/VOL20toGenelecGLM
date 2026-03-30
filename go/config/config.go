@@ -59,6 +59,9 @@ type Config struct {
 	NoUIAutomation bool // Disable all pixel reading and mouse click simulation
 	Headless       bool // Enable UI automation for screen reading (verification, health monitoring)
 	UIPower        bool // Use UI click for power instead of MIDI (requires --headless)
+
+	// Debug
+	DebugCaptures bool // Dump pixel captures to BMP files for inspection
 }
 
 // Parse parses CLI arguments and returns a Config with defaults applied.
@@ -114,6 +117,7 @@ func Parse(args []string) Config {
 	fs.BoolVar(&cfg.NoUIAutomation, "no_ui_automation", false, "Disable all pixel reading and mouse click simulation (MIDI-only power control)")
 	fs.BoolVar(&cfg.Headless, "headless", false, "Enable UI automation for screen reading (verification, health monitoring)")
 	fs.BoolVar(&cfg.UIPower, "ui_power", false, "Use UI click for power instead of MIDI (requires --headless)")
+	fs.BoolVar(&cfg.DebugCaptures, "debug_captures", false, "Dump pixel captures to BMP files for inspection")
 
 	if err := fs.Parse(args); err != nil {
 		os.Exit(0)
