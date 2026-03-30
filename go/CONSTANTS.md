@@ -44,6 +44,7 @@ All tunable constants that define the behavior of the Go binary. When adding new
 | `PowerSettlingTime` | 2.0s | Block ALL commands during power transition (when no pixel detection) |
 | `PowerCooldownTime` | 1.5s | Block power-only commands after transition completes |
 | `PowerTotalLockout` | 3.5s | Total settling + cooldown (only used without pixel detection) |
+| `PowerVerifyDelay` | 1.0s | Wait before pixel-verifying power state after command or external change |
 
 ## Consumer (`consumer/consumer.go`)
 
