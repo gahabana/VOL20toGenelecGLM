@@ -5,6 +5,7 @@ package power
 import (
 	"fmt"
 	"log/slog"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -574,7 +575,73 @@ func (wc *WindowsController) readStateLocked(windowRect rect) (pixelState, error
 		return stateUnknown, fmt.Errorf("screen capture failed: %w", err)
 	}
 
-	return analyzePixels(pixels, windowWidth, windowHeight), nil
+	state := analyzePixels(pixels, windowWidth, windowHeight)
+
+	// Debug: dump captured pixels to BMP file for inspection.
+	wc.dumpPixelsBMP(pixels, windowWidth, windowHeight, state)
+
+	return state, nil
+}
+
+// dumpPixelsBMP writes the BGRA pixel buffer as a BMP file next to the binary.
+// Filename includes timestamp and detected state for easy identification.
+func (wc *WindowsController) dumpPixelsBMP(pixels []byte, width, height int, state pixelState) {
+	stateName := "unknown"
+	switch state {
+	case stateOn:
+		stateName = "ON"
+	case stateOff:
+		stateName = "OFF"
+	}
+
+	ts := time.Now().Format("20060102-150405")
+	filename := fmt.Sprintf("glm_capture_%s_%s_%dx%d.bmp", ts, stateName, width, height)
+
+	// BMP file: 14-byte file header + 40-byte DIB header + pixel data
+	rowSize := width * 4 // BGRA, already 4-byte aligned
+	pixelDataSize := rowSize * height
+	fileSize := 14 + 40 + pixelDataSize
+
+	buf := make([]byte, fileSize)
+
+	// File header (14 bytes)
+	buf[0], buf[1] = 'B', 'M'
+	buf[2] = byte(fileSize)
+	buf[3] = byte(fileSize >> 8)
+	buf[4] = byte(fileSize >> 16)
+	buf[5] = byte(fileSize >> 24)
+	buf[10] = 54 // pixel data offset (14 + 40)
+
+	// DIB header (BITMAPINFOHEADER, 40 bytes)
+	buf[14] = 40 // header size
+	buf[18] = byte(width)
+	buf[19] = byte(width >> 8)
+	buf[20] = byte(width >> 16)
+	buf[21] = byte(width >> 24)
+	// Height negative = top-down; BMP uses positive = bottom-up, so flip
+	buf[22] = byte(height)
+	buf[23] = byte(height >> 8)
+	buf[24] = byte(height >> 16)
+	buf[25] = byte(height >> 24)
+	buf[26] = 1  // planes
+	buf[28] = 32 // bits per pixel
+	buf[34] = byte(pixelDataSize)
+	buf[35] = byte(pixelDataSize >> 8)
+	buf[36] = byte(pixelDataSize >> 16)
+	buf[37] = byte(pixelDataSize >> 24)
+
+	// Pixel data: our buffer is top-down BGRA, BMP expects bottom-up
+	for y := 0; y < height; y++ {
+		srcRow := y * rowSize
+		dstRow := (height - 1 - y) * rowSize
+		copy(buf[54+dstRow:54+dstRow+rowSize], pixels[srcRow:srcRow+rowSize])
+	}
+
+	if err := os.WriteFile(filename, buf, 0644); err != nil {
+		wc.log.Warn("dumpPixelsBMP: failed to write", "file", filename, "err", err)
+	} else {
+		wc.log.Debug("dumpPixelsBMP: saved capture", "file", filename, "state", stateName)
+	}
 }
 
 // clickPowerButtonLocked clicks the power button and polls until the state
