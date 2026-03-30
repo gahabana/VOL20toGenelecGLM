@@ -452,6 +452,14 @@ func (wc *WindowsController) prepareWindow(hwnd uintptr) (restoreInfo, error) {
 	windowWidth := int(originalRect.Right - originalRect.Left)
 	windowHeight := int(originalRect.Bottom - originalRect.Top)
 
+	wc.log.Debug("prepareWindow: window rect after restore",
+		"left", originalRect.Left, "top", originalRect.Top,
+		"right", originalRect.Right, "bottom", originalRect.Bottom,
+		"width", windowWidth, "height", windowHeight,
+		"workArea_left", workArea.Left, "workArea_top", workArea.Top,
+		"workArea_right", workArea.Right, "workArea_bottom", workArea.Bottom,
+	)
+
 	// Determine whether the window needs repositioning or resizing.
 	targetX := int(originalRect.Left)
 	targetY := int(originalRect.Top)
