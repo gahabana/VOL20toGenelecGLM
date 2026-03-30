@@ -102,11 +102,13 @@ Volume commands coalesce (latest wins). Mute/dim/power are queued individually (
 
 | Constant | Value | Purpose |
 |----------|-------|---------|
-| `burstSettle` | 1.5s | Silence after last CC20 = startup burst or ACK complete. Must exceed GLM's ~600ms gap between sub-bursts. |
-| `burstTimeout` | 15s | Max wait for first CC20 from GLM startup burst. GLM typically emits at ~9s after launch. |
-| Power ACK timeout | 3s | Max wait for CC28=127 ACK (5-message response from GLM) |
+| `expectedCC20` (burst) | 5 | CC20 count in GLM's 12-message startup burst (2 patterns × Mute→Vol→Dim→Mute→Vol) |
+| `expectedCC20` (ACK) | 2 | CC20 count in power command 5-message ACK (1 pattern) |
+| `firstTimeout` (burst) | 15s | Max wait for first CC20 from GLM startup burst. GLM typically emits ~1.7s after launch. |
+| `ackTimeout` | 3s | Max wait for first CC20 after CC28=127 send |
+| `msgTimeout` | 2s | Max wait between consecutive CC20s within a burst or ACK |
 
-**Startup sequence (when managed):** MIDI reader starts → GLM launched → reader captures 12-message startup burst (volume/mute/dim) → CC28=127 forces power ON → 5-message ACK. Vol+/Vol- probing is not needed — volume is discovered passively from GLM's MIDI output.
+**Startup sequence (when managed):** MIDI reader starts → GLM launched → reader captures 12-message startup burst (5 CC20s give volume; mute/dim via UpdateFromMIDI) → CC28=127 forces power ON → 5-message ACK (2 CC20s). Count-based detection: proceeds as soon as expected CC20 count is reached, no settle timer. Vol+/Vol- probing is not needed — volume is discovered passively from GLM's MIDI output.
 
 ## MIDI Reader (`midi/winmm_reader.go`)
 

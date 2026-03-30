@@ -378,71 +378,71 @@ func main() {
 // probeGLMState discovers GLM state at startup or after restart.
 // Phase 1: If startupConsuming is set (we launched GLM), waits for GLM's
 //
-//	12-message startup burst which provides volume/mute/dim via UpdateFromMIDI.
+//	12-message startup burst (5 CC20s) which provides volume/mute/dim via UpdateFromMIDI.
 //
-// Phase 2: Sends CC28=127 to force speakers ON. GLM responds with 5-message ACK.
+// Phase 2: Sends CC28=127 to force speakers ON. GLM responds with 5-message ACK (2 CC20s).
 // Vol+/Vol- probing is not needed — volume is discovered passively from MIDI output.
 func probeGLMState(midiOut midi.Writer, probeCh <-chan int, ctrl *controller.Controller,
 	startupConsuming *atomic.Bool, log *slog.Logger) {
 
-	const burstSettle = 1500 * time.Millisecond // silence after last CC20 = burst complete
-	const burstTimeout = 15 * time.Second       // max wait for first startup CC20
-
 	// Phase 1: Consume GLM startup burst (if we launched GLM).
-	// GLM emits 12 messages in 2 bursts (~1s total) when starting.
+	// GLM emits 12 messages in 2x 5-msg patterns (~1s total) when starting.
 	// UpdateFromMIDI (in the MIDI reader callback) captures state automatically.
 	// Power pattern detector is suppressed via startupConsuming flag.
 	if startupConsuming != nil && startupConsuming.Load() {
-		consumeStartupBurst(probeCh, startupConsuming, burstTimeout, burstSettle, ctrl, log)
+		consumeStartupBurst(probeCh, startupConsuming, ctrl, log)
 	}
 
 	// Phase 2: Force speakers ON via CC28=127.
-	// GLM always responds with 5-message ACK including volume (CC20).
+	// GLM always responds with 5-message ACK (pattern: Mute→Vol→Dim→Mute→Vol, 2 CC20s).
 	if midiOut == nil {
 		return
 	}
-	sendPowerOnProbe(midiOut, probeCh, burstSettle, ctrl, log)
+	sendPowerOnProbe(midiOut, probeCh, ctrl, log)
 }
 
-// consumeStartupBurst waits for and drains GLM's 12-message startup burst.
+// consumeStartupBurst waits for GLM's 12-message startup burst.
+// The burst contains 5 CC20 messages (2 patterns of Mute→Vol→Dim→Mute→Vol).
+// Counting CC20s lets us finish as soon as the burst is complete — no settle timer.
 func consumeStartupBurst(probeCh <-chan int, startupConsuming *atomic.Bool,
-	timeout, settle time.Duration, ctrl *controller.Controller, log *slog.Logger) {
+	ctrl *controller.Controller, log *slog.Logger) {
+
+	const expectedCC20 = 5                      // 12 messages total, 5 are CC20
+	const firstTimeout = 15 * time.Second       // max wait for first CC20 (GLM boot time)
+	const msgTimeout = 2 * time.Second          // max wait between consecutive CC20s
 
 	probeStart := time.Now()
-	msgCount := 0
 
-	// Wait for first CC20 — should already be buffered from GlmManager.Start() blocking.
-	select {
-	case <-probeCh:
-		msgCount++
-	case <-time.After(timeout):
-		log.Warn("probe: no startup burst within timeout", "timeout", timeout)
-		startupConsuming.Store(false)
-		return
-	}
-
-	// Drain remaining burst (settle duration of silence = burst complete).
-	draining := true
-	for draining {
+	for i := 0; i < expectedCC20; i++ {
+		timeout := msgTimeout
+		if i == 0 {
+			timeout = firstTimeout
+		}
 		select {
 		case <-probeCh:
-			msgCount++
-		case <-time.After(settle):
-			draining = false
+		case <-time.After(timeout):
+			log.Warn("probe: startup burst incomplete", "received", i, "expected", expectedCC20)
+			startupConsuming.Store(false)
+			return
 		}
 	}
 
 	startupConsuming.Store(false)
 	state := ctrl.GetState()
 	log.Info("probe: startup burst consumed",
-		"cc20_count", msgCount,
+		"cc20_count", expectedCC20,
 		"volume", state.Volume, "mute", state.Mute, "dim", state.Dim,
 		"elapsed", time.Since(probeStart).Round(time.Millisecond))
 }
 
 // sendPowerOnProbe sends CC28=127 and waits for the 5-message ACK.
-func sendPowerOnProbe(midiOut midi.Writer, probeCh <-chan int, settle time.Duration,
+// The ACK pattern is Mute→Vol→Dim→Mute→Vol — 2 CC20 messages.
+func sendPowerOnProbe(midiOut midi.Writer, probeCh <-chan int,
 	ctrl *controller.Controller, log *slog.Logger) {
+
+	const expectedCC20 = 2                // ACK has 2 CC20 messages
+	const ackTimeout = 3 * time.Second    // max wait for first ACK CC20
+	const msgTimeout = 2 * time.Second    // max wait between CC20s within ACK
 
 	log.Info("probe: forcing power ON via CC28=127")
 	ctrl.SetPowerCommandPending()
@@ -451,23 +451,27 @@ func sendPowerOnProbe(midiOut midi.Writer, probeCh <-chan int, settle time.Durat
 		return
 	}
 
-	// Wait for 5-message ACK (~1s with internal gap).
-	select {
-	case vol := <-probeCh:
-		log.Info("probe: power ON ACK", "volume", vol)
-		// Drain remaining ACK messages.
-		draining := true
-		for draining {
-			select {
-			case <-probeCh:
-			case <-time.After(settle):
-				draining = false
-			}
+	for i := 0; i < expectedCC20; i++ {
+		timeout := msgTimeout
+		if i == 0 {
+			timeout = ackTimeout
 		}
-	case <-time.After(3 * time.Second):
-		log.Info("probe: no power ACK within 3s")
+		select {
+		case vol := <-probeCh:
+			if i == 0 {
+				log.Info("probe: power ON ACK", "volume", vol)
+			}
+		case <-time.After(timeout):
+			if i == 0 {
+				log.Info("probe: no power ACK within timeout")
+			} else {
+				log.Warn("probe: power ACK incomplete", "received", i, "expected", expectedCC20)
+			}
+			goto done
+		}
 	}
 
+done:
 	state := ctrl.GetState()
 	log.Info("probe: GLM state initialized",
 		"volume", state.Volume, "mute", state.Mute, "dim", state.Dim)
