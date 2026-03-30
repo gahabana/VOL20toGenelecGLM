@@ -21,11 +21,27 @@ import (
 var (
 	modkernel32 = windows.NewLazySystemDLL("kernel32.dll")
 	modadvapi32 = windows.NewLazySystemDLL("advapi32.dll")
+	modwtsapi32 = windows.NewLazySystemDLL("wtsapi32.dll")
 
-	procGetTickCount64 = modkernel32.NewProc("GetTickCount64")
-	procCredReadW      = modadvapi32.NewProc("CredReadW")
-	procCredFree       = modadvapi32.NewProc("CredFree")
+	procGetTickCount64       = modkernel32.NewProc("GetTickCount64")
+	procProcessIdToSessionId = modkernel32.NewProc("ProcessIdToSessionId")
+	procCredReadW            = modadvapi32.NewProc("CredReadW")
+	procCredFree             = modadvapi32.NewProc("CredFree")
+	procWTSEnumerateSessionsW = modwtsapi32.NewProc("WTSEnumerateSessionsW")
+	procWTSFreeMemory         = modwtsapi32.NewProc("WTSFreeMemory")
 )
+
+// WTS session states.
+const (
+	wtsDisconnected = 4
+)
+
+// wtsSessionInfo matches the Windows WTS_SESSION_INFOW structure.
+type wtsSessionInfo struct {
+	SessionID      uint32
+	WinStationName *uint16
+	State          int32
+}
 
 const (
 	credTypeGeneric uint32 = 1
@@ -47,6 +63,86 @@ type credentialW struct {
 	Attributes         uintptr
 	TargetAlias        *uint16
 	UserName           *uint16
+}
+
+// EnsureSessionConnected checks if the current session is disconnected
+// (e.g., after RDP disconnect) and reconnects it to the console via tscon.
+// This must be called before any pixel/screen capture operations, as BitBlt
+// fails when the session has no active display.
+//
+// Returns nil if already connected or successfully reconnected.
+func EnsureSessionConnected(log *slog.Logger) error {
+	// Get current process session ID.
+	var sessionID uint32
+	ret, _, _ := procProcessIdToSessionId.Call(
+		uintptr(os.Getpid()),
+		uintptr(unsafe.Pointer(&sessionID)),
+	)
+	if ret == 0 {
+		log.Debug("EnsureSessionConnected: ProcessIdToSessionId failed, assuming connected")
+		return nil
+	}
+
+	// Enumerate sessions to find ours and check its state.
+	var pSessionInfo uintptr
+	var count uint32
+	ret, _, _ = procWTSEnumerateSessionsW.Call(
+		0, // WTS_CURRENT_SERVER_HANDLE
+		0, // Reserved
+		1, // Version
+		uintptr(unsafe.Pointer(&pSessionInfo)),
+		uintptr(unsafe.Pointer(&count)),
+	)
+	if ret == 0 {
+		log.Debug("EnsureSessionConnected: WTSEnumerateSessionsW failed, assuming connected")
+		return nil
+	}
+	defer procWTSFreeMemory.Call(pSessionInfo)
+
+	// Walk the session array to find our session's state.
+	const infoSize = unsafe.Sizeof(wtsSessionInfo{})
+	disconnected := false
+	for i := uint32(0); i < count; i++ {
+		info := (*wtsSessionInfo)(unsafe.Pointer(pSessionInfo + uintptr(i)*infoSize))
+		if info.SessionID == sessionID {
+			disconnected = info.State == wtsDisconnected
+			break
+		}
+	}
+
+	if !disconnected {
+		return nil
+	}
+
+	// Session is disconnected — reconnect to console.
+	log.Info("session disconnected, reconnecting to console", "session_id", sessionID)
+
+	cmd := exec.Command("tscon", strconv.FormatUint(uint64(sessionID), 10), "/dest:console")
+	output, err := cmd.CombinedOutput()
+	if err == nil {
+		log.Info("reconnected session to console", "session_id", sessionID)
+		time.Sleep(500 * time.Millisecond) // let display driver settle
+		return nil
+	}
+
+	// Direct tscon failed — try psexec for SYSTEM privileges.
+	log.Debug("direct tscon failed, trying psexec", "err", err, "output", string(output))
+	for _, name := range []string{"psexec", "psexec64"} {
+		psexecPath, lookErr := exec.LookPath(name)
+		if lookErr != nil {
+			continue
+		}
+		cmd = exec.Command(psexecPath, "-s", "-accepteula",
+			"tscon", strconv.FormatUint(uint64(sessionID), 10), "/dest:console")
+		output, err = cmd.CombinedOutput()
+		if err == nil {
+			log.Info("reconnected session to console via psexec", "session_id", sessionID)
+			time.Sleep(500 * time.Millisecond)
+			return nil
+		}
+	}
+
+	return fmt.Errorf("failed to reconnect session %d to console: %w (output: %s)", sessionID, err, string(output))
 }
 
 // WindowsPrimer implements RDP session priming on Windows to prevent

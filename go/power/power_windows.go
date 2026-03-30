@@ -11,6 +11,8 @@ import (
 	"unsafe"
 
 	"golang.org/x/sys/windows"
+
+	"vol20toglm/rdp"
 )
 
 // Windows API constants.
@@ -407,6 +409,11 @@ func (wc *WindowsController) getWindowRect(hwnd uintptr) (rect, error) {
 // Caller must hold wc.mu.
 func (wc *WindowsController) prepareWindow(hwnd uintptr) (restoreInfo, error) {
 	var info restoreInfo
+
+	// Ensure session is connected to console (handles RDP disconnect).
+	if err := rdp.EnsureSessionConnected(wc.log); err != nil {
+		return info, fmt.Errorf("session not connected: %w", err)
+	}
 
 	// Save current foreground window.
 	info.prevForeground, _, _ = procGetForegroundWindow.Call()
