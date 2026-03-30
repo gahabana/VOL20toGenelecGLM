@@ -535,7 +535,9 @@ func (wc *WindowsController) restoreWindow(hwnd uintptr, info restoreInfo) {
 		wc.log.Debug("restoreWindow: restoring foreground")
 		ret, _, _ := procSetForegroundWindow.Call(info.prevForeground)
 		if ret == 0 {
-			wc.log.Warn("restoreWindow: SetForegroundWindow failed")
+			// Common: Windows' foreground lock timer expires during our ~1.5s operation.
+			// The previous window is still there, just not explicitly focused. Benign.
+			wc.log.Debug("restoreWindow: SetForegroundWindow failed (foreground lock expired)")
 		}
 	}
 	if info.wasMinimized {
