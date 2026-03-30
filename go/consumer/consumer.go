@@ -93,6 +93,8 @@ func processAction(a types.Action, ctrl *controller.Controller, midiOut midi.Wri
 						"expected", targetOn,
 						"actual", actualState,
 					)
+				} else {
+					log.Info("power state verified via pixel", "trace_id", a.TraceID, "power", actualState)
 				}
 			}
 		} else {
