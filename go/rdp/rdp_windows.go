@@ -84,7 +84,11 @@ func EnsureSessionConnected(log *slog.Logger) error {
 	}
 
 	// Enumerate sessions to find ours and check its state.
-	var pSessionInfo uintptr
+	// pSessionInfo is stored as unsafe.Pointer (not uintptr) so that
+	// subsequent pointer arithmetic satisfies go vet's unsafe.Pointer
+	// rule 4: the conversion uintptr→unsafe.Pointer must happen in a
+	// single expression, not from a stored uintptr variable.
+	var pSessionInfo unsafe.Pointer
 	var count uint32
 	ret, _, _ = procWTSEnumerateSessionsW.Call(
 		0, // WTS_CURRENT_SERVER_HANDLE
@@ -97,13 +101,13 @@ func EnsureSessionConnected(log *slog.Logger) error {
 		log.Debug("EnsureSessionConnected: WTSEnumerateSessionsW failed, assuming connected")
 		return nil
 	}
-	defer procWTSFreeMemory.Call(pSessionInfo)
+	defer procWTSFreeMemory.Call(uintptr(pSessionInfo))
 
 	// Walk the session array to find our session's state.
 	const infoSize = unsafe.Sizeof(wtsSessionInfo{})
 	disconnected := false
 	for i := uint32(0); i < count; i++ {
-		info := (*wtsSessionInfo)(unsafe.Pointer(pSessionInfo + uintptr(i)*infoSize))
+		info := (*wtsSessionInfo)(unsafe.Pointer(uintptr(pSessionInfo) + uintptr(i)*infoSize))
 		if info.SessionID == sessionID {
 			disconnected = info.State == wtsDisconnected
 			break
