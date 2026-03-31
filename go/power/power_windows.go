@@ -277,13 +277,47 @@ const (
 	stateOff
 )
 
-// analyzePixels performs dual detection of the power state from a BGRA pixel
-// buffer captured from the GLM window region.
+// analyzePixels combines two independent detections of the power state from a
+// BGRA pixel buffer captured from the GLM window region.
 //
-// Primary: count gold-colored pixels in the honeycomb region.
-// Fallback: sample a 9x9 patch at the expected button position.
+// Honeycomb: count gold-colored pixels (reliable when no speakers are OFFLINE).
+// Button: sample a 9x9 patch at the power button position (has a known GLM
+// startup rendering bug, but correct once the UI settles).
+//
+// When the two signals disagree — specifically honeycomb says OFF but button
+// says ON — OFFLINE speaker labels are producing false gold pixels. In that
+// case the button is trusted.
 func analyzePixels(pixels []byte, width, height int) pixelState {
-	// Primary detection: gold pixels in honeycomb region.
+	honeycomb := analyzeHoneycomb(pixels, width, height)
+	button := analyzeButtonPatch(pixels, width, height, 0)
+
+	// Agreement → trust it.
+	if honeycomb == button {
+		return honeycomb
+	}
+
+	// Honeycomb says OFF but button says ON → OFFLINE labels causing false gold count.
+	if honeycomb == stateOff && button == stateOn {
+		return stateOn
+	}
+
+	// One is unknown → trust the other.
+	if honeycomb == stateUnknown {
+		return button
+	}
+	if button == stateUnknown {
+		return honeycomb
+	}
+
+	// Remaining disagreement (honeycomb ON, button OFF) → trust honeycomb
+	// (button has known GLM startup rendering bug).
+	return honeycomb
+}
+
+// analyzeHoneycomb counts gold-colored pixels in the honeycomb region.
+// Returns stateOff if gold count exceeds threshold, stateOn if zero gold,
+// or stateUnknown if ambiguous.
+func analyzeHoneycomb(pixels []byte, width, height int) pixelState {
 	// Insets: 15% left, 15% top, 25% right, 10% bottom.
 	honeycombLeft := width * 15 / 100
 	honeycombTop := height * 15 / 100
@@ -313,9 +347,7 @@ func analyzePixels(pixels []byte, width, height int) pixelState {
 	if goldCount == 0 {
 		return stateOn
 	}
-
-	// Fallback detection: 9x9 patch at button position.
-	return analyzeButtonPatch(pixels, width, height, 0)
+	return stateUnknown
 }
 
 // analyzeButtonPatch samples a 9x9 patch at the expected power button
