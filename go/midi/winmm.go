@@ -22,6 +22,31 @@ var (
 	midiOutShortMsg    = winmm.NewProc("midiOutShortMsg")
 )
 
+// mmresultString maps Windows Multimedia MMRESULT codes to descriptions.
+// These APIs use return codes, not GetLastError — the syscall err is meaningless.
+var mmresultString = map[uintptr]string{
+	0:  "MMSYSERR_NOERROR",
+	1:  "MMSYSERR_ERROR",
+	2:  "MMSYSERR_BADDEVICEID",
+	3:  "MMSYSERR_NOTENABLED",
+	4:  "MMSYSERR_ALLOCATED",
+	5:  "MMSYSERR_INVALHANDLE",
+	6:  "MMSYSERR_NODRIVER",
+	7:  "MMSYSERR_NOMEM",
+	8:  "MMSYSERR_NOTSUPPORTED",
+	64: "MIDIERR_UNPREPARED",
+	65: "MIDIERR_STILLPLAYING",
+	67: "MIDIERR_NOTREADY",
+	68: "MIDIERR_NODEVICE",
+}
+
+func mmresultError(fn string, ret uintptr) error {
+	if name, ok := mmresultString[ret]; ok {
+		return fmt.Errorf("%s failed: %s (code %d)", fn, name, ret)
+	}
+	return fmt.Errorf("%s failed: unknown MMRESULT code %d", fn, ret)
+}
+
 // midiOutCaps mirrors the Windows MIDIOUTCAPSW structure (simplified).
 type midiOutCaps struct {
 	wMid           uint16
@@ -60,13 +85,13 @@ func OpenWinMMWriter(portName string, log *slog.Logger) (*WinMMWriter, error) {
 		deviceName := windows.UTF16ToString(caps.szPname[:])
 		if strings.Contains(strings.ToLower(deviceName), portNameLower) {
 			var handle uintptr
-			ret, _, err := midiOutOpen.Call(
+			ret, _, _ := midiOutOpen.Call(
 				uintptr(unsafe.Pointer(&handle)),
 				i,
 				0, 0, 0,
 			)
 			if ret != 0 {
-				return nil, fmt.Errorf("midiOutOpen failed for %q: %v", deviceName, err)
+				return nil, fmt.Errorf("midiOutOpen for %q: %w", deviceName, mmresultError("midiOutOpen", ret))
 			}
 			log.Info("MIDI output opened", "port", deviceName, "device_id", i)
 			return &WinMMWriter{handle: handle, log: log}, nil
@@ -92,9 +117,9 @@ func (w *WinMMWriter) SendCC(channel, cc, value int, traceID string) error {
 	statusByte := 0xB0 | (channel & 0x0F)
 	midiMessage := uintptr(statusByte) | uintptr(cc&0x7F)<<8 | uintptr(value&0x7F)<<16
 
-	ret, _, err := midiOutShortMsg.Call(w.handle, midiMessage)
+	ret, _, _ := midiOutShortMsg.Call(w.handle, midiMessage)
 	if ret != 0 {
-		return fmt.Errorf("midiOutShortMsg failed: %v", err)
+		return mmresultError("midiOutShortMsg", ret)
 	}
 	return nil
 }
@@ -105,9 +130,9 @@ func (w *WinMMWriter) Close() error {
 	defer w.mu.Unlock()
 
 	if w.handle != 0 {
-		ret, _, err := midiOutClose.Call(w.handle)
+		ret, _, _ := midiOutClose.Call(w.handle)
 		if ret != 0 {
-			return fmt.Errorf("midiOutClose failed: %v", err)
+			return mmresultError("midiOutClose", ret)
 		}
 		w.handle = 0
 	}
