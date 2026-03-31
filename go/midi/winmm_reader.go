@@ -97,7 +97,7 @@ func OpenWinMMReader(portName string, log *slog.Logger) (*WinMMReader, error) {
 			callbackPointer := windows.NewCallback(midiInProc)
 
 			var handle uintptr
-			ret, _, err := midiInOpen.Call(
+			ret, _, _ := midiInOpen.Call(
 				uintptr(unsafe.Pointer(&handle)),
 				i,
 				callbackPointer,
@@ -105,7 +105,7 @@ func OpenWinMMReader(portName string, log *slog.Logger) (*WinMMReader, error) {
 				callbackFunction,
 			)
 			if ret != 0 {
-				return nil, fmt.Errorf("midiInOpen failed for %q: %v", deviceName, err)
+				return nil, fmt.Errorf("midiInOpen for %q: %w", deviceName, mmresultError("midiInOpen", ret))
 			}
 
 			log.Info("MIDI input opened", "port", deviceName, "device_id", i)
@@ -119,9 +119,9 @@ func OpenWinMMReader(portName string, log *slog.Logger) (*WinMMReader, error) {
 // Start begins reading MIDI messages and calling cb for each CC received.
 // Blocks until Close() is called. Must be called from a goroutine.
 func (r *WinMMReader) Start(cb ReaderCallback) error {
-	ret, _, err := midiInStart.Call(r.handle)
+	ret, _, _ := midiInStart.Call(r.handle)
 	if ret != 0 {
-		return fmt.Errorf("midiInStart failed: %v", err)
+		return mmresultError("midiInStart", ret)
 	}
 
 	r.log.Info("MIDI input started")
@@ -163,9 +163,9 @@ func (r *WinMMReader) Close() error {
 	midiInStop.Call(r.handle)
 	midiInReset.Call(r.handle)
 
-	ret, _, err := midiInClose.Call(r.handle)
+	ret, _, _ := midiInClose.Call(r.handle)
 	if ret != 0 {
-		return fmt.Errorf("midiInClose failed: %v", err)
+		return mmresultError("midiInClose", ret)
 	}
 	r.log.Info("MIDI input closed")
 	return nil
