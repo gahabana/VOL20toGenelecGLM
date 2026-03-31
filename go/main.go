@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -26,9 +27,10 @@ import (
 	"vol20toglm/types"
 )
 
-const version = "0.9.0"
+const version = "0.9.1"
 
 func main() {
+	runtime.GOMAXPROCS(2)
 	cfg := config.Parse(os.Args[1:])
 
 	if cfg.ListDevices {
@@ -346,8 +348,10 @@ func main() {
 	// Start API server
 	if cfg.APIPort > 0 {
 		httpServer := &http.Server{
-			Addr:    fmt.Sprintf(":%d", cfg.APIPort),
-			Handler: apiServer.Handler(),
+			Addr:              fmt.Sprintf(":%d", cfg.APIPort),
+			Handler:           apiServer.Handler(),
+			ReadHeaderTimeout: 10 * time.Second,
+			IdleTimeout:       60 * time.Second,
 		}
 		wg.Add(1)
 		go func() {
