@@ -33,7 +33,7 @@ const (
 const (
 	postStartDelay     = 3 * time.Second
 	windowPollInterval = 1 * time.Second
-	windowStableCount  = 5
+	windowStableCount  = 3
 	windowTimeout      = 60 * time.Second
 )
 
@@ -341,12 +341,11 @@ type windowInfo struct {
 }
 
 // waitForWindowStable polls for GLM windows matching the given PID until the
-// set of matching windows has been identical for windowStableCount consecutive polls.
-// Logs all discovered windows each poll for diagnostic visibility.
+// titled main window HWND has been the same for windowStableCount consecutive polls.
+// Only the titled window matters for HWND selection; untitled helper windows are ignored.
 func (m *WindowsManager) waitForWindowStable(targetPID int) (uintptr, error) {
 	deadline := time.Now().Add(windowTimeout)
-	var lastSignature string
-	var lastWindows []windowInfo
+	var lastTitledHWND uintptr
 	consecutiveCount := 0
 	poll := 0
 
@@ -354,67 +353,53 @@ func (m *WindowsManager) waitForWindowStable(targetPID int) (uintptr, error) {
 		poll++
 		windows := findAllWindowsByPID(targetPID)
 
-		// Build a signature string from all handles for comparison
-		sig := ""
+		// Find the main window (title contains "GLM").
+		var titledHWND uintptr
+		var titledTitle string
+		untitled := 0
 		for _, w := range windows {
-			sig += fmt.Sprintf("%X;", w.hwnd)
+			if strings.Contains(w.title, "GLM") {
+				titledHWND = w.hwnd
+				titledTitle = w.title
+			} else {
+				untitled++
+			}
 		}
 
 		// Log summary per poll (compact).
 		if len(windows) == 0 {
 			m.log.Debug("window poll: no JUCE+GLM windows found", "poll", poll, "pid", targetPID)
 		} else {
-			titled := ""
-			titledHwnd := ""
-			untitled := 0
-			for _, w := range windows {
-				if w.title != "" {
-					titled = w.title
-					titledHwnd = fmt.Sprintf("0x%X", w.hwnd)
-				} else {
-					untitled++
-				}
-			}
 			m.log.Debug("window poll",
 				"poll", poll,
-				"hwnd", titledHwnd,
-				"title", titled,
+				"hwnd", fmt.Sprintf("0x%X", titledHWND),
+				"title", titledTitle,
 				"others", untitled,
 			)
 		}
 
-		if sig == lastSignature && sig != "" {
+		if titledHWND != 0 && titledHWND == lastTitledHWND {
 			consecutiveCount++
 		} else {
-			if lastSignature != "" && sig != lastSignature {
-				m.log.Info("window set changed",
+			if lastTitledHWND != 0 && titledHWND != lastTitledHWND {
+				m.log.Info("titled window changed",
 					"poll", poll,
-					"old_count", len(lastWindows),
-					"new_count", len(windows),
+					"old_hwnd", fmt.Sprintf("0x%X", lastTitledHWND),
+					"new_hwnd", fmt.Sprintf("0x%X", titledHWND),
 				)
 			}
-			lastSignature = sig
-			lastWindows = windows
+			lastTitledHWND = titledHWND
 			consecutiveCount = 1
 		}
 
 		if consecutiveCount >= windowStableCount {
-			// Pick the best window: prefer the one with the longest title
-			// (main window typically has "GLM v5.x.x" vs splash which may be shorter)
-			best := lastWindows[0]
-			for _, w := range lastWindows[1:] {
-				if len(w.title) > len(best.title) {
-					best = w
-				}
-			}
-			m.log.Info("window set stabilized",
+			m.log.Info("window stabilized",
 				"polls", poll,
 				"consecutive", consecutiveCount,
-				"window_count", len(lastWindows),
-				"hwnd", fmt.Sprintf("0x%X", best.hwnd),
-				"title", best.title,
+				"hwnd", fmt.Sprintf("0x%X", titledHWND),
+				"title", titledTitle,
 			)
-			return best.hwnd, nil
+			return titledHWND, nil
 		}
 
 		time.Sleep(windowPollInterval)

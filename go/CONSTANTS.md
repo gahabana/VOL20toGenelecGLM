@@ -137,7 +137,7 @@ Volume commands coalesce (latest wins). Mute/dim/power are queued individually (
 | Constant | Value | Purpose |
 |----------|-------|---------|
 | `windowPollInterval` | 1s | Polling interval for window handle check |
-| `windowStableCount` | 2 | Consecutive identical handles required |
+| `windowStableCount` | 3 | Consecutive identical titled-window HWND required |
 | `windowTimeout` | 60s | Max wait for window to stabilize |
 
 ### Watchdog
