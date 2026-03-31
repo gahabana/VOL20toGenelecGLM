@@ -212,6 +212,10 @@ func (m *WindowsManager) SetRestartCallback(fn func(pid int)) {
 
 // waitForCPUCalm polls CPU usage until it drops below the threshold or times out.
 func (m *WindowsManager) waitForCPUCalm() error {
+	// Prime the CPU measurement baseline (first call returns 0, not a real reading).
+	getSystemCPU()
+	time.Sleep(cpuCheckInterval)
+
 	for checkIndex := 0; checkIndex < cpuMaxChecks; checkIndex++ {
 		cpuPercent, err := getSystemCPU()
 		if err != nil {
@@ -221,12 +225,12 @@ func (m *WindowsManager) waitForCPUCalm() error {
 		}
 
 		if cpuPercent < cpuThreshold {
-			m.log.Info("CPU is calm", "cpu_percent", fmt.Sprintf("%.1f", cpuPercent), "check", checkIndex+1)
+			m.log.Info("CPU is calm", "cpu_percent", fmt.Sprintf("%.1f%%", cpuPercent), "check", checkIndex+1)
 			return nil
 		}
 
 		if checkIndex%30 == 0 {
-			m.log.Info("waiting for CPU to calm", "cpu_percent", fmt.Sprintf("%.1f", cpuPercent), "check", checkIndex+1)
+			m.log.Info("waiting for CPU to calm", "cpu_percent", fmt.Sprintf("%.1f%%", cpuPercent), "check", checkIndex+1)
 		}
 
 		time.Sleep(cpuCheckInterval)
