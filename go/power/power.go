@@ -1,5 +1,7 @@
 package power
 
+import "time"
+
 // Commander sends power on/off commands (via MIDI or UI click).
 type Commander interface {
 	// PowerOn ensures the speakers are powered on.
@@ -14,6 +16,11 @@ type Commander interface {
 type Observer interface {
 	// GetPowerState returns the current power state by inspecting the GLM window.
 	GetPowerState() (bool, error)
+	// PollPowerState polls the pixel state every pollInterval for up to timeout,
+	// logging each read. Returns the final state once consecutiveNeeded identical
+	// reads (with honeycomb==button) are seen after a change from initialState.
+	// If no change is observed within timeout, returns the last read state.
+	PollPowerState(initialState bool, timeout time.Duration) (bool, error)
 	// SetPID sets the GLM process ID for window filtering.
 	SetPID(pid int)
 }

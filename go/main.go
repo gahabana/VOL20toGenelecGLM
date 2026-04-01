@@ -27,7 +27,7 @@ import (
 	"vol20toglm/types"
 )
 
-const version = "0.9.3"
+const version = "0.9.4"
 
 func main() {
 	runtime.GOMAXPROCS(2)
@@ -131,17 +131,17 @@ func main() {
 			midiLog.Debug("power pattern detected (self-initiated, ignoring)")
 			return
 		}
-		// External power change detected. If observer is available, verify via pixel read.
+		// External power change detected. If observer is available, poll pixel state.
 		if powerObs != nil {
-			time.Sleep(controller.PowerVerifyDelay)
-			actualState, err := powerObs.GetPowerState()
+			currentState := ctrl.GetState().Power
+			actualState, err := powerObs.PollPowerState(currentState, 5*time.Second)
 			if err != nil {
-				// Pixel read failed — fall back to toggle
+				// Poll failed — fall back to toggle
 				newPower := ctrl.TogglePowerFromMIDIPattern()
-				midiLog.Warn("power pattern detected (external), pixel verify failed, toggled", "new_power_state", newPower, "err", err)
+				midiLog.Warn("power pattern detected (external), pixel poll failed, toggled", "new_power_state", newPower, "err", err)
 			} else {
 				ctrl.SetPower(actualState)
-				midiLog.Info("power pattern detected (external), verified via pixel", "power", actualState)
+				midiLog.Info("power pattern detected (external), verified via poll", "power", actualState)
 			}
 		} else {
 			// No observer — blind toggle

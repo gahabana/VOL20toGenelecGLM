@@ -609,11 +609,11 @@ func (wc *WindowsController) restoreWindow(hwnd uintptr, info restoreInfo) {
 // readStateLocked captures the current pixel state of the GLM window.
 // windowRect must already be post-prepare (accurate current position/size).
 // Caller must hold wc.mu.
-func (wc *WindowsController) readStateLocked(windowRect rect) (pixelState, error) {
+func (wc *WindowsController) readStateLocked(windowRect rect) (pixelAnalysis, error) {
 	windowWidth := int(windowRect.Right - windowRect.Left)
 	windowHeight := int(windowRect.Bottom - windowRect.Top)
 	if windowWidth <= 0 || windowHeight <= 0 {
-		return stateUnknown, fmt.Errorf("invalid window dimensions: %dx%d", windowWidth, windowHeight)
+		return pixelAnalysis{}, fmt.Errorf("invalid window dimensions: %dx%d", windowWidth, windowHeight)
 	}
 
 	pixels, err := wc.captureScreen(
@@ -621,7 +621,7 @@ func (wc *WindowsController) readStateLocked(windowRect rect) (pixelState, error
 		windowWidth, windowHeight,
 	)
 	if err != nil {
-		return stateUnknown, fmt.Errorf("screen capture failed: %w", err)
+		return pixelAnalysis{}, fmt.Errorf("screen capture failed: %w", err)
 	}
 
 	analysis := analyzePixels(pixels, windowWidth, windowHeight)
@@ -639,7 +639,7 @@ func (wc *WindowsController) readStateLocked(windowRect rect) (pixelState, error
 		wc.dumpPixelsBMP(pixels, windowWidth, windowHeight, analysis.combined)
 	}
 
-	return analysis.combined, nil
+	return analysis, nil
 }
 
 // dumpPixelsBMP writes the BGRA pixel buffer as a BMP file next to the binary.
@@ -727,15 +727,15 @@ func (wc *WindowsController) clickPowerButtonLocked(windowRect rect, previousSta
 
 	deadline := time.Now().Add(verifyTimeout)
 	for time.Now().Before(deadline) {
-		currentState, err := wc.readStateLocked(windowRect)
+		analysis, err := wc.readStateLocked(windowRect)
 		if err != nil {
 			wc.log.Warn("clickPowerButton: verification capture failed", "error", err)
 			time.Sleep(pollInterval)
 			continue
 		}
 
-		if currentState != stateUnknown && currentState != previousState {
-			wc.log.Info("clickPowerButton: state changed", "from", previousState, "to", currentState)
+		if analysis.combined != stateUnknown && analysis.combined != previousState {
+			wc.log.Info("clickPowerButton: state changed", "from", previousState, "to", analysis.combined)
 			return nil
 		}
 
@@ -775,12 +775,12 @@ func (wc *WindowsController) GetState() (bool, error) {
 		return false, err
 	}
 
-	state, err := wc.readStateLocked(windowRect)
+	analysis, err := wc.readStateLocked(windowRect)
 	if err != nil {
 		return false, err
 	}
 
-	switch state {
+	switch analysis.combined {
 	case stateOn:
 		return true, nil
 	case stateOff:
@@ -793,6 +793,106 @@ func (wc *WindowsController) GetState() (bool, error) {
 // GetPowerState returns the current power state. Implements Observer.
 func (wc *WindowsController) GetPowerState() (bool, error) {
 	return wc.GetState()
+}
+
+// PollPowerState polls pixel state every 500ms for up to timeout, logging each
+// read with honeycomb/button detail. Returns once consecutiveNeeded (4) identical
+// reads where honeycomb==button are seen after a state change from initialState.
+// Diagnostic/investigative — not intended for long-term production use.
+func (wc *WindowsController) PollPowerState(initialState bool, timeout time.Duration) (bool, error) {
+	const (
+		pollInterval      = 500 * time.Millisecond
+		consecutiveNeeded = 4
+	)
+
+	initialPixel := stateOff
+	if initialState {
+		initialPixel = stateOn
+	}
+
+	wc.mu.Lock()
+	defer wc.mu.Unlock()
+
+	hwnd, err := wc.findGLMWindowLocked()
+	if err != nil {
+		return false, err
+	}
+
+	info, err := wc.prepareWindow(hwnd)
+	if err != nil {
+		return false, fmt.Errorf("prepare window failed: %w", err)
+	}
+	defer wc.restoreWindow(hwnd, info)
+
+	windowRect, err := wc.getWindowRect(hwnd)
+	if err != nil {
+		return false, err
+	}
+
+	deadline := time.Now().Add(timeout)
+	readNum := 0
+	consecutiveCount := 0
+	var lastAgreedState pixelState
+	changeObserved := false
+
+	for time.Now().Before(deadline) {
+		analysis, err := wc.readStateLocked(windowRect)
+		readNum++
+		if err != nil {
+			wc.log.Warn("poll: read failed", "read", readNum, "err", err)
+			time.Sleep(pollInterval)
+			continue
+		}
+
+		agreed := analysis.honeycomb == analysis.button
+		wc.log.Info("poll: pixel read",
+			"read", readNum,
+			"honeycomb", analysis.honeycomb,
+			"button", analysis.button,
+			"combined", analysis.combined,
+			"agreed", agreed,
+			"elapsed", time.Until(deadline.Add(-timeout))*-1,
+		)
+
+		if analysis.combined != initialPixel {
+			changeObserved = true
+		}
+
+		if agreed && changeObserved {
+			if analysis.combined == lastAgreedState {
+				consecutiveCount++
+			} else {
+				consecutiveCount = 1
+				lastAgreedState = analysis.combined
+			}
+			if consecutiveCount >= consecutiveNeeded {
+				wc.log.Info("poll: stable state reached",
+					"state", lastAgreedState,
+					"consecutive", consecutiveCount,
+					"reads", readNum,
+				)
+				return lastAgreedState == stateOn, nil
+			}
+		} else if !agreed {
+			consecutiveCount = 0
+		}
+
+		time.Sleep(pollInterval)
+	}
+
+	// Timeout — return last combined state
+	wc.log.Warn("poll: timeout without stable change",
+		"reads", readNum,
+		"change_observed", changeObserved,
+		"consecutive", consecutiveCount,
+		"initial", initialPixel,
+	)
+	// Fall back to last read
+	analysis, err := wc.readStateLocked(windowRect)
+	if err != nil {
+		return initialState, fmt.Errorf("poll: final read failed: %w", err)
+	}
+	return analysis.combined == stateOn, nil
 }
 
 // PowerOn ensures power is ON via UI click. Implements Commander.
@@ -818,18 +918,18 @@ func (wc *WindowsController) PowerOn(traceID string) error {
 		return fmt.Errorf("cannot get window rect: %w", err)
 	}
 
-	currentState, err := wc.readStateLocked(windowRect)
+	currentAnalysis, err := wc.readStateLocked(windowRect)
 	if err != nil {
 		return fmt.Errorf("cannot read state: %w", err)
 	}
 
-	if currentState == stateOn {
+	if currentAnalysis.combined == stateOn {
 		wc.log.Info("power already ON, skipping UI click", "trace_id", traceID)
 		return nil
 	}
 
 	wc.log.Info("power ON via UI click", "trace_id", traceID)
-	return wc.clickPowerButtonLocked(windowRect, currentState)
+	return wc.clickPowerButtonLocked(windowRect, currentAnalysis.combined)
 }
 
 // PowerOff ensures power is OFF via UI click. Implements Commander.
@@ -855,18 +955,18 @@ func (wc *WindowsController) PowerOff(traceID string) error {
 		return fmt.Errorf("cannot get window rect: %w", err)
 	}
 
-	currentState, err := wc.readStateLocked(windowRect)
+	currentAnalysis, err := wc.readStateLocked(windowRect)
 	if err != nil {
 		return fmt.Errorf("cannot read state: %w", err)
 	}
 
-	if currentState == stateOff {
+	if currentAnalysis.combined == stateOff {
 		wc.log.Info("power already OFF, skipping UI click", "trace_id", traceID)
 		return nil
 	}
 
 	wc.log.Info("power OFF via UI click", "trace_id", traceID)
-	return wc.clickPowerButtonLocked(windowRect, currentState)
+	return wc.clickPowerButtonLocked(windowRect, currentAnalysis.combined)
 }
 
 // Toggle clicks the power button in the GLM window to change the power state.
@@ -893,11 +993,11 @@ func (wc *WindowsController) Toggle() error {
 		return fmt.Errorf("cannot get window rect: %w", err)
 	}
 
-	previousState, err := wc.readStateLocked(windowRect)
+	previousAnalysis, err := wc.readStateLocked(windowRect)
 	if err != nil {
 		return fmt.Errorf("pre-toggle capture failed: %w", err)
 	}
 
-	wc.log.Info("toggle: current state", "state", previousState)
-	return wc.clickPowerButtonLocked(windowRect, previousState)
+	wc.log.Info("toggle: current state", "state", previousAnalysis.combined)
+	return wc.clickPowerButtonLocked(windowRect, previousAnalysis.combined)
 }

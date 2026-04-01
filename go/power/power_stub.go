@@ -2,7 +2,10 @@
 
 package power
 
-import "log/slog"
+import (
+	"log/slog"
+	"time"
+)
 
 // StubController always reports power as on. For non-Windows platforms.
 // Implements Controller (deprecated), Commander, and Observer interfaces.
@@ -21,6 +24,11 @@ func (s *StubController) Toggle() error {
 
 // GetPowerState returns the stub power state. Implements Observer.
 func (s *StubController) GetPowerState() (bool, error) {
+	return s.State, nil
+}
+
+// PollPowerState returns the stub power state immediately. Implements Observer.
+func (s *StubController) PollPowerState(initialState bool, timeout time.Duration) (bool, error) {
 	return s.State, nil
 }
 
