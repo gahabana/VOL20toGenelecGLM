@@ -277,6 +277,24 @@ const (
 	stateOff
 )
 
+func (s pixelState) String() string {
+	switch s {
+	case stateOn:
+		return "ON"
+	case stateOff:
+		return "OFF"
+	default:
+		return "unknown"
+	}
+}
+
+// pixelAnalysis holds the individual and combined results of pixel detection.
+type pixelAnalysis struct {
+	honeycomb pixelState
+	button    pixelState
+	combined  pixelState
+}
+
 // analyzePixels combines two independent detections of the power state from a
 // BGRA pixel buffer captured from the GLM window region.
 //
@@ -284,34 +302,31 @@ const (
 // Button: sample a 9x9 patch at the power button position (has a known GLM
 // startup rendering bug, but correct once the UI settles).
 //
-// When the two signals disagree — specifically honeycomb says OFF but button
-// says ON — OFFLINE speaker labels are producing false gold pixels. In that
-// case the button is trusted.
-func analyzePixels(pixels []byte, width, height int) pixelState {
+// When the two detectors disagree, button is trusted — it reflects the actual
+// UI control state and is reliable post-startup. The honeycomb can lag behind
+// during external power changes (e.g. RF remote) because GLM may not repaint
+// the honeycomb region immediately.
+func analyzePixels(pixels []byte, width, height int) pixelAnalysis {
 	honeycomb := analyzeHoneycomb(pixels, width, height)
 	button := analyzeButtonPatch(pixels, width, height, 0)
 
+	var combined pixelState
+
 	// Agreement → trust it.
 	if honeycomb == button {
-		return honeycomb
+		combined = honeycomb
+	} else if honeycomb == stateUnknown {
+		// One is unknown → trust the other.
+		combined = button
+	} else if button == stateUnknown {
+		combined = honeycomb
+	} else {
+		// Disagreement — trust button. It reflects the actual power control
+		// state and is reliable once the UI has settled after startup.
+		combined = button
 	}
 
-	// Honeycomb says OFF but button says ON → OFFLINE labels causing false gold count.
-	if honeycomb == stateOff && button == stateOn {
-		return stateOn
-	}
-
-	// One is unknown → trust the other.
-	if honeycomb == stateUnknown {
-		return button
-	}
-	if button == stateUnknown {
-		return honeycomb
-	}
-
-	// Remaining disagreement (honeycomb ON, button OFF) → trust honeycomb
-	// (button has known GLM startup rendering bug).
-	return honeycomb
+	return pixelAnalysis{honeycomb: honeycomb, button: button, combined: combined}
 }
 
 // analyzeHoneycomb counts gold-colored pixels in the honeycomb region.
@@ -609,14 +624,22 @@ func (wc *WindowsController) readStateLocked(windowRect rect) (pixelState, error
 		return stateUnknown, fmt.Errorf("screen capture failed: %w", err)
 	}
 
-	state := analyzePixels(pixels, windowWidth, windowHeight)
+	analysis := analyzePixels(pixels, windowWidth, windowHeight)
+
+	if analysis.honeycomb != analysis.button {
+		wc.log.Warn("pixel detectors disagree",
+			"honeycomb", analysis.honeycomb,
+			"button", analysis.button,
+			"combined", analysis.combined,
+		)
+	}
 
 	// Debug: dump captured pixels to BMP file for inspection.
 	if wc.debugCaptures {
-		wc.dumpPixelsBMP(pixels, windowWidth, windowHeight, state)
+		wc.dumpPixelsBMP(pixels, windowWidth, windowHeight, analysis.combined)
 	}
 
-	return state, nil
+	return analysis.combined, nil
 }
 
 // dumpPixelsBMP writes the BGRA pixel buffer as a BMP file next to the binary.

@@ -27,7 +27,7 @@ import (
 	"vol20toglm/types"
 )
 
-const version = "0.9.1"
+const version = "0.9.2"
 
 func main() {
 	runtime.GOMAXPROCS(2)
