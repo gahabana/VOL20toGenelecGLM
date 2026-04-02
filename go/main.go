@@ -27,7 +27,7 @@ import (
 	"vol20toglm/types"
 )
 
-const version = "0.9.5"
+const version = "0.9.6"
 
 func main() {
 	runtime.GOMAXPROCS(2)
@@ -131,23 +131,31 @@ func main() {
 			midiLog.Debug("power pattern detected (self-initiated, ignoring)")
 			return
 		}
-		// External power change detected. If observer is available, verify via pixel read.
-		if powerObs != nil {
-			time.Sleep(controller.PowerVerifyDelay)
-			actualState, err := powerObs.GetPowerState()
-			if err != nil {
-				// Pixel read failed — fall back to toggle
-				newPower := ctrl.TogglePowerFromMIDIPattern()
-				midiLog.Warn("power pattern detected (external), pixel verify failed, toggled", "new_power_state", newPower, "err", err)
-			} else {
-				ctrl.SetPower(actualState)
-				midiLog.Info("power pattern detected (external), verified via pixel", "power", actualState)
-			}
+		// External power change detected. Send deterministic CC28 follow-through
+		// to force the intended state, regardless of whether the external toggle
+		// actually reached the speakers. CC28 in Toggle mode is idempotent, so
+		// a redundant command is harmless.
+		currentPower := ctrl.GetState().Power
+		targetPower := !currentPower
+
+		// Short delay for the external command to settle in GLM.
+		time.Sleep(500 * time.Millisecond)
+
+		// Send CC28 directly (bypass gate — this IS the power command).
+		var cc28Value int
+		if targetPower {
+			cc28Value = 127
 		} else {
-			// No observer — blind toggle
-			newPower := ctrl.TogglePowerFromMIDIPattern()
-			midiLog.Info("power pattern detected (external)", "new_power_state", newPower)
+			cc28Value = 0
 		}
+		ctrl.SetPowerCommandPending()
+		if err := midiOut.SendCC(0, types.CCPower, cc28Value, "ext-followthrough"); err != nil {
+			midiLog.Error("power follow-through failed", "err", err)
+			return
+		}
+		ctrl.SetPower(targetPower)
+		midiLog.Info("power pattern detected (external), follow-through sent",
+			"previous", currentPower, "target", targetPower, "cc28", cc28Value)
 	})
 
 	// Channel for startup volume probe (buffered, non-blocking send from callback)
