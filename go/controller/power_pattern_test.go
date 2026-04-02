@@ -8,7 +8,7 @@ import (
 
 func TestPowerPattern_ExactMatch(t *testing.T) {
 	detected := false
-	pp := NewPowerPatternDetector(func() {
+	pp := NewPowerPatternDetector(func(PatternMatch) {
 		detected = true
 	})
 
@@ -26,7 +26,7 @@ func TestPowerPattern_ExactMatch(t *testing.T) {
 
 func TestPowerPattern_WrongSequence(t *testing.T) {
 	detected := false
-	pp := NewPowerPatternDetector(func() {
+	pp := NewPowerPatternDetector(func(PatternMatch) {
 		detected = true
 	})
 
@@ -44,7 +44,7 @@ func TestPowerPattern_WrongSequence(t *testing.T) {
 
 func TestPowerPattern_TooSlow(t *testing.T) {
 	detected := false
-	pp := NewPowerPatternDetector(func() {
+	pp := NewPowerPatternDetector(func(PatternMatch) {
 		detected = true
 	})
 
@@ -62,7 +62,7 @@ func TestPowerPattern_TooSlow(t *testing.T) {
 
 func TestPowerPattern_TooFast_BufferDump(t *testing.T) {
 	detected := false
-	pp := NewPowerPatternDetector(func() {
+	pp := NewPowerPatternDetector(func(PatternMatch) {
 		detected = true
 	})
 
@@ -80,7 +80,7 @@ func TestPowerPattern_TooFast_BufferDump(t *testing.T) {
 
 func TestPowerPattern_NoPreGap(t *testing.T) {
 	detected := false
-	pp := NewPowerPatternDetector(func() {
+	pp := NewPowerPatternDetector(func(PatternMatch) {
 		detected = true
 	})
 
@@ -98,10 +98,10 @@ func TestPowerPattern_NoPreGap(t *testing.T) {
 	}
 }
 
-func TestPowerPattern_StartupSuppression(t *testing.T) {
-	count := 0
-	pp := NewPowerPatternDetector(func() {
-		count++
+func TestPowerPattern_DuplicateReportsSinceLastMatch(t *testing.T) {
+	var matches []PatternMatch
+	pp := NewPowerPatternDetector(func(m PatternMatch) {
+		matches = append(matches, m)
 	})
 
 	base := 1000.0
@@ -111,10 +111,15 @@ func TestPowerPattern_StartupSuppression(t *testing.T) {
 	pp.Feed(types.CCMute, 0, base+0.18)
 	pp.Feed(types.CCVolumeAbs, 50, base+0.24)
 
-	if count != 1 {
-		t.Fatalf("first pattern: count = %d, want 1", count)
+	if len(matches) != 1 {
+		t.Fatalf("first pattern: count = %d, want 1", len(matches))
+	}
+	if matches[0].SinceLastMatch != -1 {
+		t.Errorf("first pattern SinceLastMatch = %v, want -1", matches[0].SinceLastMatch)
 	}
 
+	// Second pattern 1s later — detector fires with SinceLastMatch info
+	// (suppression logic is now in the callback, not the detector)
 	base2 := base + 1.0
 	pp.Feed(types.CCMute, 0, base2)
 	pp.Feed(types.CCVolumeAbs, 50, base2+0.06)
@@ -122,14 +127,17 @@ func TestPowerPattern_StartupSuppression(t *testing.T) {
 	pp.Feed(types.CCMute, 0, base2+0.18)
 	pp.Feed(types.CCVolumeAbs, 50, base2+0.24)
 
-	if count != 1 {
-		t.Errorf("startup suppression: count = %d, want 1 (second pattern within 3s should be suppressed)", count)
+	if len(matches) != 2 {
+		t.Fatalf("second pattern: count = %d, want 2 (detector always fires, callback decides)", len(matches))
+	}
+	if matches[1].SinceLastMatch < 0.9 || matches[1].SinceLastMatch > 1.1 {
+		t.Errorf("second pattern SinceLastMatch = %v, want ~1.0", matches[1].SinceLastMatch)
 	}
 }
 
 func TestPowerPattern_TwoPatterns_FarApart(t *testing.T) {
 	count := 0
-	pp := NewPowerPatternDetector(func() {
+	pp := NewPowerPatternDetector(func(PatternMatch) {
 		count++
 	})
 
@@ -154,7 +162,7 @@ func TestPowerPattern_TwoPatterns_FarApart(t *testing.T) {
 
 func TestPowerPattern_TotalGapExceeded(t *testing.T) {
 	detected := false
-	pp := NewPowerPatternDetector(func() {
+	pp := NewPowerPatternDetector(func(PatternMatch) {
 		detected = true
 	})
 
@@ -172,7 +180,7 @@ func TestPowerPattern_TotalGapExceeded(t *testing.T) {
 
 func TestPowerPattern_ResetAfterFailure(t *testing.T) {
 	detected := false
-	pp := NewPowerPatternDetector(func() {
+	pp := NewPowerPatternDetector(func(PatternMatch) {
 		detected = true
 	})
 

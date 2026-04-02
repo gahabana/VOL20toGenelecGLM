@@ -4,12 +4,20 @@ import (
 	"vol20toglm/types"
 )
 
+// PatternMatch contains timing details of a matched power pattern.
+type PatternMatch struct {
+	Span            float64 // Duration of the 5-CC pattern in seconds
+	SinceLastMatch  float64 // Seconds since the previous pattern match (-1 if first)
+}
+
 // PowerPatternDetector watches incoming MIDI CC messages for GLM's
 // 5-message power toggle pattern (Mute->Vol->Dim->Mute->Vol).
-// When detected, calls the onDetected callback.
+// When the pattern is recognized (timing constraints pass), calls
+// the onMatched callback with match details. The callback decides
+// whether to act on or suppress the pattern.
 // NOT thread-safe -- caller must serialize calls to Feed().
 type PowerPatternDetector struct {
-	onDetected func()
+	onMatched func(PatternMatch)
 
 	buf             [5]ccEvent
 	pos             int
@@ -25,10 +33,10 @@ type ccEvent struct {
 	time  float64
 }
 
-// NewPowerPatternDetector creates a detector that calls onDetected
-// when the power pattern is recognized.
-func NewPowerPatternDetector(onDetected func()) *PowerPatternDetector {
-	return &PowerPatternDetector{onDetected: onDetected}
+// NewPowerPatternDetector creates a detector that calls onMatched
+// every time the power pattern is recognized with valid timing.
+func NewPowerPatternDetector(onMatched func(PatternMatch)) *PowerPatternDetector {
+	return &PowerPatternDetector{onMatched: onMatched}
 }
 
 // Feed processes an incoming MIDI CC message. Call for every CC received.
@@ -95,15 +103,15 @@ func (d *PowerPatternDetector) Feed(cc, value int, timestamp float64) {
 		}
 	}
 
-	// Startup suppression: second pattern within window is GLM startup noise
-	if d.lastPatternTime > 0 {
-		sinceLastPattern := firstEvent.time - d.lastPatternTime
-		if sinceLastPattern < types.PowerStartupWindow {
-			d.lastPatternTime = firstEvent.time
-			return
-		}
+	// Build match info
+	match := PatternMatch{
+		Span:           totalSpan,
+		SinceLastMatch: -1,
 	}
-
+	if d.lastPatternTime > 0 {
+		match.SinceLastMatch = firstEvent.time - d.lastPatternTime
+	}
 	d.lastPatternTime = firstEvent.time
-	d.onDetected()
+
+	d.onMatched(match)
 }

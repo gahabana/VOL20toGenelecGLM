@@ -27,7 +27,7 @@ import (
 	"vol20toglm/types"
 )
 
-const version = "0.9.6"
+const version = "0.9.7"
 
 func main() {
 	runtime.GOMAXPROCS(2)
@@ -124,19 +124,32 @@ func main() {
 
 	// Power pattern detector
 	midiLog := log.With("component", "midi-in")
-	powerDetector := controller.NewPowerPatternDetector(func() {
+	powerDetector := controller.NewPowerPatternDetector(func(match controller.PatternMatch) {
+		midiLog.Info("power pattern matched",
+			"span_ms", int(match.Span*1000),
+			"since_last_ms", int(match.SinceLastMatch*1000),
+		)
+
+		// Suppression: self-initiated command pending (our CC28 ACK)
 		if ctrl.IsPowerCommandPending() {
-			// Pattern was triggered by our own command — ignore, we already track state.
-			// No need to clear: the 3-second timestamp window expires automatically.
-			midiLog.Debug("power pattern detected (self-initiated, ignoring)")
+			midiLog.Debug("power pattern suppressed (self-initiated)")
 			return
 		}
-		// External power change detected. Send deterministic CC28 follow-through
-		// to force the intended state, regardless of whether the external toggle
-		// actually reached the speakers. CC28 in Toggle mode is idempotent, so
-		// a redundant command is harmless.
+
+		// Suppression: duplicate pattern within startup window (GLM startup noise or ACK)
+		if match.SinceLastMatch >= 0 && match.SinceLastMatch < types.PowerStartupWindow {
+			midiLog.Debug("power pattern suppressed (duplicate)",
+				"since_last_ms", int(match.SinceLastMatch*1000),
+				"window_s", types.PowerStartupWindow,
+			)
+			return
+		}
+
+		// External power change — send deterministic CC28 follow-through.
 		currentPower := ctrl.GetState().Power
 		targetPower := !currentPower
+		midiLog.Info("external power change detected",
+			"previous", currentPower, "target", targetPower)
 
 		// Short delay for the external command to settle in GLM.
 		time.Sleep(500 * time.Millisecond)
@@ -154,8 +167,7 @@ func main() {
 			return
 		}
 		ctrl.SetPower(targetPower)
-		midiLog.Info("power pattern detected (external), follow-through sent",
-			"previous", currentPower, "target", targetPower, "cc28", cc28Value)
+		midiLog.Info("follow-through sent", "state", targetPower, "cc28", cc28Value)
 	})
 
 	// Channel for startup volume probe (buffered, non-blocking send from callback)
