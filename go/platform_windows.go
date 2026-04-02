@@ -9,7 +9,6 @@ import (
 	"math"
 	"os"
 	"os/exec"
-	"sync"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -290,39 +289,28 @@ func setProcessPriority(log *slog.Logger) {
 }
 
 func runStartupTasks(cfg config.Config, log *slog.Logger) {
-	var wg sync.WaitGroup
-
-	// RDP priming
+	// RDP priming must complete before MIDI restart — the MIDI virtual ports
+	// depend on a stable desktop session, and RDP priming disconnects/reconnects it.
 	if cfg.RDPPriming {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			primer := &rdp.WindowsPrimer{Log: log.With("component", "rdp")}
-			if primer.NeedsPriming() {
-				if err := primer.Prime(); err != nil {
-					log.Error("RDP priming failed", "err", err)
-				}
+		primer := &rdp.WindowsPrimer{Log: log.With("component", "rdp")}
+		if primer.NeedsPriming() {
+			if err := primer.Prime(); err != nil {
+				log.Error("RDP priming failed", "err", err)
 			}
-		}()
+		}
 	}
 
 	// MIDI service restart (once per boot)
 	if cfg.MIDIRestart {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			if needsBootOnceTask("midi_restarted.flag", log) {
-				log.Info("restarting Windows MIDI service")
-				exec.Command("net", "stop", "midisrv").Run()
-				time.Sleep(1 * time.Second)
-				exec.Command("net", "start", "midisrv").Run()
-				time.Sleep(1 * time.Second)
-				log.Info("MIDI service restarted")
-			}
-		}()
+		if needsBootOnceTask("midi_restarted.flag", log) {
+			log.Info("restarting Windows MIDI service")
+			exec.Command("net", "stop", "midisrv").Run()
+			time.Sleep(1 * time.Second)
+			exec.Command("net", "start", "midisrv").Run()
+			time.Sleep(1 * time.Second)
+			log.Info("MIDI service restarted")
+		}
 	}
-
-	wg.Wait()
 }
 
 // needsBootOnceTask checks whether a once-per-boot task needs to run.
