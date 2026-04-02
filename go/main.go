@@ -125,9 +125,13 @@ func main() {
 	// Power pattern detector
 	midiLog := log.With("component", "midi-in")
 	powerDetector := controller.NewPowerPatternDetector(func(match controller.PatternMatch) {
+		sinceLastStr := "first"
+		if match.SinceLastMatch >= 0 {
+			sinceLastStr = fmt.Sprintf("%dms", int(match.SinceLastMatch*1000))
+		}
 		midiLog.Info("power pattern matched",
 			"span_ms", int(match.Span*1000),
-			"since_last_ms", int(match.SinceLastMatch*1000),
+			"since_last", sinceLastStr,
 		)
 
 		// Suppression: self-initiated command pending (our CC28 ACK)
