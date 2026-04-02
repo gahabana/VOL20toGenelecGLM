@@ -283,7 +283,7 @@ func (r *USBReader) readLoop(ctx context.Context, dev *hidDevice, actions chan<-
 			return fmt.Errorf("WaitForSingleObject: unexpected result %d", result)
 		}
 
-		err = windows.GetOverlappedResult(dev.handle, &overlapped, &bytesRead, false)
+		err = windows.GetOverlappedResult(dev.handle, &overlapped, &bytesRead, true)
 		if err != nil {
 			return fmt.Errorf("GetOverlappedResult: %w", err)
 		}
