@@ -96,7 +96,7 @@ Port matching is substring-based — `GLMMIDI` matches `GLMMIDI 1`, `GLMMIDI 2`,
 |------|---------|-------------|
 | `--api_port` | `8080` | HTTP port for REST API and web UI (0 to disable) |
 
-### MQTT (not yet implemented)
+### MQTT / Home Assistant
 
 | Flag | Default | Description |
 |------|---------|-------------|
@@ -190,7 +190,7 @@ Port matching is substring-based — `GLMMIDI` matches `GLMMIDI 1`, `GLMMIDI 2`,
                     | REST API |--+
                     +----------+  |
                     +----------+  |
-                    |   MQTT   |--+  (planned)
+                    |   MQTT   |--+
                     +----------+  |
                                   v
 +---------+    +---------------------+    +----------+    +-----------+
@@ -237,7 +237,7 @@ Port matching is substring-based — `GLMMIDI` matches `GLMMIDI 1`, `GLMMIDI 2`,
 | UI automation | pywinauto | Direct Win32 syscalls |
 | Power detection | ImageGrab (PIL) | BitBlt screen capture |
 | Click simulation | SetCursorPos + mouse_event | SetCursorPos + mouse_event (same) |
-| MQTT | paho-mqtt | Not yet implemented |
+| MQTT | paho-mqtt | paho.mqtt.golang |
 | Logging | Python logging + RotatingFileHandler | slog + lumberjack rotation |
 | Config | argparse | flag stdlib |
 
