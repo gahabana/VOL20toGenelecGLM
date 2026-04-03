@@ -7,11 +7,12 @@ import (
 	"vol20toglm/types"
 )
 
-// Timing constants for power transitions.
+// Timing constants for power transitions (float64 seconds throughout).
 const (
 	PowerSettlingTime  = 2.0                                   // Seconds to block ALL commands after power toggle
 	PowerCooldownTime  = 1.5                                   // Seconds to block power commands after settling ends
 	PowerTotalLockout  = PowerSettlingTime + PowerCooldownTime // 3.5s total
+	PowerCommandExpiry = 3.0                                   // Seconds before a pending power command expires
 	PowerVerifyDelay   = 2 * time.Second                       // Wait before pixel-verifying power state after command/external change
 )
 
@@ -31,7 +32,7 @@ type Controller struct {
 	powerCooldownStart   float64 // Unix timestamp when cooldown started (0 = no cooldown)
 	powerTarget         *bool
 	powerTraceID        string
-	powerCommandSentAt  time.Time // zero value means no command pending; expires after 3 seconds
+	powerCommandSentAt  float64 // 0 means no command pending; expires after PowerCommandExpiry seconds
 }
 
 // New creates a Controller with default state (power on).
@@ -92,7 +93,7 @@ func (c *Controller) CanAcceptCommand() (bool, float64, string) {
 		return true, 0, ""
 	}
 
-	elapsed := float64(time.Now().UnixMilli())/1000 - c.powerTransitionStart
+	elapsed := nowSeconds() - c.powerTransitionStart
 	if elapsed < PowerSettlingTime {
 		return false, PowerSettlingTime - elapsed, "power_settling"
 	}
@@ -109,7 +110,7 @@ func (c *Controller) CanAcceptPowerCommand() (bool, float64, string) {
 
 	// Settling blocks everything including power
 	if c.powerSettling {
-		elapsed := float64(time.Now().UnixMilli())/1000 - c.powerTransitionStart
+		elapsed := nowSeconds() - c.powerTransitionStart
 		if elapsed < PowerSettlingTime {
 			return false, PowerSettlingTime - elapsed, "power_settling"
 		}
@@ -118,7 +119,7 @@ func (c *Controller) CanAcceptPowerCommand() (bool, float64, string) {
 
 	// Cooldown blocks power commands only
 	if c.powerCooldownStart > 0 {
-		elapsed := float64(time.Now().UnixMilli())/1000 - c.powerCooldownStart
+		elapsed := nowSeconds() - c.powerCooldownStart
 		if elapsed < PowerCooldownTime {
 			return false, PowerCooldownTime - elapsed, "power_cooldown"
 		}
@@ -131,11 +132,12 @@ func (c *Controller) CanAcceptPowerCommand() (bool, float64, string) {
 // StartPowerTransition marks the beginning of a power transition.
 func (c *Controller) StartPowerTransition(targetState bool, traceID string) {
 	c.mu.Lock()
-	c.powerTransitionStart = float64(time.Now().UnixMilli()) / 1000
+	now := nowSeconds()
+	c.powerTransitionStart = now
 	c.powerSettling = true
 	c.powerTarget = &targetState
 	c.powerTraceID = traceID
-	c.powerCommandSentAt = time.Now()
+	c.powerCommandSentAt = now
 	c.mu.Unlock()
 	c.notifyStateChange(true)
 }
@@ -149,7 +151,7 @@ func (c *Controller) EndPowerTransition(success bool, actualState *bool) {
 	c.mu.Lock()
 	c.powerSettling = false
 	c.powerTransitionStart = 0
-	c.powerCooldownStart = float64(time.Now().UnixMilli()) / 1000
+	c.powerCooldownStart = nowSeconds()
 	oldState := c.state
 	if success {
 		if actualState != nil {
@@ -168,7 +170,7 @@ func (c *Controller) EndPowerTransition(success bool, actualState *bool) {
 func (c *Controller) SetPowerCommandPending() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.powerCommandSentAt = time.Now()
+	c.powerCommandSentAt = nowSeconds()
 }
 
 // ClearPowerCommandPending clears the pending timestamp immediately.
@@ -176,7 +178,7 @@ func (c *Controller) SetPowerCommandPending() {
 func (c *Controller) ClearPowerCommandPending() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.powerCommandSentAt = time.Time{}
+	c.powerCommandSentAt = 0
 }
 
 // IsPowerCommandPending returns true when we sent a power command within the
@@ -186,10 +188,10 @@ func (c *Controller) ClearPowerCommandPending() {
 func (c *Controller) IsPowerCommandPending() bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.powerCommandSentAt.IsZero() {
+	if c.powerCommandSentAt == 0 {
 		return false
 	}
-	return time.Since(c.powerCommandSentAt) < 3*time.Second
+	return nowSeconds()-c.powerCommandSentAt < PowerCommandExpiry
 }
 
 // SetPower sets the power state directly (e.g. from initial pixel scan at startup).
@@ -363,6 +365,11 @@ func (c *Controller) fireCallbacks(oldState, newState types.State) {
 	for _, cb := range callbacksCopy {
 		cb(oldState, newState)
 	}
+}
+
+// nowSeconds returns the current time as seconds since Unix epoch (float64).
+func nowSeconds() float64 {
+	return float64(time.Now().UnixMilli()) / 1000.0
 }
 
 func clamp(value, minValue, maxValue int) int {
