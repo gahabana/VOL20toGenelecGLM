@@ -167,13 +167,13 @@ func (c *Client) handleVolume(_ pahomqtt.Client, msg pahomqtt.Message) {
 		value = 127
 	}
 
-	c.actions <- types.Action{
+	c.sendAction(types.Action{
 		Kind:      types.KindSetVolume,
 		Value:     value,
 		Source:    "mqtt",
 		TraceID:   tid,
 		Timestamp: time.Now(),
-	}
+	})
 }
 
 func (c *Client) handleMute(_ pahomqtt.Client, msg pahomqtt.Message) {
@@ -187,14 +187,14 @@ func (c *Client) handleMute(_ pahomqtt.Client, msg pahomqtt.Message) {
 		return
 	}
 
-	c.actions <- types.Action{
+	c.sendAction(types.Action{
 		Kind:      types.KindSetMute,
 		BoolValue: boolVal,
 		Toggle:    toggle,
 		Source:    "mqtt",
 		TraceID:   tid,
 		Timestamp: time.Now(),
-	}
+	})
 }
 
 func (c *Client) handleDim(_ pahomqtt.Client, msg pahomqtt.Message) {
@@ -208,14 +208,14 @@ func (c *Client) handleDim(_ pahomqtt.Client, msg pahomqtt.Message) {
 		return
 	}
 
-	c.actions <- types.Action{
+	c.sendAction(types.Action{
 		Kind:      types.KindSetDim,
 		BoolValue: boolVal,
 		Toggle:    toggle,
 		Source:    "mqtt",
 		TraceID:   tid,
 		Timestamp: time.Now(),
-	}
+	})
 }
 
 func (c *Client) handlePower(_ pahomqtt.Client, msg pahomqtt.Message) {
@@ -229,14 +229,14 @@ func (c *Client) handlePower(_ pahomqtt.Client, msg pahomqtt.Message) {
 		return
 	}
 
-	c.actions <- types.Action{
+	c.sendAction(types.Action{
 		Kind:      types.KindSetPower,
 		BoolValue: boolVal,
 		Toggle:    toggle,
 		Source:    "mqtt",
 		TraceID:   tid,
 		Timestamp: time.Now(),
-	}
+	})
 }
 
 // State publishing
@@ -347,6 +347,17 @@ func (c *Client) publishDiscoveryConfig(component, objectID string, config map[s
 		return
 	}
 	c.client.Publish(topic, 0, true, data)
+}
+
+// sendAction sends an action to the channel without blocking.
+// If the channel is full, the command is dropped and a warning logged.
+func (c *Client) sendAction(action types.Action) {
+	select {
+	case c.actions <- action:
+	default:
+		c.log.Warn("action channel full, dropping MQTT command",
+			"kind", action.Kind, "trace_id", action.TraceID)
+	}
 }
 
 // Helpers
