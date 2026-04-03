@@ -21,7 +21,8 @@ var errVolumeNotInitialized = errors.New("volume not initialized from GLM")
 type Controller struct {
 	mu                   sync.Mutex
 	state                types.State
-	pendingVolume        *int // What we sent but GLM hasn't confirmed
+	pendingVolume        *int // What HID/API wants but GLM hasn't confirmed
+	lastGateSentVolume   *int // What the gate actually transmitted to GLM
 	volumeInitialized    bool
 	callbacks            []types.StateCallback
 	lastNotifiedState    *types.State
@@ -52,6 +53,15 @@ func (c *Controller) GetState() types.State {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.state
+}
+
+// NotifyVolumeSent records the value the gate actually transmitted to GLM.
+// Called by the gate when it sends a CC20 command.
+func (c *Controller) NotifyVolumeSent(value int) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	v := value
+	c.lastGateSentVolume = &v
 }
 
 // GetEffectiveVolume returns pending volume if set, otherwise confirmed volume.
@@ -288,10 +298,22 @@ func (c *Controller) UpdateFromMIDI(cc, value int) bool {
 	switch cc {
 	case types.CCVolumeAbs:
 		c.volumeInitialized = true
-		if c.pendingVolume != nil && *c.pendingVolume != value {
-			forceNotify = true
+		if c.pendingVolume != nil {
+			if c.lastGateSentVolume != nil && *c.lastGateSentVolume == *c.pendingVolume {
+				// Response is for our pending command (gate sent it).
+				// Clear pending and trust GLM's value — handles both exact
+				// confirmation and GLM clipping (e.g. sent 110, got 109).
+				c.pendingVolume = nil
+				if value != *c.lastGateSentVolume {
+					forceNotify = true
+				}
+			} else {
+				// Gate sent an older command; pending is for a newer queued one.
+				// Keep pending so the next HID event computes from the right base.
+				forceNotify = true
+			}
 		}
-		c.pendingVolume = nil
+		c.lastGateSentVolume = nil
 		if c.state.Volume != value {
 			c.state.Volume = value
 			changed = true

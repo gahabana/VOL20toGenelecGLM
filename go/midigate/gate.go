@@ -25,10 +25,11 @@ const (
 // Gate mediates MIDI sends to ensure GLM has time to process each command.
 // Implements midi.Writer so it can replace the raw writer in the consumer.
 type Gate struct {
-	writer midi.Writer
-	log    *slog.Logger
-	sendCh chan cmd
-	recvCh chan int // CC number received from GLM
+	writer         midi.Writer
+	log            *slog.Logger
+	sendCh         chan cmd
+	recvCh         chan int // CC number received from GLM
+	OnVolumeSent   func(int) // called when a CC20 is actually transmitted
 }
 
 type cmd struct {
@@ -145,6 +146,9 @@ func (g *Gate) Run(ctx context.Context) {
 }
 
 func (g *Gate) rawSend(c cmd) {
+	if c.cc == types.CCVolumeAbs && g.OnVolumeSent != nil {
+		g.OnVolumeSent(c.value)
+	}
 	if err := g.writer.SendCC(c.channel, c.cc, c.value, c.traceID); err != nil {
 		g.log.Error("gate: MIDI send failed",
 			"cc", c.cc, "value", c.value, "trace_id", c.traceID, "err", err)

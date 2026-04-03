@@ -27,7 +27,7 @@ import (
 	"vol20toglm/types"
 )
 
-const version = "0.9.7"
+const version = "0.9.8"
 
 func main() {
 	runtime.GOMAXPROCS(2)
@@ -181,6 +181,7 @@ func main() {
 	var gate *midigate.Gate
 	if midiOut != nil {
 		gate = midigate.New(midiOut, log.With("component", "midigate"))
+		gate.OnVolumeSent = ctrl.NotifyVolumeSent
 	}
 
 	// Acceleration handler
