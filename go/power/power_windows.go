@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"strings"
 	"sync"
 	"time"
 	"unsafe"
@@ -14,6 +13,7 @@ import (
 	"golang.org/x/sys/windows"
 
 	"vol20toglm/rdp"
+	"vol20toglm/winutil"
 )
 
 // Windows API constants.
@@ -76,21 +76,17 @@ var (
 	user32 = windows.NewLazySystemDLL("user32.dll")
 	gdi32  = windows.NewLazySystemDLL("gdi32.dll")
 
-	procEnumWindows              = user32.NewProc("EnumWindows")
-	procGetClassNameW            = user32.NewProc("GetClassNameW")
-	procGetWindowTextW           = user32.NewProc("GetWindowTextW")
-	procGetWindowRect            = user32.NewProc("GetWindowRect")
-	procGetDC                    = user32.NewProc("GetDC")
-	procReleaseDC                = user32.NewProc("ReleaseDC")
-	procSetCursorPos             = user32.NewProc("SetCursorPos")
-	procMouseEvent               = user32.NewProc("mouse_event")
-	procSetForegroundWindow      = user32.NewProc("SetForegroundWindow")
-	procGetForegroundWindow      = user32.NewProc("GetForegroundWindow")
-	procGetWindowThreadProcessId = user32.NewProc("GetWindowThreadProcessId")
-	procIsIconic                 = user32.NewProc("IsIconic")
-	procShowWindow               = user32.NewProc("ShowWindow")
-	procMoveWindow               = user32.NewProc("MoveWindow")
-	procSystemParametersInfoW    = user32.NewProc("SystemParametersInfoW")
+	procGetWindowRect         = user32.NewProc("GetWindowRect")
+	procGetDC                 = user32.NewProc("GetDC")
+	procReleaseDC             = user32.NewProc("ReleaseDC")
+	procSetCursorPos          = user32.NewProc("SetCursorPos")
+	procMouseEvent            = user32.NewProc("mouse_event")
+	procSetForegroundWindow   = user32.NewProc("SetForegroundWindow")
+	procGetForegroundWindow   = user32.NewProc("GetForegroundWindow")
+	procIsIconic              = user32.NewProc("IsIconic")
+	procShowWindow            = user32.NewProc("ShowWindow")
+	procMoveWindow            = user32.NewProc("MoveWindow")
+	procSystemParametersInfoW = user32.NewProc("SystemParametersInfoW")
 
 	procCreateCompatibleDC     = gdi32.NewProc("CreateCompatibleDC")
 	procCreateCompatibleBitmap = gdi32.NewProc("CreateCompatibleBitmap")
@@ -135,9 +131,7 @@ func (wc *WindowsController) SetPID(pid int) {
 	wc.cacheTime = time.Time{}
 }
 
-// findGLMWindowLocked locates the GLM window by enumerating top-level windows.
-// It matches windows whose class name starts with "JUCE_" and whose title
-// contains "GLM". When PID is set, only windows belonging to that process match.
+// findGLMWindowLocked locates the GLM window via winutil.FindGLMWindow.
 // The result is cached for hwndCacheTTL.
 // Caller must hold wc.mu.
 func (wc *WindowsController) findGLMWindowLocked() (uintptr, error) {
@@ -145,56 +139,15 @@ func (wc *WindowsController) findGLMWindowLocked() (uintptr, error) {
 		return wc.cachedHWND, nil
 	}
 
-	targetPID := wc.pid
-	var foundHWND uintptr
-	classNameBuf := make([]uint16, 256)
-	windowTextBuf := make([]uint16, 256)
-
-	callback := windows.NewCallback(func(hwnd uintptr, lParam uintptr) uintptr {
-		// Filter by PID if set.
-		if targetPID > 0 {
-			var windowPID uint32
-			procGetWindowThreadProcessId.Call(hwnd, uintptr(unsafe.Pointer(&windowPID)))
-			if int(windowPID) != targetPID {
-				return 1 // wrong process, continue
-			}
-		}
-
-		// Get class name.
-		ret, _, _ := procGetClassNameW.Call(hwnd, uintptr(unsafe.Pointer(&classNameBuf[0])), 256)
-		if ret == 0 {
-			return 1 // continue enumeration
-		}
-		className := windows.UTF16ToString(classNameBuf[:ret])
-
-		if !strings.HasPrefix(className, "JUCE_") {
-			return 1
-		}
-
-		// Get window title.
-		ret, _, _ = procGetWindowTextW.Call(hwnd, uintptr(unsafe.Pointer(&windowTextBuf[0])), 256)
-		if ret == 0 {
-			return 1
-		}
-		windowTitle := windows.UTF16ToString(windowTextBuf[:ret])
-
-		if strings.Contains(windowTitle, "GLM") {
-			foundHWND = hwnd
-			return 0 // stop enumeration
-		}
-		return 1
-	})
-
-	procEnumWindows.Call(callback, 0) //nolint:errcheck
-
-	if foundHWND == 0 {
+	hwnd, err := winutil.FindGLMWindow(wc.pid)
+	if err != nil {
 		wc.cachedHWND = 0
-		return 0, fmt.Errorf("GLM window not found")
+		return 0, err
 	}
 
-	wc.cachedHWND = foundHWND
+	wc.cachedHWND = hwnd
 	wc.cacheTime = time.Now()
-	return foundHWND, nil
+	return hwnd, nil
 }
 
 // findGLMWindow is the mutex-acquiring wrapper around findGLMWindowLocked.
@@ -796,46 +749,19 @@ func (wc *WindowsController) GetPowerState() (bool, error) {
 }
 
 // PowerOn ensures power is ON via UI click. Implements Commander.
-// If power is already on, the click is skipped (idempotent).
-// Holds wc.mu for the entire read-check-click-verify sequence to eliminate TOCTOU.
 func (wc *WindowsController) PowerOn(traceID string) error {
-	wc.mu.Lock()
-	defer wc.mu.Unlock()
-
-	hwnd, err := wc.findGLMWindowLocked()
-	if err != nil {
-		return fmt.Errorf("cannot find GLM window: %w", err)
-	}
-
-	info, err := wc.prepareWindow(hwnd)
-	if err != nil {
-		return fmt.Errorf("prepare window failed: %w", err)
-	}
-	defer wc.restoreWindow(hwnd, info)
-
-	windowRect, err := wc.getWindowRect(hwnd)
-	if err != nil {
-		return fmt.Errorf("cannot get window rect: %w", err)
-	}
-
-	currentAnalysis, err := wc.readStateLocked(windowRect)
-	if err != nil {
-		return fmt.Errorf("cannot read state: %w", err)
-	}
-
-	if currentAnalysis.combined == stateOn {
-		wc.log.Info("power already ON, skipping UI click", "trace_id", traceID)
-		return nil
-	}
-
-	wc.log.Info("power ON via UI click", "trace_id", traceID)
-	return wc.clickPowerButtonLocked(windowRect, currentAnalysis.combined)
+	return wc.ensureState(stateOn, traceID)
 }
 
 // PowerOff ensures power is OFF via UI click. Implements Commander.
-// If power is already off, the click is skipped (idempotent).
-// Holds wc.mu for the entire read-check-click-verify sequence to eliminate TOCTOU.
 func (wc *WindowsController) PowerOff(traceID string) error {
+	return wc.ensureState(stateOff, traceID)
+}
+
+// ensureState is the shared implementation for PowerOn/PowerOff.
+// If power is already at the target state, the click is skipped (idempotent).
+// Holds wc.mu for the entire read-check-click-verify sequence to eliminate TOCTOU.
+func (wc *WindowsController) ensureState(target pixelState, traceID string) error {
 	wc.mu.Lock()
 	defer wc.mu.Unlock()
 
@@ -860,12 +786,14 @@ func (wc *WindowsController) PowerOff(traceID string) error {
 		return fmt.Errorf("cannot read state: %w", err)
 	}
 
-	if currentAnalysis.combined == stateOff {
-		wc.log.Info("power already OFF, skipping UI click", "trace_id", traceID)
+	if currentAnalysis.combined == target {
+		wc.log.Info("power already at target, skipping UI click",
+			"target", target, "trace_id", traceID)
 		return nil
 	}
 
-	wc.log.Info("power OFF via UI click", "trace_id", traceID)
+	wc.log.Info("power change via UI click",
+		"target", target, "trace_id", traceID)
 	return wc.clickPowerButtonLocked(windowRect, currentAnalysis.combined)
 }
 

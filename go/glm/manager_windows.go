@@ -12,6 +12,7 @@ import (
 	"unsafe"
 
 	"golang.org/x/sys/windows"
+	"vol20toglm/winutil"
 )
 
 // Windows API constants for process and window management.
@@ -69,11 +70,7 @@ var (
 	procProcess32NextW           = kernel32DLL.NewProc("Process32NextW")
 	procSetPriorityClass         = kernel32DLL.NewProc("SetPriorityClass")
 
-	procIsHungAppWindow          = user32DLL.NewProc("IsHungAppWindow")
-	procEnumWindowsGLM           = user32DLL.NewProc("EnumWindows")
-	procGetClassNameGLM          = user32DLL.NewProc("GetClassNameW")
-	procGetWindowTextGLM         = user32DLL.NewProc("GetWindowTextW")
-	procGetWindowThreadProcessId = user32DLL.NewProc("GetWindowThreadProcessId")
+	procIsHungAppWindow = user32DLL.NewProc("IsHungAppWindow")
 )
 
 // Package-level state for CPU usage delta calculation.
@@ -337,13 +334,6 @@ func (m *WindowsManager) setPriority(pid int) error {
 	return nil
 }
 
-// windowInfo holds details about a discovered JUCE/GLM window.
-type windowInfo struct {
-	hwnd      uintptr
-	className string
-	title     string
-}
-
 // waitForWindowStable polls for GLM windows matching the given PID until the
 // titled main window HWND has been the same for windowStableCount consecutive polls.
 // Only the titled window matters for HWND selection; untitled helper windows are ignored.
@@ -355,23 +345,23 @@ func (m *WindowsManager) waitForWindowStable(targetPID int) (uintptr, error) {
 
 	for time.Now().Before(deadline) {
 		poll++
-		windows := findAllWindowsByPID(targetPID)
+		allWindows := winutil.FindAllGLMWindows(targetPID)
 
 		// Find the main window (title contains "GLM").
 		var titledHWND uintptr
 		var titledTitle string
 		untitled := 0
-		for _, w := range windows {
-			if strings.Contains(w.title, "GLM") {
-				titledHWND = w.hwnd
-				titledTitle = w.title
+		for _, w := range allWindows {
+			if strings.Contains(w.Title, "GLM") {
+				titledHWND = w.HWND
+				titledTitle = w.Title
 			} else {
 				untitled++
 			}
 		}
 
 		// Log summary per poll (compact).
-		if len(windows) == 0 {
+		if len(allWindows) == 0 {
 			m.log.Debug("window poll: no JUCE+GLM windows found", "poll", poll, "pid", targetPID)
 		} else {
 			m.log.Debug("window poll",
@@ -410,46 +400,6 @@ func (m *WindowsManager) waitForWindowStable(targetPID int) (uintptr, error) {
 	}
 
 	return 0, fmt.Errorf("GLM window for PID %d did not stabilize within %v", targetPID, windowTimeout)
-}
-
-// findAllWindowsByPID enumerates ALL top-level windows matching JUCE+GLM
-// for the given PID. Returns all matches, not just the first.
-func findAllWindowsByPID(targetPID int) []windowInfo {
-	var results []windowInfo
-	classNameBuf := make([]uint16, 256)
-	windowTextBuf := make([]uint16, 256)
-
-	callback := windows.NewCallback(func(hwnd uintptr, lParam uintptr) uintptr {
-		var windowPID uint32
-		procGetWindowThreadProcessId.Call(hwnd, uintptr(unsafe.Pointer(&windowPID)))
-		if int(windowPID) != targetPID {
-			return 1
-		}
-
-		ret, _, _ := procGetClassNameGLM.Call(hwnd, uintptr(unsafe.Pointer(&classNameBuf[0])), 256)
-		if ret == 0 {
-			return 1
-		}
-		className := windows.UTF16ToString(classNameBuf[:ret])
-
-		if !strings.HasPrefix(className, "JUCE_") {
-			return 1
-		}
-
-		ret, _, _ = procGetWindowTextGLM.Call(hwnd, uintptr(unsafe.Pointer(&windowTextBuf[0])), 256)
-		title := ""
-		if ret > 0 {
-			title = windows.UTF16ToString(windowTextBuf[:ret])
-		}
-
-		if strings.Contains(title, "GLM") || title == "" {
-			results = append(results, windowInfo{hwnd: hwnd, className: className, title: title})
-		}
-		return 1 // continue — find ALL matches
-	})
-
-	procEnumWindowsGLM.Call(callback, 0) //nolint:errcheck
-	return results
 }
 
 // watchdogLoop monitors the GLM process and restarts it if it dies or hangs.

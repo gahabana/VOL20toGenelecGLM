@@ -6,16 +6,15 @@ import (
 	"bufio"
 	"fmt"
 	"log/slog"
-	"math"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
+	"vol20toglm/bootflag"
 )
 
 var (
@@ -23,7 +22,6 @@ var (
 	modadvapi32 = windows.NewLazySystemDLL("advapi32.dll")
 	modwtsapi32 = windows.NewLazySystemDLL("wtsapi32.dll")
 
-	procGetTickCount64       = modkernel32.NewProc("GetTickCount64")
 	procProcessIdToSessionId = modkernel32.NewProc("ProcessIdToSessionId")
 	procCredReadW            = modadvapi32.NewProc("CredReadW")
 	procCredFree             = modadvapi32.NewProc("CredFree")
@@ -46,7 +44,6 @@ type wtsSessionInfo struct {
 const (
 	credTypeGeneric uint32 = 1
 	flagFileName           = "rdp_primed.flag"
-	bootTolerance          = 60.0 // seconds
 )
 
 // credentialW mirrors the Windows CREDENTIALW struct layout.
@@ -155,43 +152,9 @@ type WindowsPrimer struct {
 	Log *slog.Logger
 }
 
-// flagPath returns the full path to the boot flag file in %TEMP%.
-func flagPath() string {
-	return filepath.Join(os.TempDir(), flagFileName)
-}
-
-// BootTimestamp returns the approximate boot time as seconds since epoch.
-// It uses GetTickCount64 to compute (now - uptime).
-func BootTimestamp() float64 {
-	ret, _, _ := procGetTickCount64.Call()
-	uptimeMs := uint64(ret)
-	nowMs := uint64(time.Now().UnixMilli())
-	return float64(nowMs-uptimeMs) / 1000.0
-}
-
 // NeedsPriming checks whether RDP priming is needed for this boot.
-// It compares the stored boot timestamp in the flag file with the current
-// boot timestamp. If they differ by more than 60 seconds, priming is needed.
 func (w *WindowsPrimer) NeedsPriming() bool {
-	currentBoot := BootTimestamp()
-
-	data, err := os.ReadFile(flagPath())
-	if err == nil {
-		storedBoot, parseErr := strconv.ParseFloat(strings.TrimSpace(string(data)), 64)
-		if parseErr == nil && math.Abs(storedBoot-currentBoot) < bootTolerance {
-			w.Log.Info("RDP priming already done this boot", "boot_time", currentBoot)
-			return false
-		}
-	}
-
-	// Write the flag file for this boot
-	writeErr := os.WriteFile(flagPath(), []byte(fmt.Sprintf("%.1f", currentBoot)), 0644)
-	if writeErr != nil {
-		w.Log.Warn("failed to write RDP priming flag file", "error", writeErr)
-	}
-
-	w.Log.Info("RDP priming needed", "boot_time", currentBoot)
-	return true
+	return bootflag.NeedsRun(flagFileName, w.Log)
 }
 
 // readCredential attempts to read a generic credential from Windows Credential Manager.

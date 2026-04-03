@@ -6,16 +6,13 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"math"
-	"os"
 	"os/exec"
-	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
+	"vol20toglm/bootflag"
 	"vol20toglm/config"
 	"vol20toglm/glm"
 	"vol20toglm/hid"
@@ -302,7 +299,7 @@ func runStartupTasks(cfg config.Config, log *slog.Logger) {
 
 	// MIDI service restart (once per boot)
 	if cfg.MIDIRestart {
-		if needsBootOnceTask("midi_restarted.flag", log) {
+		if bootflag.NeedsRun("midi_restarted.flag", log) {
 			log.Info("restarting Windows MIDI service")
 			exec.Command("net", "stop", "midisrv").Run()
 			time.Sleep(1 * time.Second)
@@ -313,24 +310,3 @@ func runStartupTasks(cfg config.Config, log *slog.Logger) {
 	}
 }
 
-// needsBootOnceTask checks whether a once-per-boot task needs to run.
-// Uses a flag file in %TEMP% containing the boot timestamp. Returns true
-// if the task hasn't been done this boot, and writes the flag file.
-func needsBootOnceTask(flagFile string, log *slog.Logger) bool {
-	flagPath := filepath.Join(os.TempDir(), flagFile)
-	currentBoot := rdp.BootTimestamp()
-
-	data, err := os.ReadFile(flagPath)
-	if err == nil {
-		storedBoot, parseErr := strconv.ParseFloat(strings.TrimSpace(string(data)), 64)
-		if parseErr == nil && math.Abs(storedBoot-currentBoot) < 60.0 {
-			log.Info("already done this boot, skipping", "flag", flagFile)
-			return false
-		}
-	}
-
-	if writeErr := os.WriteFile(flagPath, []byte(fmt.Sprintf("%.1f", currentBoot)), 0644); writeErr != nil {
-		log.Warn("failed to write boot flag", "flag", flagFile, "error", writeErr)
-	}
-	return true
-}
