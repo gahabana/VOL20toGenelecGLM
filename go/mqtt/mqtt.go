@@ -292,7 +292,7 @@ func (c *Client) publishHADiscovery() {
 		"device":              device,
 	})
 
-	// Mute as switch
+	// Mute as switch (config category — keeps device toggle = Power only)
 	c.publishDiscoveryConfig("switch", "glm_mute", map[string]interface{}{
 		"name":               "GLM Mute",
 		"unique_id":          "glm_mute",
@@ -303,10 +303,11 @@ func (c *Client) publishHADiscovery() {
 		"payload_off":        "OFF",
 		"icon":               "mdi:volume-mute",
 		"availability_topic": avail,
+		"entity_category":    "config",
 		"device":             device,
 	})
 
-	// Dim as switch
+	// Dim as switch (config category — keeps device toggle = Power only)
 	c.publishDiscoveryConfig("switch", "glm_dim", map[string]interface{}{
 		"name":               "GLM Dim",
 		"unique_id":          "glm_dim",
@@ -317,6 +318,7 @@ func (c *Client) publishHADiscovery() {
 		"payload_off":        "OFF",
 		"icon":               "mdi:brightness-6",
 		"availability_topic": avail,
+		"entity_category":    "config",
 		"device":             device,
 	})
 
