@@ -359,8 +359,8 @@ func findSessionID(keyword, username string, log *slog.Logger) string {
 		}
 		lower := strings.ToLower(line)
 
-		// Log every session line for diagnostics
-		log.Debug("query session", "line", trimmed)
+		// Raw session lines omitted from logs (uncomment for debugging):
+		// log.Debug("query session", "line", trimmed)
 
 		if !strings.Contains(lower, keyword) {
 			continue
