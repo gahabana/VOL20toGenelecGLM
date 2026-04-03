@@ -23,11 +23,12 @@ import (
 	applog "vol20toglm/logging"
 	"vol20toglm/midi"
 	"vol20toglm/midigate"
+	appmqtt "vol20toglm/mqtt"
 	"vol20toglm/power"
 	"vol20toglm/types"
 )
 
-const version = "0.9.8.1"
+const version = "0.10.0"
 
 func main() {
 	runtime.GOMAXPROCS(2)
@@ -394,10 +395,28 @@ func main() {
 		}()
 	}
 
+	// Start MQTT client if configured
+	var mqttClient *appmqtt.Client
+	if cfg.MQTTBroker != "" {
+		mqttClient = appmqtt.Start(
+			cfg.MQTTBroker, cfg.MQTTPort,
+			cfg.MQTTUser, cfg.MQTTPass,
+			cfg.MQTTTopic, cfg.MQTTHADiscovery,
+			ctrl, actions, traceGen,
+			log.With("component", "mqtt"),
+		)
+		if mqttClient != nil {
+			log.Info("MQTT enabled", "broker", cfg.MQTTBroker, "port", cfg.MQTTPort, "topic", cfg.MQTTTopic, "ha_discovery", cfg.MQTTHADiscovery)
+		}
+	}
+
 	log.Info("running — press Ctrl+C to stop")
 	<-ctx.Done()
 	log.Info("shutting down")
 
+	if mqttClient != nil {
+		mqttClient.Stop()
+	}
 	cancel()
 	midiIn.Close()
 	wg.Wait()
