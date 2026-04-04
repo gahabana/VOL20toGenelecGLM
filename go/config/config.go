@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 )
 
@@ -176,11 +177,13 @@ func parseIntList(s string) []int {
 	result := make([]int, 0, len(parts))
 	for _, p := range parts {
 		p = strings.TrimSpace(p)
-		var v int
-		for _, ch := range p {
-			if ch >= '0' && ch <= '9' {
-				v = v*10 + int(ch-'0')
-			}
+		if p == "" {
+			continue
+		}
+		v, err := strconv.Atoi(p)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "warning: invalid volume increment %q, using 0\n", p)
+			v = 0
 		}
 		result = append(result, v)
 	}
@@ -200,17 +203,10 @@ func parseVIDPID(s string) (uint16, uint16) {
 func parseHex(s string) int {
 	s = strings.TrimPrefix(s, "0x")
 	s = strings.TrimPrefix(s, "0X")
-	var v int
-	for _, ch := range s {
-		v <<= 4
-		switch {
-		case ch >= '0' && ch <= '9':
-			v += int(ch - '0')
-		case ch >= 'a' && ch <= 'f':
-			v += int(ch-'a') + 10
-		case ch >= 'A' && ch <= 'F':
-			v += int(ch-'A') + 10
-		}
+	v, err := strconv.ParseUint(s, 16, 16)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: invalid hex value %q, using 0\n", s)
+		return 0
 	}
-	return v
+	return int(v)
 }

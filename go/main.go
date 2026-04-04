@@ -28,7 +28,7 @@ import (
 	"vol20toglm/types"
 )
 
-const version = "0.11.0.2"
+const version = "0.11.0.3"
 
 func main() {
 	runtime.GOMAXPROCS(2)
@@ -109,18 +109,9 @@ func main() {
 	// For now, create MIDICommander with a placeholder; we'll reassign after gate is set up.
 	// Actually we build the commander after gate is ready — see below after gate creation.
 
-	// Power observer (windows controller for pixel scanning)
-	var winPowerCtrl power.Controller // retained for startup pixel scan + legacy PID wiring
-
-	if cfg.NoUIAutomation {
-		// Path A: MIDI-only
-		winPowerCtrl = nil
-	} else if cfg.Headless {
-		// Paths B and B+ui: need pixel scanning
-		winPowerCtrl = createPowerController(log, cfg.DebugCaptures)
-	} else {
-		// Default: no pixel scanning
-		winPowerCtrl = nil
+	// Power observer (pixel scanning, nil unless --headless)
+	if !cfg.NoUIAutomation && cfg.Headless {
+		powerObs = createPowerObserver(log, cfg.DebugCaptures)
 	}
 
 	// Power pattern detector
@@ -248,9 +239,9 @@ func main() {
 		} else {
 			defer glmMgr.Stop()
 		}
-		// Pass GLM PID to pixel-scanning controller
-		if winPowerCtrl != nil {
-			winPowerCtrl.SetPID(glmMgr.GetPID())
+		// Pass GLM PID to pixel-scanning observer
+		if powerObs != nil {
+			powerObs.SetPID(glmMgr.GetPID())
 		}
 	}
 
@@ -259,12 +250,11 @@ func main() {
 
 	// Detect initial power state from pixel scan.
 	// Retry a few times to allow splash screen to clear after fresh launch.
-	// prepareWindow/restoreWindow are called internally by GetState.
-	if winPowerCtrl != nil {
+	if powerObs != nil {
 		var initialPower bool
 		var scanErr error
 		for attempt := 1; attempt <= 5; attempt++ {
-			initialPower, scanErr = winPowerCtrl.GetState()
+			initialPower, scanErr = powerObs.GetPowerState()
 			if scanErr == nil {
 				break
 			}
@@ -296,33 +286,15 @@ func main() {
 		consumerWriter = midiOut
 	}
 
-	// Build Commander and Observer now that consumerWriter is resolved.
-	if cfg.NoUIAutomation {
-		// Path A: MIDI-only, no screen interaction
+	// Build Commander now that consumerWriter is resolved.
+	// powerObs was already set above (nil unless --headless).
+	if cfg.Headless && cfg.UIPower {
+		// Path B+ui: UI click for power, pixel for verification
+		powerCmd = createPowerCommander(powerObs)
+	}
+	if powerCmd == nil {
+		// Paths A, B, and default: MIDI for power
 		powerCmd = power.NewMIDICommander(consumerWriter, 0, log.With("component", "power-midi"))
-		powerObs = nil
-	} else if cfg.Headless {
-		if cfg.UIPower {
-			// Path B+ui: UI click for power, pixel for verification
-			// winPowerCtrl implements both Commander and Observer
-			if wc, ok := winPowerCtrl.(interface {
-				power.Commander
-				power.Observer
-			}); ok {
-				powerCmd = wc
-				powerObs = wc
-			}
-		} else {
-			// Path B: MIDI for power, pixel for verification
-			powerCmd = power.NewMIDICommander(consumerWriter, 0, log.With("component", "power-midi"))
-			if obs, ok := winPowerCtrl.(power.Observer); ok {
-				powerObs = obs
-			}
-		}
-	} else {
-		// Default (no flags): MIDI power, no verification
-		powerCmd = power.NewMIDICommander(consumerWriter, 0, log.With("component", "power-midi"))
-		powerObs = nil
 	}
 
 	// UI power mode: read current state via pixel scan (don't force via MIDI).

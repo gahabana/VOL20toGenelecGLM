@@ -18,16 +18,3 @@ type Observer interface {
 	SetPID(pid int)
 }
 
-// Controller detects GLM power state and can toggle it.
-//
-// Deprecated: Use Commander for sending power commands and Observer for reading
-// power state. Controller is retained for backwards compatibility.
-type Controller interface {
-	// SetPID sets the GLM process ID for window filtering.
-	// Must be called before GetState/Toggle to ensure we find the correct window.
-	SetPID(pid int)
-	// GetState returns the current power state by inspecting the GLM window.
-	GetState() (bool, error)
-	// Toggle clicks the power button in the GLM window.
-	Toggle() error
-}

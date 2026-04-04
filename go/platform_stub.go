@@ -36,8 +36,12 @@ func createMIDIReader(cfg config.Config, ctx context.Context, log *slog.Logger) 
 	return &midi.StubReader{Log: log.With("component", "midi-in")}
 }
 
-func createPowerController(log *slog.Logger, debugCaptures bool) power.Controller {
-	return &power.StubController{Log: log.With("component", "power"), State: true}
+func createPowerObserver(log *slog.Logger, debugCaptures bool) power.Observer {
+	return nil
+}
+
+func createPowerCommander(obs power.Observer) power.Commander {
+	return nil
 }
 
 func createGLMManager(cfg config.Config, log *slog.Logger) glm.Manager {

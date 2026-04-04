@@ -88,8 +88,15 @@ func createMIDIReader(cfg config.Config, ctx context.Context, log *slog.Logger) 
 	}
 }
 
-func createPowerController(log *slog.Logger, debugCaptures bool) power.Controller {
+func createPowerObserver(log *slog.Logger, debugCaptures bool) power.Observer {
 	return power.NewWindowsController(log.With("component", "power"), debugCaptures)
+}
+
+func createPowerCommander(obs power.Observer) power.Commander {
+	if wc, ok := obs.(*power.WindowsController); ok {
+		return wc
+	}
+	return nil
 }
 
 func createGLMManager(cfg config.Config, log *slog.Logger) glm.Manager {

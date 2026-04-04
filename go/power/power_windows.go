@@ -150,14 +150,6 @@ func (wc *WindowsController) findGLMWindowLocked() (uintptr, error) {
 	return hwnd, nil
 }
 
-// findGLMWindow is the mutex-acquiring wrapper around findGLMWindowLocked.
-// Use findGLMWindowLocked when the caller already holds wc.mu.
-func (wc *WindowsController) findGLMWindow() (uintptr, error) {
-	wc.mu.Lock()
-	defer wc.mu.Unlock()
-	return wc.findGLMWindowLocked()
-}
-
 // captureScreen captures a rectangular region of the screen and returns
 // a BGRA pixel buffer (top-down, 4 bytes per pixel).
 func (wc *WindowsController) captureScreen(x, y, width, height int) ([]byte, error) {
@@ -704,10 +696,11 @@ func (wc *WindowsController) clickPowerButtonLocked(windowRect rect, previousSta
 	return fmt.Errorf("clickPowerButton: state did not change within %v", verifyTimeout)
 }
 
-// GetState returns the current power state of the GLM application.
+// GetPowerState returns the current power state of the GLM application.
 // Returns true if GLM is powered on, false if powered off.
 // The full prepare→capture→analyze→restore sequence runs under wc.mu.
-func (wc *WindowsController) GetState() (bool, error) {
+// Implements Observer.
+func (wc *WindowsController) GetPowerState() (bool, error) {
 	wc.mu.Lock()
 	defer wc.mu.Unlock()
 
@@ -722,7 +715,6 @@ func (wc *WindowsController) GetState() (bool, error) {
 	}
 	defer wc.restoreWindow(hwnd, info)
 
-	// Re-read the window rect — it may have changed after prepare.
 	windowRect, err := wc.getWindowRect(hwnd)
 	if err != nil {
 		return false, err
@@ -741,11 +733,6 @@ func (wc *WindowsController) GetState() (bool, error) {
 	default:
 		return false, fmt.Errorf("unable to determine power state")
 	}
-}
-
-// GetPowerState returns the current power state. Implements Observer.
-func (wc *WindowsController) GetPowerState() (bool, error) {
-	return wc.GetState()
 }
 
 // PowerOn ensures power is ON via UI click. Implements Commander.
@@ -797,35 +784,3 @@ func (wc *WindowsController) ensureState(target pixelState, traceID string) erro
 	return wc.clickPowerButtonLocked(windowRect, currentAnalysis.combined)
 }
 
-// Toggle clicks the power button in the GLM window to change the power state.
-// It prepares the window, captures the current state, performs the click, then
-// polls until the state changes or a timeout is reached, then restores the window.
-func (wc *WindowsController) Toggle() error {
-	wc.mu.Lock()
-	defer wc.mu.Unlock()
-
-	hwnd, err := wc.findGLMWindowLocked()
-	if err != nil {
-		return fmt.Errorf("cannot toggle: %w", err)
-	}
-
-	info, err := wc.prepareWindow(hwnd)
-	if err != nil {
-		return fmt.Errorf("prepare window failed: %w", err)
-	}
-	defer wc.restoreWindow(hwnd, info)
-
-	// Re-read window rect after prepare (position/size may have changed).
-	windowRect, err := wc.getWindowRect(hwnd)
-	if err != nil {
-		return fmt.Errorf("cannot get window rect: %w", err)
-	}
-
-	previousAnalysis, err := wc.readStateLocked(windowRect)
-	if err != nil {
-		return fmt.Errorf("pre-toggle capture failed: %w", err)
-	}
-
-	wc.log.Info("toggle: current state", "state", previousAnalysis.combined)
-	return wc.clickPowerButtonLocked(windowRect, previousAnalysis.combined)
-}
