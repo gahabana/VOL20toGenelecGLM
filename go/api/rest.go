@@ -68,6 +68,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /favicon.svg", s.handleFavicon)
 	mux.HandleFunc("GET /v1", s.handleAltUI("v1.html"))
 	mux.HandleFunc("GET /v2", s.handleAltUI("v2.html"))
+	mux.HandleFunc("GET /v3", s.handleAltUI("v3.html"))
 	mux.HandleFunc("GET /", s.handleIndex)
 	return s.corsMiddleware(mux)
 }
