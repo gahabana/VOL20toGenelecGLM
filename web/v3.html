@@ -249,6 +249,36 @@
             z-index: -1;
         }
 
+        /* Dead zone notch — recessed end-stop between max (4 o'clock) and min (6 o'clock) */
+        .knob-container::before {
+            content: '';
+            position: absolute;
+            /* Match the bezel dimensions */
+            width: 224px;
+            height: 224px;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            border-radius: 50%;
+            /* Dark recessed sector from 300deg to 360deg (4pm to 6pm, conic from 180deg) */
+            background: conic-gradient(
+                from 180deg,
+                transparent 0deg,
+                transparent 296deg,
+                rgba(20,20,20,0.9) 300deg,
+                rgba(10,10,10,0.95) 330deg,
+                rgba(20,20,20,0.9) 358deg,
+                transparent 362deg
+            );
+            /* Mask to ring shape matching bezel */
+            -webkit-mask: radial-gradient(transparent 44%, black 45%, black 98%, transparent 99%);
+            mask: radial-gradient(transparent 44%, black 45%, black 98%, transparent 99%);
+            z-index: 1;
+            pointer-events: none;
+            /* Deepen the recess with a subtle inward shadow */
+            filter: drop-shadow(0px 1px 2px rgba(0,0,0,0.8));
+        }
+
         /* Specular highlight arc on bezel — light catching brushed metal */
         .knob-track::before {
             content: '';
