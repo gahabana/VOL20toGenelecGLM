@@ -66,6 +66,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/health", s.handleHealth)
 	mux.HandleFunc("GET /ws/state", s.handleWebSocket)
 	mux.HandleFunc("GET /favicon.svg", s.handleFavicon)
+	mux.HandleFunc("GET /v1", s.handleAltUI("v1.html"))
+	mux.HandleFunc("GET /v2", s.handleAltUI("v2.html"))
 	mux.HandleFunc("GET /", s.handleIndex)
 	return s.corsMiddleware(mux)
 }
@@ -349,6 +351,22 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	http.ServeFile(w, r, path)
+}
+
+// handleAltUI returns a handler that serves an alternative UI HTML file.
+func (s *Server) handleAltUI(filename string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if s.webDir == "" {
+			http.Error(w, "web UI not configured", http.StatusNotFound)
+			return
+		}
+		path := filepath.Join(s.webDir, filename)
+		if _, err := os.Stat(path); err != nil {
+			http.Error(w, filename+" not found", http.StatusNotFound)
+			return
+		}
+		http.ServeFile(w, r, path)
+	}
 }
 
 func (s *Server) handleFavicon(w http.ResponseWriter, r *http.Request) {

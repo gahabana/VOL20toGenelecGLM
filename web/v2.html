@@ -1,0 +1,1100 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>GLM Control</title>
+    <link rel="icon" type="image/svg+xml" href="favicon.svg">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@200;300;400;500&family=Inter:wght@300;400;500&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-primary: #080808;
+            --bg-card: #0e0e0e;
+            --bg-elevated: #1a1a1a;
+            --text-primary: #d4d4d4;
+            --text-secondary: #5a5a5a;
+            --text-dim: #3a3a3a;
+            --accent: #4ecdc4;
+            --accent-dim: #2a9d8f;
+            --success: #4ecdc4;
+            --warning: #e76f51;
+            --border: #1e1e1e;
+            --border-subtle: #151515;
+            --shadow: 0 1px 3px rgba(0,0,0,0.6);
+            --shadow-elevated: 0 4px 24px rgba(0,0,0,0.8);
+            --shadow-inset: inset 0 1px 4px rgba(0,0,0,0.8);
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 24px 16px;
+            /* Prevent pull-to-refresh gesture on mobile */
+            overscroll-behavior: none;
+        }
+
+        .container {
+            width: 100%;
+            max-width: 400px;
+        }
+
+        header {
+            text-align: center;
+            margin-bottom: 40px;
+        }
+
+        header h1 {
+            font-family: 'Inter', sans-serif;
+            font-size: 0.75rem;
+            font-weight: 500;
+            letter-spacing: 4px;
+            text-transform: uppercase;
+            color: var(--text-secondary);
+            cursor: pointer;
+            touch-action: manipulation;
+            -webkit-user-select: none;
+            user-select: none;
+            padding: 10px 20px;
+            border-radius: 2px;
+            transition: color 0.3s;
+            display: inline-flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        header h1:hover {
+            color: var(--text-primary);
+        }
+
+        header h1:active {
+            color: var(--accent);
+        }
+
+        .status-dot {
+            display: inline-block;
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            background: var(--warning);
+            transition: background 0.3s;
+            flex-shrink: 0;
+        }
+
+        .status-dot.connected {
+            background: var(--success);
+            box-shadow: 0 0 8px rgba(78, 205, 196, 0.4);
+        }
+
+        /* Thin separator line */
+        .separator {
+            width: 40px;
+            height: 1px;
+            background: var(--border);
+            margin: 0 auto 32px;
+        }
+
+        /* Rotary Volume Knob */
+        .knob-container {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            padding: 32px 24px 28px;
+            margin-bottom: 16px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            position: relative;
+        }
+
+        .knob-row {
+            display: flex;
+            align-items: center;
+            gap: 28px;
+        }
+
+        .volume-step-btn {
+            width: 40px;
+            height: 40px;
+            border-radius: 2px;
+            border: 1px solid var(--border);
+            background: var(--bg-elevated);
+            color: var(--text-secondary);
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.15s;
+            flex-shrink: 0;
+            position: relative;
+            z-index: 10;
+            /* Prevent double-tap zoom on mobile */
+            touch-action: manipulation;
+        }
+
+        .volume-step-btn:hover {
+            border-color: #333;
+            color: var(--text-primary);
+            background: #222;
+        }
+
+        .volume-step-btn:active {
+            transform: scale(0.96);
+            background: #111;
+            border-color: var(--accent);
+        }
+
+        .volume-step-btn svg {
+            width: 18px;
+            height: 18px;
+            fill: currentColor;
+        }
+
+        .knob {
+            position: relative;
+            width: 200px;
+            height: 200px;
+            cursor: pointer;
+            touch-action: none;
+
+            /* Ring dimensions (percentage for radial-gradient) */
+            --ring-inner: 52;
+            --ring-outer: 78;
+        }
+
+        .knob-track {
+            position: absolute;
+            width: 100%;
+            height: 100%;
+            border-radius: 50%;
+            /* Gray background arc from 6 o'clock to 4 o'clock */
+            background: conic-gradient(
+                from 180deg,
+                var(--bg-elevated) 0deg,
+                var(--bg-elevated) 300deg,
+                transparent 300deg
+            );
+            -webkit-mask: radial-gradient(transparent 52%, black 53%, black 78%, transparent 79%);
+            mask: radial-gradient(transparent 52%, black 53%, black 78%, transparent 79%);
+        }
+
+        .knob-fill {
+            position: absolute;
+            width: 100%;
+            height: 100%;
+            border-radius: 50%;
+            -webkit-mask: radial-gradient(transparent 52%, black 53%, black 78%, transparent 79%);
+            mask: radial-gradient(transparent 52%, black 53%, black 78%, transparent 79%);
+            /* Background set dynamically via JS */
+        }
+
+        .knob-pointer {
+            position: absolute;
+            width: 100%;
+            height: 100%;
+            transition: transform 0.1s ease-out;
+        }
+
+        .knob-pointer::after {
+            content: '';
+            position: absolute;
+            top: 2px;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 3px;
+            height: 44px;
+            background: var(--pointer-color, #5c6bc0);
+            border-radius: 1.5px;
+            box-shadow: 0 0 8px rgba(92, 107, 192, 0.3);
+        }
+
+        .knob-center {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: 120px;
+            height: 120px;
+            background: radial-gradient(circle at 50% 45%, #1a1a1a, #0e0e0e);
+            border: 1px solid var(--border);
+            border-radius: 50%;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            box-shadow: var(--shadow-inset), 0 0 0 1px rgba(255,255,255,0.02);
+            user-select: none;
+            -webkit-user-select: none;
+        }
+
+        .knob-value {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 2.2rem;
+            font-weight: 300;
+            line-height: 1;
+            font-variant-numeric: tabular-nums;
+            margin-left: -0.35em;  /* Offset minus sign to visually center digits */
+            color: var(--text-primary);
+            letter-spacing: -0.02em;
+        }
+
+        /* Smaller minus sign for dB display */
+        .knob-value .minus {
+            font-size: 0.7em;
+            font-weight: 200;
+            margin-right: 1px;
+        }
+
+        .knob-label {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.65rem;
+            color: var(--text-dim);
+            letter-spacing: 3px;
+            text-transform: uppercase;
+            margin-top: 6px;
+        }
+
+        .knob-min, .knob-max {
+            position: absolute;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.6rem;
+            color: var(--text-dim);
+            user-select: none;
+            -webkit-user-select: none;
+            letter-spacing: 0.5px;
+        }
+
+        .knob-min {
+            bottom: -4px;
+            left: 50%;
+            transform: translateX(-50%);
+        }
+
+        .knob-max {
+            top: 50%;
+            right: -8px;
+            transform: translateY(-50%);
+        }
+
+        .knob.dragging .knob-pointer,
+        .knob.dragging .track-fill {
+            transition: none;
+        }
+
+        .knob.locked {
+            pointer-events: none;
+        }
+
+        /* Outer ring glow — subtle machined edge */
+        .knob::before {
+            content: '';
+            position: absolute;
+            top: -1px;
+            left: -1px;
+            right: -1px;
+            bottom: -1px;
+            border-radius: 50%;
+            border: 1px solid rgba(255,255,255,0.03);
+            pointer-events: none;
+        }
+
+        /* Control Buttons */
+        .controls {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 8px;
+        }
+
+        .control-btn {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 3px;
+            padding: 20px 12px;
+            color: var(--text-secondary);
+            font-family: 'Inter', sans-serif;
+            font-size: 0.65rem;
+            font-weight: 500;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+            cursor: pointer;
+            transition: all 0.15s;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 10px;
+            /* Prevent double-tap zoom on mobile */
+            touch-action: manipulation;
+            user-select: none;
+            -webkit-user-select: none;
+        }
+
+        .control-btn:hover {
+            border-color: #2a2a2a;
+            background: #111;
+        }
+
+        .control-btn:active {
+            transform: scale(0.97);
+            border-color: #333;
+        }
+
+        .control-btn.active {
+            background: var(--accent);
+            border-color: var(--accent);
+            color: #080808;
+        }
+
+        .control-btn.active.mute {
+            background: var(--warning);
+            border-color: var(--warning);
+            color: #080808;
+        }
+
+        .control-btn.active.power {
+            background: var(--success);
+            border-color: var(--success);
+            color: #080808;
+        }
+
+        .control-btn svg {
+            width: 24px;
+            height: 24px;
+            fill: currentColor;
+            opacity: 0.8;
+        }
+
+        .control-btn.active svg {
+            opacity: 1;
+        }
+
+        /* Connection status footer */
+        footer {
+            margin-top: 40px;
+            text-align: center;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.6rem;
+            color: var(--text-dim);
+            letter-spacing: 2px;
+            text-transform: uppercase;
+        }
+
+        /* Disabled state when disconnected */
+        .disabled {
+            opacity: 0.5;
+            pointer-events: none;
+        }
+
+        /* Power transitioning state */
+        .power-transitioning {
+            position: relative;
+        }
+
+        .power-transitioning::after {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(8, 8, 8, 0.75);
+            border-radius: inherit;
+            z-index: 10;
+        }
+
+        .power-transitioning .settling-overlay {
+            display: flex !important;
+        }
+
+        .settling-overlay {
+            display: none;
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(8, 8, 8, 0.85);
+            border-radius: inherit;
+            z-index: 11;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            color: var(--text-primary);
+        }
+
+        .settling-spinner {
+            width: 32px;
+            height: 32px;
+            border: 1px solid var(--border);
+            border-top-color: var(--accent);
+            border-radius: 50%;
+            animation: spin 1.2s linear infinite;
+            margin-bottom: 14px;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        .settling-text {
+            font-family: 'Inter', sans-serif;
+            font-size: 0.7rem;
+            color: var(--text-secondary);
+            text-align: center;
+            letter-spacing: 1px;
+            text-transform: uppercase;
+        }
+
+        .settling-countdown {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 1.4rem;
+            font-weight: 300;
+            color: var(--accent);
+            margin-top: 6px;
+            letter-spacing: 1px;
+        }
+
+        /* Power button transitioning state (pulsing accent) */
+        .control-btn.power.transitioning {
+            background: var(--accent-dim);
+            border-color: var(--accent-dim);
+            color: #fff;
+            animation: pulse 1s ease-in-out infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.6; }
+        }
+
+        /* Power button cooldown state */
+        .control-btn.power.cooldown {
+            pointer-events: none;
+            cursor: not-allowed;
+        }
+
+        .control-btn.power.cooldown.active {
+            background: #1a6b64;
+            border-color: #1a6b64;
+            color: rgba(0, 0, 0, 0.6);
+            opacity: 0.7;
+        }
+
+        .control-btn.power.cooldown:not(.active) {
+            background: #111;
+            border-color: rgba(231, 111, 81, 0.3);
+            color: rgba(255, 255, 255, 0.3);
+            opacity: 0.8;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1 onclick="refreshState()" title="Tap to refresh"><span class="status-dot" id="statusDot"></span>GLM Control</h1>
+        </header>
+
+        <div class="separator"></div>
+
+        <div class="knob-container disabled" id="knobContainer">
+            <div class="settling-overlay">
+                <div class="settling-spinner"></div>
+                <div class="settling-text">Power settling</div>
+                <div class="settling-countdown" id="settlingCountdown">2.0s</div>
+            </div>
+            <div class="knob-row">
+                <button class="volume-step-btn" onclick="adjustVolume(-1)" aria-label="Volume down">
+                    <svg viewBox="0 0 24 24"><path d="M19 13H5v-2h14v2z"/></svg>
+                </button>
+                <div class="knob" id="volumeKnob">
+                    <div class="knob-track"></div>
+                    <div class="knob-fill" id="knobFill"></div>
+                    <div class="knob-pointer" id="knobPointer"></div>
+                    <div class="knob-center">
+                        <div class="knob-value" id="volumeValue">--</div>
+                        <div class="knob-label">dB</div>
+                    </div>
+                    <span class="knob-min">-127</span>
+                    <span class="knob-max">0</span>
+                </div>
+                <button class="volume-step-btn" onclick="adjustVolume(1)" aria-label="Volume up">
+                    <svg viewBox="0 0 24 24"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
+                </button>
+            </div>
+        </div>
+
+        <div class="controls disabled">
+            <button class="control-btn mute" id="muteBtn" onclick="toggleMute()">
+                <svg viewBox="0 0 24 24"><path d="M16.5 12c0-1.77-1.02-3.29-2.5-4.03v2.21l2.45 2.45c.03-.2.05-.41.05-.63zm2.5 0c0 .94-.2 1.82-.54 2.64l1.51 1.51C20.63 14.91 21 13.5 21 12c0-4.28-2.99-7.86-7-8.77v2.06c2.89.86 5 3.54 5 6.71zM4.27 3L3 4.27 7.73 9H3v6h4l5 5v-6.73l4.25 4.25c-.67.52-1.42.93-2.25 1.18v2.06c1.38-.31 2.63-.95 3.69-1.81L19.73 21 21 19.73l-9-9L4.27 3zM12 4L9.91 6.09 12 8.18V4z"/></svg>
+                Mute
+            </button>
+            <button class="control-btn dim" id="dimBtn" onclick="toggleDim()">
+                <svg viewBox="0 0 24 24"><path d="M12 3c-4.97 0-9 4.03-9 9s4.03 9 9 9 9-4.03 9-9c0-.46-.04-.92-.1-1.36-.98 1.37-2.58 2.26-4.4 2.26-2.98 0-5.4-2.42-5.4-5.4 0-1.81.89-3.42 2.26-4.4-.44-.06-.9-.1-1.36-.1z"/></svg>
+                Dim
+            </button>
+            <button class="control-btn power" id="powerBtn" onclick="togglePower()">
+                <svg viewBox="0 0 24 24"><path d="M13 3h-2v10h2V3zm4.83 2.17l-1.42 1.42C17.99 7.86 19 9.81 19 12c0 3.87-3.13 7-7 7s-7-3.13-7-7c0-2.19 1.01-4.14 2.58-5.42L6.17 5.17C4.23 6.82 3 9.26 3 12c0 4.97 4.03 9 9 9s9-4.03 9-9c0-2.74-1.23-5.18-3.17-6.83z"/></svg>
+                Power
+            </button>
+        </div>
+
+        <footer id="footer">Connecting...</footer>
+    </div>
+
+    <script>
+        const API_BASE = window.location.origin;
+        const WS_URL = `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/ws/state`;
+
+        let ws = null;
+        let reconnectTimeout = null;
+        let isDragging = false;
+        let currentVolume = 0;
+
+        // Knob constants
+        const MIN_ANGLE = -180;  // 6 o'clock position (degrees from 12 o'clock)
+        const MAX_ANGLE = 120;   // 4 o'clock position
+        const ANGLE_RANGE = MAX_ANGLE - MIN_ANGLE;  // 300 degrees
+        const MIN_VALUE = 0;
+        const MAX_VALUE = 127;
+
+        // Non-linear volume mapping breakpoints
+        // Volume 0-70 → 6 to 8 o'clock (60°), angles -180 to -120
+        // Volume 70-90 → 8 to 12 o'clock (120°), angles -120 to 0
+        // Volume 90-127 → 12 to 4 o'clock (120°), angles 0 to 120
+        const BREAK1_VOL = 70;
+        const BREAK2_VOL = 90;
+        const BREAK1_ANGLE = -120;  // 8 o'clock
+        const BREAK2_ANGLE = 0;     // 12 o'clock
+
+        // Knob geometry (for touch area validation)
+        // Note: CSS radial-gradient % are relative to farthest-corner (~141px for 200px square)
+        // so 78% in CSS = ~110px, but clipped at container edge (100px)
+        const KNOB_CENTER_RADIUS = 60;   // r1: center circle radius (px)
+        const KNOB_RING_OUTER = 100;     // r3: visible ring outer edge (container edge)
+
+        // Touch area tolerances - expand the clickable/draggable area beyond visible ring
+        // INNER: how many px INSIDE the center circle edge (r1) to accept
+        //        Higher value = accepts touches closer to center (over the dB display)
+        //        Touch area inner edge = KNOB_CENTER_RADIUS - KNOB_TOUCH_INNER_TOLERANCE
+        const KNOB_TOUCH_INNER_TOLERANCE = 25;  // accepts from 35px (60-25) from center
+
+        // OUTER: how many px OUTSIDE the ring outer edge (r3) to accept
+        //        Higher value = accepts touches beyond the visible ring
+        //        Touch area outer edge = KNOB_RING_OUTER + KNOB_TOUCH_OUTER_TOLERANCE
+        const KNOB_TOUCH_OUTER_TOLERANCE = 10;  // accepts up to 110px (100+10) from center
+
+        // Gradient colors
+        const COLOR_NAVY = '#1a237e';    // 0-70
+        const COLOR_PURPLE = '#bb86fc';  // 70-90
+        const COLOR_RED = '#ff1744';     // 90-127 (vibrant red)
+
+        // Brighter pointer colors (2 shades lighter)
+        const POINTER_NAVY = '#5c6bc0';
+        const POINTER_PURPLE = '#e1c4ff';
+        const POINTER_RED = '#ff8a80';
+
+        function getPointerColor(volume) {
+            if (volume < BREAK1_VOL) return POINTER_NAVY;
+            if (volume < BREAK2_VOL) return POINTER_PURPLE;
+            return POINTER_RED;
+        }
+
+        // DOM elements
+        const statusDot = document.getElementById('statusDot');
+        const volumeValue = document.getElementById('volumeValue');
+        const volumeKnob = document.getElementById('volumeKnob');
+        const knobPointer = document.getElementById('knobPointer');
+        const knobFill = document.getElementById('knobFill');
+        const knobContainer = document.getElementById('knobContainer');
+        const settlingCountdown = document.getElementById('settlingCountdown');
+        const muteBtn = document.getElementById('muteBtn');
+        const dimBtn = document.getElementById('dimBtn');
+        const powerBtn = document.getElementById('powerBtn');
+        const footer = document.getElementById('footer');
+
+        // Power transitioning and cooldown state
+        let isPowerTransitioning = false;
+        let isPowerCooldown = false;
+        let cooldownRefreshTimer = null;
+
+        // Convert volume (0-127) to angle using piecewise linear mapping
+        function volumeToAngle(volume) {
+            if (volume <= BREAK1_VOL) {
+                // 0-70 → -180 to -120 (60 degrees)
+                return MIN_ANGLE + (volume / BREAK1_VOL) * (BREAK1_ANGLE - MIN_ANGLE);
+            } else if (volume <= BREAK2_VOL) {
+                // 70-100 → -120 to 60 (180 degrees)
+                return BREAK1_ANGLE + ((volume - BREAK1_VOL) / (BREAK2_VOL - BREAK1_VOL)) * (BREAK2_ANGLE - BREAK1_ANGLE);
+            } else {
+                // 100-127 → 60 to 120 (60 degrees)
+                return BREAK2_ANGLE + ((volume - BREAK2_VOL) / (MAX_VALUE - BREAK2_VOL)) * (MAX_ANGLE - BREAK2_ANGLE);
+            }
+        }
+
+        // Convert angle to volume using inverse piecewise linear mapping
+        // Includes dead zone handling to prevent wraparound
+        // Returns null if in dead zone (caller should keep current value)
+        function angleToVolume(angle) {
+            // Dead zone is between MAX_ANGLE (120°, 4 o'clock) and MIN_ANGLE (-180°, 6 o'clock)
+            // That's 120° to 180° - entire zone is "dead", no volume changes
+            if (angle > MAX_ANGLE && angle <= 180) {
+                return null;  // In dead zone - keep current value
+            }
+
+            const clampedAngle = Math.max(MIN_ANGLE, Math.min(MAX_ANGLE, angle));
+
+            if (clampedAngle <= BREAK1_ANGLE) {
+                // -180 to -120 → 0-70
+                return Math.round((clampedAngle - MIN_ANGLE) / (BREAK1_ANGLE - MIN_ANGLE) * BREAK1_VOL);
+            } else if (clampedAngle <= BREAK2_ANGLE) {
+                // -120 to 60 → 70-100
+                return Math.round(BREAK1_VOL + (clampedAngle - BREAK1_ANGLE) / (BREAK2_ANGLE - BREAK1_ANGLE) * (BREAK2_VOL - BREAK1_VOL));
+            } else {
+                // 60 to 120 → 100-127
+                return Math.round(BREAK2_VOL + (clampedAngle - BREAK2_ANGLE) / (MAX_ANGLE - BREAK2_ANGLE) * (MAX_VALUE - BREAK2_VOL));
+            }
+        }
+
+        // Color stops for gradient (in degrees from start at 6 o'clock)
+        // Navy: 0-60° (6-8 o'clock), transition 45-75°
+        // Purple: 60-180° (8-12 o'clock), transition 165-195°
+        // Red: 180-300° (12-4 o'clock)
+        const GRAD_TRANSITION = 15;  // degrees for color transition
+
+        // Build conic gradient string up to a given angle
+        function buildFillGradient(fillAngle) {
+            if (fillAngle <= 0) {
+                return 'transparent';
+            }
+
+            // Color zones (in degrees from 6 o'clock)
+            const navyEnd = 60;      // 8 o'clock
+            const purpleStart = 60;
+            const purpleEnd = 180;   // 12 o'clock
+            const redStart = 180;
+
+            let stops = [];
+            stops.push(`${COLOR_NAVY} 0deg`);
+
+            if (fillAngle <= navyEnd - GRAD_TRANSITION) {
+                // Only in navy zone
+                stops.push(`${COLOR_NAVY} ${fillAngle}deg`);
+                stops.push(`transparent ${fillAngle}deg`);
+            } else if (fillAngle <= navyEnd + GRAD_TRANSITION) {
+                // In navy-to-purple transition
+                stops.push(`${COLOR_NAVY} ${navyEnd - GRAD_TRANSITION}deg`);
+                stops.push(`${COLOR_PURPLE} ${fillAngle}deg`);
+                stops.push(`transparent ${fillAngle}deg`);
+            } else if (fillAngle <= purpleEnd - GRAD_TRANSITION) {
+                // In purple zone
+                stops.push(`${COLOR_NAVY} ${navyEnd - GRAD_TRANSITION}deg`);
+                stops.push(`${COLOR_PURPLE} ${navyEnd + GRAD_TRANSITION}deg`);
+                stops.push(`${COLOR_PURPLE} ${fillAngle}deg`);
+                stops.push(`transparent ${fillAngle}deg`);
+            } else if (fillAngle <= purpleEnd + GRAD_TRANSITION) {
+                // In purple-to-red transition
+                stops.push(`${COLOR_NAVY} ${navyEnd - GRAD_TRANSITION}deg`);
+                stops.push(`${COLOR_PURPLE} ${navyEnd + GRAD_TRANSITION}deg`);
+                stops.push(`${COLOR_PURPLE} ${purpleEnd - GRAD_TRANSITION}deg`);
+                stops.push(`${COLOR_RED} ${fillAngle}deg`);
+                stops.push(`transparent ${fillAngle}deg`);
+            } else {
+                // In red zone
+                stops.push(`${COLOR_NAVY} ${navyEnd - GRAD_TRANSITION}deg`);
+                stops.push(`${COLOR_PURPLE} ${navyEnd + GRAD_TRANSITION}deg`);
+                stops.push(`${COLOR_PURPLE} ${purpleEnd - GRAD_TRANSITION}deg`);
+                stops.push(`${COLOR_RED} ${purpleEnd + GRAD_TRANSITION}deg`);
+                stops.push(`${COLOR_RED} ${fillAngle}deg`);
+                stops.push(`transparent ${fillAngle}deg`);
+            }
+
+            return `conic-gradient(from 180deg, ${stops.join(', ')})`;
+        }
+
+        // Update knob visual
+        function updateKnobVisual(volume, volumeDbOverride) {
+            const angle = volumeToAngle(volume);
+            knobPointer.style.transform = `rotate(${angle}deg)`;
+
+            // Update pointer color based on volume zone
+            knobPointer.style.setProperty('--pointer-color', getPointerColor(volume));
+
+            // Calculate fill angle (0-300 degrees from 6 o'clock)
+            const fillAngle = angle - MIN_ANGLE;
+
+            // Update fill with dynamic gradient
+            knobFill.style.background = buildFillGradient(fillAngle);
+
+            // Display volume in dB (prefer server value, fall back to local calc)
+            const volumeDb = volumeDbOverride !== undefined ? volumeDbOverride : (volume - 127);
+            if (volumeDb === 0) {
+                volumeValue.innerHTML = '0';
+            } else {
+                // Use smaller minus sign for negative values
+                volumeValue.innerHTML = `<span class="minus">−</span>${Math.abs(volumeDb)}`;
+            }
+        }
+
+        // Update UI with state
+        function updateUI(state) {
+            // Handle power transitioning state (settling period - spinner visible)
+            isPowerTransitioning = state.power_transitioning || false;
+            knobContainer.classList.toggle('power-transitioning', isPowerTransitioning);
+            powerBtn.classList.toggle('transitioning', isPowerTransitioning);
+
+            // Handle power cooldown state (after settling - button dimmed)
+            const wasCooldown = isPowerCooldown;
+            isPowerCooldown = state.power_cooldown || false;
+            powerBtn.classList.toggle('cooldown', isPowerCooldown);
+
+            // Schedule periodic refresh during cooldown to detect when it ends
+            if (isPowerCooldown && !cooldownRefreshTimer) {
+                cooldownRefreshTimer = setInterval(() => {
+                    refreshState();
+                }, 500);  // Check every 500ms
+            } else if (!isPowerCooldown && cooldownRefreshTimer) {
+                clearInterval(cooldownRefreshTimer);
+                cooldownRefreshTimer = null;
+            }
+
+            if (isPowerTransitioning) {
+                // Update countdown
+                const remaining = state.power_settling_remaining || 0;
+                settlingCountdown.textContent = `${remaining.toFixed(1)}s`;
+            }
+
+            if (!isDragging && !isPowerTransitioning) {
+                const now = Date.now();
+                const recentlyAdjusted = (now - volumeAccel.lastTime) < volumeAccel.adjustWindow;
+
+                // During rapid button presses, reject updates that go opposite direction
+                if (recentlyAdjusted && volumeAccel.lastDirection !== 0) {
+                    const goingUp = state.volume > currentVolume;
+                    const goingDown = state.volume < currentVolume;
+                    const wantUp = volumeAccel.lastDirection > 0;
+                    const wantDown = volumeAccel.lastDirection < 0;
+
+                    // Reject if update goes opposite to button direction
+                    if ((wantDown && goingUp) || (wantUp && goingDown)) {
+                        return; // Skip this stale update
+                    }
+                }
+
+                currentVolume = state.volume;
+                updateKnobVisual(state.volume, state.volume_db);
+            }
+
+            muteBtn.classList.toggle('active', state.mute);
+            dimBtn.classList.toggle('active', state.dim);
+            // Show power as active when ON (but not during transitioning)
+            powerBtn.classList.toggle('active', state.power && !isPowerTransitioning);
+        }
+
+        // Check if touch/click is within the allowed ring area
+        function isWithinKnobRing(e) {
+            const rect = volumeKnob.getBoundingClientRect();
+            const centerX = rect.left + rect.width / 2;
+            const centerY = rect.top + rect.height / 2;
+
+            // Scale factor: actual rendered size vs CSS size (200px)
+            const scale = rect.width / 200;
+
+            const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+            const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+
+            const deltaX = clientX - centerX;
+            const deltaY = clientY - centerY;
+            const distance = Math.sqrt(deltaX * deltaX + deltaY * deltaY);
+
+            // Scale the thresholds to match actual rendered size
+            const minRadius = (KNOB_CENTER_RADIUS - KNOB_TOUCH_INNER_TOLERANCE) * scale;
+            const maxRadius = (KNOB_RING_OUTER + KNOB_TOUCH_OUTER_TOLERANCE) * scale;
+
+            return distance >= minRadius && distance <= maxRadius;
+        }
+
+        // Get angle from pointer position relative to knob center
+        function getAngleFromEvent(e) {
+            const rect = volumeKnob.getBoundingClientRect();
+            const centerX = rect.left + rect.width / 2;
+            const centerY = rect.top + rect.height / 2;
+
+            const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+            const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+
+            const deltaX = clientX - centerX;
+            const deltaY = clientY - centerY;
+
+            // atan2 gives angle from positive X axis, we want from negative Y (top)
+            let angle = Math.atan2(deltaX, -deltaY) * (180 / Math.PI);
+
+            return angle;
+        }
+
+        // Knob drag handlers
+        let dragTimeout = null;
+
+        function startDrag(e) {
+            // Ignore accidental knob touch during rapid button presses
+            const now = Date.now();
+            const recentlyAdjusted = (now - volumeAccel.lastTime) < volumeAccel.adjustWindow;
+            if (recentlyAdjusted) {
+                return;
+            }
+
+            // Only allow drag to start within the ring area (not center or outside)
+            if (!isWithinKnobRing(e)) {
+                return;
+            }
+
+            e.preventDefault();
+            isDragging = true;
+            volumeKnob.classList.add('dragging');
+
+            // Safety timeout - auto-release after 5 seconds of no activity
+            clearTimeout(dragTimeout);
+            dragTimeout = setTimeout(() => {
+                if (isDragging) {
+                    console.warn('Drag timeout - auto-releasing');
+                    endDrag();
+                }
+            }, 5000);
+
+            handleDrag(e);
+        }
+
+        function handleDrag(e) {
+            if (!isDragging) return;
+            e.preventDefault();
+
+            // Reset safety timeout on activity
+            clearTimeout(dragTimeout);
+            dragTimeout = setTimeout(() => {
+                if (isDragging) {
+                    console.warn('Drag timeout - auto-releasing');
+                    endDrag();
+                }
+            }, 5000);
+
+            // Option B: Pause when outside ring, resume when back inside
+            if (!isWithinKnobRing(e)) return;
+
+            const angle = getAngleFromEvent(e);
+            const volume = angleToVolume(angle);
+
+            // If in dead zone, volume is null - keep current value
+            if (volume === null) return;
+
+            currentVolume = volume;
+            updateKnobVisual(volume);
+        }
+
+        async function endDrag(e) {
+            if (!isDragging) return;
+            clearTimeout(dragTimeout);
+            isDragging = false;
+            volumeKnob.classList.remove('dragging');
+            await setVolume(currentVolume);
+            // Backend will force state notification if GLM clips the value
+        }
+
+        async function refreshState() {
+            try {
+                const response = await fetch(`${API_BASE}/api/state`);
+                const state = await response.json();
+                updateUI(state);
+            } catch (e) {
+                console.error('Failed to refresh state:', e);
+            }
+        }
+
+        // Mouse events
+        volumeKnob.addEventListener('mousedown', startDrag);
+        document.addEventListener('mousemove', handleDrag);
+        document.addEventListener('mouseup', endDrag);
+
+        // Touch events
+        volumeKnob.addEventListener('touchstart', startDrag, { passive: false });
+        document.addEventListener('touchmove', handleDrag, { passive: false });
+        document.addEventListener('touchend', endDrag);
+        document.addEventListener('touchcancel', endDrag);
+
+        // Additional safety: release on window blur
+        window.addEventListener('blur', endDrag);
+
+        // WebSocket connection
+        function connectWS() {
+            if (ws && ws.readyState === WebSocket.OPEN) return;
+
+            ws = new WebSocket(WS_URL);
+
+            ws.onopen = () => {
+                statusDot.classList.add('connected');
+                footer.textContent = 'Connected';
+                // Enable controls
+                document.querySelector('.knob-container').classList.remove('disabled');
+                document.querySelector('.controls').classList.remove('disabled');
+                if (reconnectTimeout) {
+                    clearTimeout(reconnectTimeout);
+                    reconnectTimeout = null;
+                }
+            };
+
+            ws.onmessage = (event) => {
+                const state = JSON.parse(event.data);
+                updateUI(state);
+            };
+
+            ws.onclose = () => {
+                statusDot.classList.remove('connected');
+                footer.textContent = 'Disconnected - reconnecting...';
+                // Disable controls
+                document.querySelector('.knob-container').classList.add('disabled');
+                document.querySelector('.controls').classList.add('disabled');
+                reconnectTimeout = setTimeout(connectWS, 2000);
+            };
+
+            ws.onerror = () => {
+                ws.close();
+            };
+        }
+
+        // API calls
+        async function setVolume(value) {
+            try {
+                await fetch(`${API_BASE}/api/volume`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ value: parseInt(value) })
+                });
+            } catch (e) {
+                console.error('Failed to set volume:', e);
+            }
+        }
+
+        // Volume button acceleration state
+        const volumeAccel = {
+            lastTime: 0,
+            lastDirection: 0,  // -1 or +1
+            step: 1,
+            maxStep: 3,
+            tapWindow: 250,   // ms - time window for rapid taps
+            adjustWindow: 500, // ms - lock knob and reject opposite-direction updates
+            lockTimeout: null
+        };
+
+        function adjustVolume(direction) {
+            // Block during power transitioning
+            if (isPowerTransitioning) {
+                console.log('Blocked: power transitioning');
+                return;
+            }
+
+            // Cancel any ongoing knob drag to prevent stale value being sent
+            if (isDragging) {
+                isDragging = false;
+                clearTimeout(dragTimeout);
+                volumeKnob.classList.remove('dragging');
+            }
+
+            // Lock knob to prevent accidental clicks during rapid button presses
+            volumeKnob.classList.add('locked');
+            clearTimeout(volumeAccel.lockTimeout);
+            volumeAccel.lockTimeout = setTimeout(() => {
+                volumeKnob.classList.remove('locked');
+            }, volumeAccel.adjustWindow);
+
+            const now = Date.now();
+            const timeSinceLast = now - volumeAccel.lastTime;
+            const sameDirection = (direction > 0) === (volumeAccel.lastDirection > 0);
+
+            if (timeSinceLast < volumeAccel.tapWindow && sameDirection) {
+                // Rapid tap in same direction - accelerate
+                volumeAccel.step = Math.min(volumeAccel.step + 1, volumeAccel.maxStep);
+            } else {
+                // Slow tap or direction change - reset
+                volumeAccel.step = 1;
+            }
+
+            volumeAccel.lastTime = now;
+            volumeAccel.lastDirection = direction;
+
+            const delta = direction > 0 ? volumeAccel.step : -volumeAccel.step;
+
+            // Fire and forget - don't await, let WebSocket update the UI
+            fetch(`${API_BASE}/api/volume/adjust`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ delta: delta })
+            }).catch(e => console.error('Failed to adjust volume:', e));
+        }
+
+        async function toggleMute() {
+            if (isPowerTransitioning) {
+                console.log('Blocked: power transitioning');
+                return;
+            }
+            try {
+                const response = await fetch(`${API_BASE}/api/mute`, { method: 'POST' });
+                if (response.status === 503) {
+                    console.log('Server busy: power settling');
+                }
+            } catch (e) {
+                console.error('Failed to toggle mute:', e);
+            }
+        }
+
+        async function toggleDim() {
+            if (isPowerTransitioning) {
+                console.log('Blocked: power transitioning');
+                return;
+            }
+            try {
+                const response = await fetch(`${API_BASE}/api/dim`, { method: 'POST' });
+                if (response.status === 503) {
+                    console.log('Server busy: power settling');
+                }
+            } catch (e) {
+                console.error('Failed to toggle dim:', e);
+            }
+        }
+
+        async function togglePower() {
+            if (isPowerTransitioning) {
+                console.log('Blocked: power already transitioning');
+                return;
+            }
+            if (isPowerCooldown) {
+                console.log('Blocked: power cooldown active');
+                return;
+            }
+            try {
+                const response = await fetch(`${API_BASE}/api/power`, { method: 'POST' });
+                if (response.status === 503) {
+                    const data = await response.json();
+                    console.log(`Power blocked: ${data.error} (${data.retry_after}s)`);
+                }
+            } catch (e) {
+                console.error('Failed to toggle power:', e);
+            }
+        }
+
+        // Initialize knob at 0
+        updateKnobVisual(0);
+
+        // Start connection
+        connectWS();
+    </script>
+</body>
+</html>
