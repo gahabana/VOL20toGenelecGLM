@@ -661,7 +661,7 @@
         }
 
         // Update knob visual
-        function updateKnobVisual(volume) {
+        function updateKnobVisual(volume, volumeDbOverride) {
             const angle = volumeToAngle(volume);
             knobPointer.style.transform = `rotate(${angle}deg)`;
 
@@ -674,8 +674,8 @@
             // Update fill with dynamic gradient
             knobFill.style.background = buildFillGradient(fillAngle);
 
-            // Display volume in dB (0-127 → -127 to 0 dB)
-            const volumeDb = volume - 127;
+            // Display volume in dB (prefer server value, fall back to local calc)
+            const volumeDb = volumeDbOverride !== undefined ? volumeDbOverride : (volume - 127);
             if (volumeDb === 0) {
                 volumeValue.innerHTML = '0';
             } else {
@@ -730,7 +730,7 @@
                 }
 
                 currentVolume = state.volume;
-                updateKnobVisual(state.volume);
+                updateKnobVisual(state.volume, state.volume_db);
             }
 
             muteBtn.classList.toggle('active', state.mute);

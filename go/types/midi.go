@@ -1,5 +1,9 @@
 package types
 
+// VolumeDBOffset is the offset between MIDI value (0-127) and dB (-127..0).
+// MIDI 0 = -127 dB, MIDI 127 = 0 dB.
+const VolumeDBOffset = 127
+
 // GLM MIDI CC numbers (from GLM MIDI Settings).
 const (
 	CCVolumeAbs = 20 // Absolute volume (0-127)

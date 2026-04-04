@@ -16,6 +16,7 @@ import (
 // APIState is the JSON response returned by all state endpoints.
 type APIState struct {
 	Volume                 int     `json:"volume"`
+	VolumeDB               int     `json:"volume_db"`
 	Mute                   bool    `json:"mute"`
 	Dim                    bool    `json:"dim"`
 	Power                  bool    `json:"power"`
@@ -27,26 +28,29 @@ type APIState struct {
 
 // Server handles REST API requests for GLM control.
 type Server struct {
-	ctrl    *controller.Controller
-	actions chan<- types.Action
-	traceID *types.TraceIDGenerator
-	version string
-	webDir  string
-	log     *slog.Logger
-	wsHub   *WSHub
+	ctrl       *controller.Controller
+	actions    chan<- types.Action
+	traceID    *types.TraceIDGenerator
+	version    string
+	webDir     string
+	corsOrigin string
+	log        *slog.Logger
+	wsHub      *WSHub
 }
 
 // NewServer creates a new REST API server.
 // webDir is the path to the web/ directory containing index.html and favicon.svg.
-func NewServer(ctrl *controller.Controller, actions chan<- types.Action, version, webDir string, log *slog.Logger) *Server {
+// corsOrigin sets the Access-Control-Allow-Origin header ("*" = all, "" = disabled).
+func NewServer(ctrl *controller.Controller, actions chan<- types.Action, version, webDir, corsOrigin string, log *slog.Logger) *Server {
 	return &Server{
-		ctrl:    ctrl,
-		actions: actions,
-		traceID: types.NewTraceIDGenerator(),
-		version: version,
-		webDir:  webDir,
-		log:     log,
-		wsHub:   NewWSHub(log),
+		ctrl:       ctrl,
+		actions:    actions,
+		traceID:    types.NewTraceIDGenerator(),
+		version:    version,
+		webDir:     webDir,
+		corsOrigin: corsOrigin,
+		log:        log,
+		wsHub:      NewWSHub(log),
 	}
 }
 
@@ -63,7 +67,26 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /ws/state", s.handleWebSocket)
 	mux.HandleFunc("GET /favicon.svg", s.handleFavicon)
 	mux.HandleFunc("GET /", s.handleIndex)
-	return mux
+	return s.corsMiddleware(mux)
+}
+
+// corsMiddleware adds CORS headers when corsOrigin is configured.
+func (s *Server) corsMiddleware(next http.Handler) http.Handler {
+	if s.corsOrigin == "" {
+		return next
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", s.corsOrigin)
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+
+		next.ServeHTTP(w, r)
+	})
 }
 
 // BroadcastState sends the current state to all WebSocket clients.
@@ -78,10 +101,11 @@ func (s *Server) getAPIState() APIState {
 	baseState := s.ctrl.GetState()
 
 	apiState := APIState{
-		Volume: baseState.Volume,
-		Mute:   baseState.Mute,
-		Dim:    baseState.Dim,
-		Power:  baseState.Power,
+		Volume:   baseState.Volume,
+		VolumeDB: baseState.Volume - types.VolumeDBOffset,
+		Mute:     baseState.Mute,
+		Dim:      baseState.Dim,
+		Power:    baseState.Power,
 	}
 
 	// Check power settling (blocks all commands)
@@ -144,18 +168,30 @@ func (s *Server) handleGetState(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleSetVolume(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Value *int `json:"value"`
+		DB    *int `json:"db"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeJSONError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
 		return
 	}
-	if body.Value == nil {
-		writeJSONError(w, http.StatusBadRequest, "missing required field: value")
+
+	var midiValue int
+	switch {
+	case body.Value != nil && body.DB != nil:
+		writeJSONError(w, http.StatusBadRequest, "provide value or db, not both")
+		return
+	case body.Value != nil:
+		midiValue = *body.Value
+	case body.DB != nil:
+		midiValue = *body.DB + types.VolumeDBOffset
+	default:
+		writeJSONError(w, http.StatusBadRequest, "missing required field: value or db")
 		return
 	}
-	if *body.Value < 0 || *body.Value > 127 {
+
+	if midiValue < 0 || midiValue > 127 {
 		writeJSONError(w, http.StatusBadRequest,
-			fmt.Sprintf("volume must be 0-127, got %d", *body.Value))
+			fmt.Sprintf("volume must be 0-127 (or db -127..0), resolved to %d", midiValue))
 		return
 	}
 
@@ -165,7 +201,7 @@ func (s *Server) handleSetVolume(w http.ResponseWriter, r *http.Request) {
 
 	action := types.Action{
 		Kind:      types.KindSetVolume,
-		Value:     *body.Value,
+		Value:     midiValue,
 		Source:    "api",
 		TraceID:   s.traceID.Next("api"),
 		Timestamp: time.Now(),
@@ -328,7 +364,7 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 }
 
 // sendAction attempts a non-blocking send on the actions channel and writes
-// the current state as the response.
+// the current state (with trace_id) as the response.
 func (s *Server) sendAction(w http.ResponseWriter, action types.Action) {
 	select {
 	case s.actions <- action:
@@ -343,7 +379,14 @@ func (s *Server) sendAction(w http.ResponseWriter, action types.Action) {
 			"traceID", action.TraceID,
 		)
 	}
-	writeJSON(w, http.StatusOK, s.getAPIState())
+	resp := struct {
+		APIState
+		TraceID string `json:"trace_id"`
+	}{
+		APIState: s.getAPIState(),
+		TraceID:  action.TraceID,
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 // writeJSON marshals data as JSON and writes it to the response.

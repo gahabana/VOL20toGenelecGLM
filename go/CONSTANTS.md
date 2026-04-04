@@ -76,6 +76,12 @@ All tunable constants that define the behavior of the Go binary. When adding new
 
 **GLM MIDI Settings prerequisite:** Power, Mute, and Dim must be set to **"Toggle"** (not "Momentary") for deterministic control. Toggle mode: value 0=OFF, value >0=ON (absolute switch, idempotent). Momentary mode: value >0=blind toggle, value 0=ignored. Corresponds to `powerMessageType=0` in `glmv5.cfg`.
 
+### Volume Conversion
+
+| Constant | Value | Purpose |
+|----------|-------|---------|
+| `VolumeDBOffset` | 127 | Offset between MIDI value (0-127) and dB (-127..0). Used by REST API and MQTT. |
+
 ### Power Pattern Detection
 
 | Constant | Value | Purpose |

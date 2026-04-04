@@ -28,7 +28,7 @@ import (
 	"vol20toglm/types"
 )
 
-const version = "0.11.0.3"
+const version = "0.12.0.0"
 
 func main() {
 	runtime.GOMAXPROCS(2)
@@ -81,7 +81,7 @@ func main() {
 	if _, err := os.Stat(filepath.Join(webDir, "index.html")); err != nil {
 		webDir = "" // No web UI found
 	}
-	apiServer := api.NewServer(ctrl, actions, version, webDir, log.With("component", "api"))
+	apiServer := api.NewServer(ctrl, actions, version, webDir, cfg.CORSOrigin, log.With("component", "api"))
 	ctrl.OnStateChange(func(old, new_ types.State) {
 		apiServer.BroadcastState()
 	})

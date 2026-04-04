@@ -159,7 +159,7 @@ func (c *Client) handleVolume(_ pahomqtt.Client, msg pahomqtt.Message) {
 	}
 	// Accept dB value (-127 to 0) or raw value (0-127)
 	if value <= 0 {
-		value = value + 127
+		value = value + types.VolumeDBOffset
 	}
 	if value < 0 {
 		value = 0
@@ -248,7 +248,7 @@ func (c *Client) publishState(state types.State) {
 
 	payload := statePayload{
 		Volume:   state.Volume,
-		VolumeDB: state.Volume - 127,
+		VolumeDB: state.Volume - types.VolumeDBOffset,
 		Mute:     boolToOnOff(state.Mute),
 		Dim:      boolToOnOff(state.Dim),
 		Power:    boolToOnOff(state.Power),

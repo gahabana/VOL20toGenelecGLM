@@ -36,7 +36,8 @@ type Config struct {
 	StartupVolume *int // nil = query current volume
 
 	// REST API
-	APIPort int
+	APIPort    int
+	CORSOrigin string // CORS Allow-Origin header value ("*" = all, "" = disabled)
 
 	// MQTT
 	MQTTBroker      string
@@ -93,6 +94,7 @@ func Parse(args []string) Config {
 	fs.IntVar(&startupVolume, "startup_volume", -1, "Startup volume (0-127), -1 to probe via Vol+/Vol- round-trip")
 
 	fs.IntVar(&cfg.APIPort, "api_port", 8080, "REST API port (0 to disable)")
+	fs.StringVar(&cfg.CORSOrigin, "cors_origin", "*", "CORS Allow-Origin header (empty to disable)")
 
 	fs.StringVar(&cfg.MQTTBroker, "mqtt_broker", "", "MQTT broker hostname (empty to disable)")
 	fs.IntVar(&cfg.MQTTPort, "mqtt_port", 1883, "MQTT broker port")

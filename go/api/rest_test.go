@@ -17,7 +17,7 @@ func newTestServer() (*Server, chan types.Action) {
 	ctrl.UpdateFromMIDI(types.CCVolumeAbs, 50) // Initialize volume to 50
 	actions := make(chan types.Action, 10)
 	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
-	srv := NewServer(ctrl, actions, "test-v1.0", "", log)
+	srv := NewServer(ctrl, actions, "test-v1.0", "", "*", log)
 	return srv, actions
 }
 
@@ -307,5 +307,195 @@ func TestPowerSettling_Returns503(t *testing.T) {
 	retryAfter := resp.Header.Get("Retry-After")
 	if retryAfter == "" {
 		t.Error("expected Retry-After header")
+	}
+}
+
+// --- P1: CORS tests ---
+
+func TestCORS_Preflight(t *testing.T) {
+	srv, _ := newTestServer()
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	req, _ := http.NewRequest(http.MethodOptions, ts.URL+"/api/state", nil)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("OPTIONS /api/state failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("expected status 204, got %d", resp.StatusCode)
+	}
+	if got := resp.Header.Get("Access-Control-Allow-Origin"); got != "*" {
+		t.Errorf("expected CORS origin *, got %q", got)
+	}
+	if got := resp.Header.Get("Access-Control-Allow-Methods"); got == "" {
+		t.Error("expected Access-Control-Allow-Methods header")
+	}
+}
+
+func TestCORS_HeaderOnGET(t *testing.T) {
+	srv, _ := newTestServer()
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/api/state")
+	if err != nil {
+		t.Fatalf("GET /api/state failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if got := resp.Header.Get("Access-Control-Allow-Origin"); got != "*" {
+		t.Errorf("expected CORS origin *, got %q", got)
+	}
+}
+
+func TestCORS_Disabled(t *testing.T) {
+	ctrl := controller.New()
+	ctrl.UpdateFromMIDI(types.CCVolumeAbs, 50)
+	actions := make(chan types.Action, 10)
+	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	srv := NewServer(ctrl, actions, "test-v1.0", "", "", log) // empty = CORS disabled
+
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/api/state")
+	if err != nil {
+		t.Fatalf("GET /api/state failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if got := resp.Header.Get("Access-Control-Allow-Origin"); got != "" {
+		t.Errorf("expected no CORS header when disabled, got %q", got)
+	}
+}
+
+// --- P2: trace_id tests ---
+
+func TestSetVolume_ReturnsTraceID(t *testing.T) {
+	srv, _ := newTestServer()
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	resp, err := http.Post(ts.URL+"/api/volume", "application/json",
+		strings.NewReader(`{"value": 80}`))
+	if err != nil {
+		t.Fatalf("POST /api/volume failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	var body map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	traceID, ok := body["trace_id"].(string)
+	if !ok || traceID == "" {
+		t.Error("expected non-empty trace_id in POST response")
+	}
+}
+
+func TestGetState_NoTraceID(t *testing.T) {
+	srv, _ := newTestServer()
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/api/state")
+	if err != nil {
+		t.Fatalf("GET /api/state failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	var body map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	if _, exists := body["trace_id"]; exists {
+		t.Error("GET /api/state should NOT contain trace_id")
+	}
+}
+
+// --- P3: dB volume tests ---
+
+func TestSetVolume_DB(t *testing.T) {
+	srv, actions := newTestServer()
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	resp, err := http.Post(ts.URL+"/api/volume", "application/json",
+		strings.NewReader(`{"db": -47}`))
+	if err != nil {
+		t.Fatalf("POST /api/volume failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", resp.StatusCode)
+	}
+
+	action := <-actions
+	if action.Value != 80 {
+		t.Errorf("expected MIDI value 80 for db=-47, got %d", action.Value)
+	}
+}
+
+func TestSetVolume_DBAndValue_Error(t *testing.T) {
+	srv, _ := newTestServer()
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	resp, err := http.Post(ts.URL+"/api/volume", "application/json",
+		strings.NewReader(`{"value": 80, "db": -47}`))
+	if err != nil {
+		t.Fatalf("POST /api/volume failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected status 400, got %d", resp.StatusCode)
+	}
+}
+
+func TestSetVolume_DBOutOfRange(t *testing.T) {
+	srv, _ := newTestServer()
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	resp, err := http.Post(ts.URL+"/api/volume", "application/json",
+		strings.NewReader(`{"db": 1}`))
+	if err != nil {
+		t.Fatalf("POST /api/volume failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected status 400 for db=1 (resolves to 128), got %d", resp.StatusCode)
+	}
+}
+
+func TestGetState_IncludesVolumeDB(t *testing.T) {
+	srv, _ := newTestServer()
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/api/state")
+	if err != nil {
+		t.Fatalf("GET /api/state failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	var body map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+
+	volumeDB, ok := body["volume_db"].(float64)
+	if !ok {
+		t.Fatal("expected volume_db field in state response")
+	}
+	// Volume initialized to 50, so volume_db = 50 - 127 = -77
+	if int(volumeDB) != -77 {
+		t.Errorf("expected volume_db=-77, got %d", int(volumeDB))
 	}
 }

@@ -101,8 +101,10 @@ The Python codebase (`bridge2glm.py`, `api/rest.py`, `api/mqtt.py`, `acceleratio
 
 | Option | Pros | Cons |
 |---|---|---|
-| **A) Hardcode `*`** (recommended) | Zero config, correct for LAN appliance | Can't restrict if exposed |
+| **A) Hardcode `*`** | Zero config, correct for LAN appliance | Can't restrict if exposed |
 | **B) `--cors_origin` flag, default `*`** | Configurable for paranoid setups | Extra flag nobody uses |
+
+**Decision: B) `--cors_origin` flag, default `*`.** Costs one config line; empty string disables CORS entirely.
 
 ### D3: API versioning — now or defer?
 
@@ -110,15 +112,19 @@ No external consumers exist today. Adding `/api/v1/` doubles route registrations
 
 | Option | Pros | Cons |
 |---|---|---|
-| **A) Defer** (recommended) | No complexity now, add when contract breaks | Costs more to retrofit later |
+| **A) Defer** | No complexity now, add when contract breaks | Costs more to retrofit later |
 | **B) Add now** | Free insurance, low cost | Premature if API never breaks |
+
+**Decision: A) Defer.** No external consumers yet.
 
 ### D4: trace_id scope — POST responses only, or also WebSocket?
 
 | Option | Pros | Cons |
 |---|---|---|
-| **A) POST only** (recommended) | Clean separation, WS stays read-only state | Scripts must correlate across two channels |
+| **A) POST only** | Clean separation, WS stays read-only state | Scripts must correlate across two channels |
 | **B) Add to APIState (visible on WS too)** | One place to look | Noisy — every broadcast carries a stale trace_id |
+
+**Decision: A) POST only.** WebSocket stays a clean read-only state stream.
 
 ### D5: Web UI volume_db — use server value or keep client-side calc?
 
@@ -126,8 +132,10 @@ No external consumers exist today. Adding `/api/v1/` doubles route registrations
 
 | Option | Pros | Cons |
 |---|---|---|
-| **A) Switch to `state.volume_db`** (recommended) | Single source of truth | Minor regression risk if field missing |
+| **A) Switch to `state.volume_db`** | Single source of truth | Minor regression risk if field missing |
 | **B) Keep client-side calc** | No change, no risk | Duplicated logic, diverges if mapping changes |
+
+**Decision: A) Use `state.volume_db` when available.** Falls back to client-side calc for drag interactions where no server state is available.
 
 ### D6: Auth — exempt same-origin web UI?
 
@@ -135,9 +143,11 @@ Only relevant if P6 (auth) is implemented.
 
 | Option | Pros | Cons |
 |---|---|---|
-| **A) Exempt same-origin** (recommended) | Web UI works without key injection | Need origin detection logic |
+| **A) Exempt same-origin** | Web UI works without key injection | Need origin detection logic |
 | **B) Require key everywhere** | Simple, uniform | Web UI needs key injected into HTML |
 | **C) Read-only without key, write requires key** | GET/WS open, POST protected | Most pragmatic split |
+
+**Decision: Deferred.** LAN-only risk is low. Revisit when auth (P6) becomes relevant.
 
 ### D7: Shared dB offset constant?
 
@@ -145,8 +155,10 @@ Only relevant if P6 (auth) is implemented.
 
 | Option | Pros | Cons |
 |---|---|---|
-| **A) Extract constant** (recommended) | Single source of truth, three consumers | One more thing in types package |
+| **A) Extract constant** | Single source of truth, three consumers | One more thing in types package |
 | **B) Keep inline** | Simple, obvious | Silent divergence if someone changes one |
+
+**Decision: A) Extract `types.VolumeDBOffset = 127`.** Used by both `api/rest.go` and `mqtt/mqtt.go`.
 
 ---
 
