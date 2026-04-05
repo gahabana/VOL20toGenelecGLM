@@ -33,7 +33,8 @@ type Config struct {
 	MIDIOutChannel string // Port to receive state FROM GLM
 
 	// Startup
-	StartupVolume *int // nil = query current volume
+	StartupVolume *int   // nil = query current volume
+	StartupPower  string // "on" or "off"
 
 	// REST API
 	APIPort    int
@@ -92,6 +93,7 @@ func Parse(args []string) Config {
 
 	var startupVolume int
 	fs.IntVar(&startupVolume, "startup_volume", -1, "Startup volume (0-127), -1 to discover from GLM startup burst")
+	fs.StringVar(&cfg.StartupPower, "startup_power", "on", `Power state at startup: "on" or "off"`)
 
 	fs.IntVar(&cfg.APIPort, "api_port", 8080, "REST API port (0 to disable)")
 	fs.StringVar(&cfg.CORSOrigin, "cors_origin", "*", "CORS Allow-Origin header (empty to disable)")
@@ -167,6 +169,10 @@ func Parse(args []string) Config {
 	}
 	if cfg.NoUIAutomation && cfg.Headless {
 		fmt.Fprintln(os.Stderr, "error: --no_ui_automation and --headless are mutually exclusive")
+		os.Exit(1)
+	}
+	if cfg.StartupPower != "on" && cfg.StartupPower != "off" {
+		fmt.Fprintln(os.Stderr, `error: --startup_power must be "on" or "off"`)
 		os.Exit(1)
 	}
 

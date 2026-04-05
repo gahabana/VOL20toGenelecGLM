@@ -28,7 +28,7 @@ import (
 	"vol20toglm/types"
 )
 
-const version = "0.12.0.1"
+const version = "0.12.1.0"
 
 func main() {
 	runtime.GOMAXPROCS(2)
@@ -245,8 +245,8 @@ func main() {
 		}
 	}
 
-	// Probe GLM state: consume startup burst (if managed) then force power ON.
-	probeGLMState(midiOut, probeCh, ctrl, &startupConsuming, log)
+	// Probe GLM state: consume startup burst (if managed) then force power state.
+	probeGLMState(midiOut, probeCh, ctrl, &startupConsuming, cfg.StartupPower, log)
 
 	// Detect initial power state from pixel scan.
 	// Retry a few times to allow splash screen to clear after fresh launch.
@@ -318,9 +318,9 @@ func main() {
 			if powerObs != nil {
 				powerObs.SetPID(pid)
 			}
-			// Re-probe after GLM restart — consume startup burst + force power ON.
+			// Re-probe after GLM restart — consume startup burst + force power state.
 			log.Info("re-probing GLM state after restart")
-			probeGLMState(midiOut, probeCh, ctrl, &startupConsuming, log)
+			probeGLMState(midiOut, probeCh, ctrl, &startupConsuming, cfg.StartupPower, log)
 		})
 	}
 
@@ -400,10 +400,11 @@ func main() {
 //
 //	12-message startup burst (5 CC20s) which provides volume/mute/dim via UpdateFromMIDI.
 //
-// Phase 2: Sends CC28=127 to force speakers ON. GLM responds with 5-message ACK (2 CC20s).
+// Phase 2: Sends CC28 to force speakers to the desired state (on/off).
+// GLM responds with 5-message ACK (2 CC20s).
 // Vol+/Vol- probing is not needed — volume is discovered passively from MIDI output.
 func probeGLMState(midiOut midi.Writer, probeCh <-chan int, ctrl *controller.Controller,
-	startupConsuming *atomic.Bool, log *slog.Logger) {
+	startupConsuming *atomic.Bool, startupPower string, log *slog.Logger) {
 
 	// Phase 1: Consume GLM startup burst (if we launched GLM).
 	// GLM emits 12 messages in 2x 5-msg patterns (~1s total) when starting.
@@ -413,12 +414,12 @@ func probeGLMState(midiOut midi.Writer, probeCh <-chan int, ctrl *controller.Con
 		consumeStartupBurst(probeCh, startupConsuming, ctrl, log)
 	}
 
-	// Phase 2: Force speakers ON via CC28=127.
+	// Phase 2: Force speakers to desired state via CC28.
 	// GLM responds with 5-message pattern (Mute→Vol→Dim→Mute→Vol, 2 CC20s).
 	if midiOut == nil {
 		return
 	}
-	sendPowerOnProbe(midiOut, probeCh, ctrl, log)
+	sendPowerProbe(midiOut, probeCh, ctrl, startupPower, log)
 }
 
 // consumeStartupBurst waits for GLM's 12-message startup burst.
@@ -455,19 +456,25 @@ func consumeStartupBurst(probeCh <-chan int, startupConsuming *atomic.Bool,
 		"elapsed", time.Since(probeStart).Round(time.Millisecond))
 }
 
-// sendPowerOnProbe sends CC28=127 and waits for the 5-message power ON response.
+// sendPowerProbe sends CC28 to force the desired power state and waits for the 5-message response.
 // The response pattern is Mute→Vol→Dim→Mute→Vol — 2 CC20 messages.
-func sendPowerOnProbe(midiOut midi.Writer, probeCh <-chan int,
-	ctrl *controller.Controller, log *slog.Logger) {
+func sendPowerProbe(midiOut midi.Writer, probeCh <-chan int,
+	ctrl *controller.Controller, startupPower string, log *slog.Logger) {
 
 	const expectedCC20 = 2                // response has 2 CC20 messages
 	const respTimeout = 3 * time.Second   // max wait for first response CC20
 	const msgTimeout = 2 * time.Second    // max wait between CC20s within response
 
-	log.Info("probe: forcing power ON via CC28=127")
+	powerOn := startupPower == "on"
+	cc28Value := 0
+	if powerOn {
+		cc28Value = 127
+	}
+
+	log.Info("probe: forcing power state via CC28", "state", startupPower, "cc28", cc28Value)
 	ctrl.SetPowerCommandPending()
-	if err := midiOut.SendCC(0, types.CCPower, 127, "startup"); err != nil {
-		log.Warn("probe: failed to send CC28 (power ON)", "err", err)
+	if err := midiOut.SendCC(0, types.CCPower, cc28Value, "startup"); err != nil {
+		log.Warn("probe: failed to send CC28", "state", startupPower, "err", err)
 		return
 	}
 
@@ -481,17 +488,18 @@ func sendPowerOnProbe(midiOut midi.Writer, probeCh <-chan int,
 		case <-probeCh:
 		case <-time.After(timeout):
 			if i == 0 {
-				log.Info("probe: no power ON response within timeout")
+				log.Info("probe: no power response within timeout")
 			} else {
-				log.Warn("probe: power ON response incomplete", "received", i, "expected", expectedCC20)
+				log.Warn("probe: power response incomplete", "received", i, "expected", expectedCC20)
 			}
 			goto done
 		}
 	}
-	log.Info("probe: power ON response complete", "elapsed", time.Since(respStart).Round(time.Millisecond))
+	log.Info("probe: power response complete", "elapsed", time.Since(respStart).Round(time.Millisecond))
 
 done:
+	ctrl.SetPower(powerOn)
 	state := ctrl.GetState()
 	log.Info("probe: GLM state initialized",
-		"volume", state.Volume, "mute", state.Mute, "dim", state.Dim)
+		"volume", state.Volume, "mute", state.Mute, "dim", state.Dim, "power", state.Power)
 }

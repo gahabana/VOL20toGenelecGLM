@@ -154,6 +154,7 @@ Port matching is substring-based — `GLMMIDI` matches `GLMMIDI 1`, `GLMMIDI 2`,
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--startup_volume` | `-1` | Initial volume (0-127), -1 to discover from GLM startup burst |
+| `--startup_power` | `on` | Power state at startup: `on` or `off` |
 
 ### Discovery
 
