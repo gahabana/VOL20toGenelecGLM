@@ -18,7 +18,7 @@ All tunable constants that define the behavior of the Go binary. When adding new
 | `onMinGreen` | 110 | Min green channel for ON (green/teal) button |
 | `onGreenRedDiff` | 35 | Min (G - R) difference for ON button |
 
-### Button Position (hardcoded inline — TODO: extract to named constants)
+### Button Position (hardcoded inline)
 
 | Value | Purpose |
 |-------|---------|
@@ -45,6 +45,7 @@ All tunable constants that define the behavior of the Go binary. When adding new
 | `PowerSettlingTime` | 2.0s | Block ALL commands during power transition (when no pixel detection) |
 | `PowerCooldownTime` | 1.5s | Block power-only commands after transition completes |
 | `PowerTotalLockout` | 3.5s | Total settling + cooldown (only used without pixel detection) |
+| `PowerCommandExpiry` | 3.0s | Seconds before a pending power command expires (no confirmation received) |
 | `PowerVerifyDelay` | 2.0s | Wait before pixel-verifying power state after command or external change |
 
 ## Consumer (`consumer/consumer.go`)

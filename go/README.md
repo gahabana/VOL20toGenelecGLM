@@ -95,6 +95,7 @@ Port matching is substring-based — `GLMMIDI` matches `GLMMIDI 1`, `GLMMIDI 2`,
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--api_port` | `8080` | HTTP port for REST API and web UI (0 to disable) |
+| `--cors_origin` | `*` | CORS Allow-Origin header (empty string to disable) |
 
 ### MQTT / Home Assistant
 
@@ -148,18 +149,44 @@ Port matching is substring-based — `GLMMIDI` matches `GLMMIDI 1`, `GLMMIDI 2`,
 
 **GLM prerequisite:** MIDI Settings must have Power, Mute, and Dim set to **"Toggle"** (not "Momentary") for deterministic MIDI control. See `RESEARCH-glm-midi-cc28-power.md` Section 11 for details.
 
+### Startup
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--startup_volume` | `-1` | Initial volume (0-127), -1 to discover from GLM startup burst |
+
 ### Discovery
 
 | Flag | Description |
 |------|-------------|
 | `--list` | List available HID devices and MIDI ports, then exit |
 
+### Debug
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--debug_captures` | `false` | Dump pixel captures to BMP files for inspection |
+
+## Utilities
+
+### midiprobe
+
+Standalone MIDI diagnostic tool — sends Vol+/Vol- (CC21/CC22) to GLM and prints the response to discover current state. Windows only.
+
+```cmd
+cd go
+go build -o midiprobe.exe ./cmd/midiprobe
+midiprobe.exe
+```
+
+Useful for verifying GLM MIDI port names and confirming CC messages are flowing.
+
 ## REST API Endpoints
 
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET` | `/api/state` | Current GLM state (JSON) |
-| `POST` | `/api/volume` | Set volume: `{"value": 0-127}` |
+| `POST` | `/api/volume` | Set volume: `{"value": 0-127}` or `{"db": -127..0}` |
 | `POST` | `/api/volume/adjust` | Adjust volume: `{"delta": int}` |
 | `POST` | `/api/mute` | Toggle mute (empty body) or set: `{"state": bool}` |
 | `POST` | `/api/dim` | Toggle dim (empty body) or set: `{"state": bool}` |
@@ -167,12 +194,33 @@ Port matching is substring-based — `GLMMIDI` matches `GLMMIDI 1`, `GLMMIDI 2`,
 | `GET` | `/api/health` | Health check |
 | `WS` | `/ws/state` | WebSocket — real-time state updates |
 | `GET` | `/` | Web UI |
+| `GET` | `/v1` | Web UI — skeuomorphic variant |
+| `GET` | `/v2` | Web UI — minimal Genelec variant |
+| `GET` | `/v3` | Web UI — enhanced skeuomorphic variant |
 
 ### State JSON
 
 ```json
 {
   "volume": 83,
+  "volume_db": -44,
+  "mute": false,
+  "dim": false,
+  "power": true,
+  "power_transitioning": false,
+  "power_settling_remaining": 0,
+  "power_cooldown": false,
+  "power_cooldown_remaining": 0
+}
+```
+
+POST responses include all state fields plus a `trace_id` for command correlation:
+
+```json
+{
+  "volume": 83,
+  "volume_db": -44,
+  "trace_id": "api-0042",
   "mute": false,
   "dim": false,
   "power": true,

@@ -11,7 +11,7 @@ const (
 	CCVolDown   = 22 // Volume decrement (momentary)
 	CCMute      = 23 // Mute (toggle)
 	CCDim       = 24 // Dim (toggle)
-	CCPower     = 28 // System Power (momentary, no MIDI feedback)
+	CCPower     = 28 // System Power — Toggle mode: 0=OFF, >0=ON. No MIDI feedback (CC28 never sent by GLM).
 )
 
 // CCNames maps CC numbers to human-readable names for logging.
