@@ -13,16 +13,15 @@ type Config struct {
 	// Discovery
 	ListDevices bool // Print available HID devices and MIDI ports, then exit
 
-	// Logging
-	LogLevel    string
-	LogFileName string
+	// Operating mode
+	Desktop      bool // Desktop mode: disables GLM manager, RDP priming, MIDI restart, UI automation
+	Headless     bool // Headless VM mode: enables pixel verification and health monitoring
+	UIPower      bool // Use UI click for power instead of MIDI (requires --headless)
+	NoAutomation bool // Disable all pixel reading and mouse click simulation
 
-	// Click timing
-	MinClickTime    float64
-	MaxAvgClickTime float64
-
-	// Volume acceleration
-	VolumeIncreases []int
+	// Startup
+	StartupVolume *int   // nil = discover from GLM startup burst
+	StartupPower  string // "on" or "off"
 
 	// HID device
 	VID uint16
@@ -31,10 +30,6 @@ type Config struct {
 	// MIDI
 	MIDIInChannel  string // Port to send commands TO GLM
 	MIDIOutChannel string // Port to receive state FROM GLM
-
-	// Startup
-	StartupVolume *int   // nil = query current volume
-	StartupPower  string // "on" or "off"
 
 	// REST API
 	APIPort    int
@@ -53,15 +48,19 @@ type Config struct {
 	GLMPath      string
 	GLMCPUGating bool
 
-	// Startup automation
+	// VM Automation
 	RDPPriming   bool
 	MIDIRestart  bool
 	HighPriority bool // Set process priority to AboveNormal
 
-	// UI automation mode
-	NoUIAutomation bool // Disable all pixel reading and mouse click simulation
-	Headless       bool // Enable UI automation for screen reading (verification, health monitoring)
-	UIPower        bool // Use UI click for power instead of MIDI (requires --headless)
+	// Logging
+	LogLevel    string
+	LogFileName string
+
+	// Volume acceleration
+	MinClickTime    float64
+	MaxAvgClickTime float64
+	VolumeIncreases []int
 
 	// Debug
 	DebugCaptures bool // Dump pixel captures to BMP files for inspection
@@ -70,34 +69,35 @@ type Config struct {
 // Parse parses CLI arguments and returns a Config with defaults applied.
 func Parse(args []string) Config {
 	fs := flag.NewFlagSet("vol20toglm", flag.ContinueOnError)
+	fs.Usage = func() { printUsage(os.Stderr) }
 
 	cfg := Config{
 		VolumeIncreases: []int{1, 1, 2, 2, 3},
 	}
 
-	fs.BoolVar(&cfg.ListDevices, "list", false, "List available HID devices and MIDI ports, then exit")
+	// Operating mode
+	fs.BoolVar(&cfg.Desktop, "desktop", false, "Desktop mode")
+	fs.BoolVar(&cfg.Headless, "headless", false, "Headless VM mode")
+	fs.BoolVar(&cfg.UIPower, "ui_power", false, "Use UI click for power")
+	fs.BoolVar(&cfg.NoAutomation, "no_automation", false, "Disable pixel reading and mouse clicks")
 
-	fs.StringVar(&cfg.LogLevel, "log_level", "DEBUG", "Logging level: DEBUG, INFO, NONE")
-	fs.StringVar(&cfg.LogFileName, "log_file_name", "vol20toglm.log", "Log file name")
-	fs.Float64Var(&cfg.MinClickTime, "min_click_time", 0.2, "Min time between clicks (seconds)")
-	fs.Float64Var(&cfg.MaxAvgClickTime, "max_avg_click_time", 0.15, "Max average click time for acceleration")
-
-	var volumeList string
-	fs.StringVar(&volumeList, "volume_increases_list", "1,1,2,2,3", "Comma-separated volume increments per acceleration level")
-
-	var vidPid string
-	fs.StringVar(&vidPid, "device", "0x07d7,0x0000", "HID device VID,PID in hex")
-
-	fs.StringVar(&cfg.MIDIInChannel, "midi_in_channel", "GLMMIDI", "MIDI input port name (commands TO GLM)")
-	fs.StringVar(&cfg.MIDIOutChannel, "midi_out_channel", "GLMOUT", "MIDI output port name (state FROM GLM)")
-
+	// Startup
 	var startupVolume int
 	fs.IntVar(&startupVolume, "startup_volume", -1, "Startup volume (0-127), -1 to discover from GLM startup burst")
 	fs.StringVar(&cfg.StartupPower, "startup_power", "on", `Power state at startup: "on" or "off"`)
 
+	// Devices & MIDI
+	fs.BoolVar(&cfg.ListDevices, "list", false, "List available HID devices and MIDI ports, then exit")
+	var vidPid string
+	fs.StringVar(&vidPid, "device", "0x07d7,0x0000", "HID device VID,PID in hex")
+	fs.StringVar(&cfg.MIDIInChannel, "midi_in_channel", "GLMMIDI", "MIDI input port name (commands TO GLM)")
+	fs.StringVar(&cfg.MIDIOutChannel, "midi_out_channel", "GLMOUT", "MIDI output port name (state FROM GLM)")
+
+	// REST API
 	fs.IntVar(&cfg.APIPort, "api_port", 8080, "REST API port (0 to disable)")
 	fs.StringVar(&cfg.CORSOrigin, "cors_origin", "*", "CORS Allow-Origin header (empty to disable)")
 
+	// MQTT / Home Assistant
 	fs.StringVar(&cfg.MQTTBroker, "mqtt_broker", "", "MQTT broker hostname (empty to disable)")
 	fs.IntVar(&cfg.MQTTPort, "mqtt_port", 1883, "MQTT broker port")
 	fs.StringVar(&cfg.MQTTUser, "mqtt_user", "", "MQTT username")
@@ -106,12 +106,14 @@ func Parse(args []string) Config {
 	fs.BoolVar(&cfg.MQTTHADiscovery, "mqtt_ha_discovery", true, "Enable Home Assistant MQTT Discovery")
 	noHADiscovery := fs.Bool("no_mqtt_ha_discovery", false, "Disable Home Assistant MQTT Discovery")
 
+	// GLM Process Manager
 	fs.BoolVar(&cfg.GLMManager, "glm_manager", true, "Enable GLM process manager")
 	noGLMManager := fs.Bool("no_glm_manager", false, "Disable GLM process manager")
 	fs.StringVar(&cfg.GLMPath, "glm_path", `C:\Program Files (x86)\Genelec\GLMv5\GLMv5.exe`, "Path to GLM executable")
 	fs.BoolVar(&cfg.GLMCPUGating, "glm_cpu_gating", true, "Wait for CPU idle before starting GLM")
 	noGLMCPUGating := fs.Bool("no_glm_cpu_gating", false, "Disable CPU gating")
 
+	// VM Automation
 	fs.BoolVar(&cfg.RDPPriming, "rdp_priming", true, "Prime RDP session at startup (headless VM)")
 	noRDPPriming := fs.Bool("no_rdp_priming", false, "Disable RDP session priming")
 	fs.BoolVar(&cfg.MIDIRestart, "midi_restart", true, "Restart Windows MIDI service at startup")
@@ -119,9 +121,15 @@ func Parse(args []string) Config {
 	fs.BoolVar(&cfg.HighPriority, "high_priority", true, "Set process priority to AboveNormal")
 	noHighPriority := fs.Bool("no_high_priority", false, "Disable elevated process priority")
 
-	fs.BoolVar(&cfg.NoUIAutomation, "no_ui_automation", false, "Disable all pixel reading and mouse click simulation (MIDI-only power control)")
-	fs.BoolVar(&cfg.Headless, "headless", false, "Enable UI automation for screen reading (verification, health monitoring)")
-	fs.BoolVar(&cfg.UIPower, "ui_power", false, "Use UI click for power instead of MIDI (requires --headless)")
+	// Volume Acceleration
+	var volumeList string
+	fs.StringVar(&volumeList, "volume_increases_list", "1,1,2,2,3", "Comma-separated volume increments per acceleration level")
+	fs.Float64Var(&cfg.MinClickTime, "min_click_time", 0.2, "Min time between clicks (seconds)")
+	fs.Float64Var(&cfg.MaxAvgClickTime, "max_avg_click_time", 0.15, "Max average click time for acceleration")
+
+	// Logging & Debug
+	fs.StringVar(&cfg.LogLevel, "log_level", "DEBUG", "Logging level: DEBUG, INFO, NONE")
+	fs.StringVar(&cfg.LogFileName, "log_file_name", "vol20toglm.log", "Log file name")
 	fs.BoolVar(&cfg.DebugCaptures, "debug_captures", false, "Dump pixel captures to BMP files for inspection")
 
 	if err := fs.Parse(args); err != nil {
@@ -162,13 +170,31 @@ func Parse(args []string) Config {
 		cfg.HighPriority = false
 	}
 
-	// Validate mutually exclusive / dependent flags
+	// Apply --desktop shorthand (after negation flags so explicit overrides win)
+	if cfg.Desktop {
+		cfg.GLMManager = false
+		cfg.RDPPriming = false
+		cfg.MIDIRestart = false
+		cfg.NoAutomation = true
+		cfg.HighPriority = false
+	}
+
+	// --no_automation disables pixel reading; ui_power is incompatible
+	if cfg.NoAutomation {
+		cfg.UIPower = false
+	}
+
+	// Validate
+	if cfg.Desktop && cfg.Headless {
+		fmt.Fprintln(os.Stderr, "error: --desktop and --headless are mutually exclusive")
+		os.Exit(1)
+	}
 	if cfg.UIPower && !cfg.Headless {
 		fmt.Fprintln(os.Stderr, "error: --ui_power requires --headless")
 		os.Exit(1)
 	}
-	if cfg.NoUIAutomation && cfg.Headless {
-		fmt.Fprintln(os.Stderr, "error: --no_ui_automation and --headless are mutually exclusive")
+	if cfg.UIPower && cfg.NoAutomation {
+		fmt.Fprintln(os.Stderr, "error: --ui_power and --no_automation are mutually exclusive")
 		os.Exit(1)
 	}
 	if cfg.StartupPower != "on" && cfg.StartupPower != "off" {
@@ -177,6 +203,69 @@ func Parse(args []string) Config {
 	}
 
 	return cfg
+}
+
+// printUsage writes grouped CLI help to w.
+func printUsage(w *os.File) {
+	fmt.Fprintf(w, `vol20toglm — Fosi VOL20 to Genelec GLM bridge
+
+OPERATING MODE
+  --desktop              Desktop mode (disables GLM manager, RDP priming, MIDI restart, UI automation)
+  --headless             Headless VM mode (enables pixel verification and health monitoring)
+  --ui_power             Use UI click for power instead of MIDI (requires --headless)
+  --no_automation        Disable all pixel reading and mouse click simulation
+
+STARTUP
+  --startup_volume N     Startup volume 0-127, -1 to discover from GLM burst (default -1)
+  --startup_power STATE  Power state at startup: "on" or "off" (default "on")
+
+DEVICES & MIDI
+  --list                 List available HID devices and MIDI ports, then exit
+  --device VID,PID       HID device VID,PID in hex (default "0x07d7,0x0000")
+  --midi_in_channel NAME MIDI port for commands TO GLM (default "GLMMIDI")
+  --midi_out_channel NAME
+                         MIDI port for state FROM GLM (default "GLMOUT")
+
+REST API
+  --api_port PORT        HTTP port for REST API and web UI, 0 to disable (default 8080)
+  --cors_origin ORIGIN   CORS Allow-Origin header, empty to disable (default "*")
+
+MQTT / HOME ASSISTANT
+  --mqtt_broker HOST     MQTT broker hostname (empty to disable)
+  --mqtt_port PORT       MQTT broker port (default 1883)
+  --mqtt_user USER       MQTT username
+  --mqtt_pass PASS       MQTT password
+  --mqtt_topic PREFIX    MQTT topic prefix (default "glm")
+  --mqtt_ha_discovery    Enable Home Assistant MQTT Discovery (default true)
+  --no_mqtt_ha_discovery Disable Home Assistant MQTT Discovery
+
+GLM PROCESS MANAGER
+  --glm_manager          Launch and monitor GLM process (default true)
+  --no_glm_manager       Disable GLM management
+  --glm_path PATH        Path to GLM executable
+  --glm_cpu_gating       Wait for CPU idle before launching GLM (default true)
+  --no_glm_cpu_gating    Disable CPU gating
+
+VM AUTOMATION (fine-tune --desktop / --headless defaults)
+  --rdp_priming          RDP session priming at startup (default true)
+  --no_rdp_priming       Disable RDP priming
+  --midi_restart         Restart Windows MIDI service at startup (default true)
+  --no_midi_restart      Disable MIDI service restart
+  --high_priority        Set process priority to AboveNormal (default true)
+  --no_high_priority     Run at normal priority
+
+VOLUME ACCELERATION
+  --min_click_time SEC   Min seconds between clicks (default 0.2)
+  --max_avg_click_time SEC
+                         Max avg click time for acceleration (default 0.15)
+  --volume_increases_list N,N,...
+                         Volume delta per acceleration level (default "1,1,2,2,3")
+
+LOGGING & DEBUG
+  --log_level LEVEL      DEBUG, INFO, or NONE (default "DEBUG")
+  --log_file_name NAME   Log file name (default "vol20toglm.log")
+  --debug_captures       Dump pixel captures to BMP files
+`)
 }
 
 func parseIntList(s string) []int {

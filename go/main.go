@@ -28,7 +28,7 @@ import (
 	"vol20toglm/types"
 )
 
-const version = "0.12.1.0"
+const version = "0.12.2.0"
 
 func main() {
 	runtime.GOMAXPROCS(2)
@@ -110,7 +110,7 @@ func main() {
 	// Actually we build the commander after gate is ready — see below after gate creation.
 
 	// Power observer (pixel scanning, nil unless --headless)
-	if !cfg.NoUIAutomation && cfg.Headless {
+	if !cfg.NoAutomation && cfg.Headless {
 		powerObs = createPowerObserver(log, cfg.DebugCaptures)
 	}
 

@@ -1,6 +1,6 @@
 # VOL20toGenelecGLM — Go Version
 
-Single-binary bridge between a Griffin PowerMate VOL20 USB knob and Genelec GLM software. Controls volume, mute, dim, and power via USB HID input and MIDI output. Includes a REST API, WebSocket state broadcast, web UI, and optional GLM process management for headless VMs.
+Single-binary bridge between a Fosi VOL20 USB knob and Genelec GLM software. Controls volume, mute, dim, and power via USB HID input and MIDI output. Includes a REST API, WebSocket state broadcast, web UI, and optional GLM process management for headless VMs.
 
 ## Prerequisites
 
@@ -41,13 +41,19 @@ go build -ldflags="-s -w" -o vol20toglm.exe .
 **Desktop user** (GLM already running, user interacting with screen):
 
 ```cmd
-vol20toglm.exe --no_glm_manager --no_rdp_priming --no_midi_restart --no_ui_automation
+vol20toglm.exe --desktop
 ```
 
 **Headless VM** (full automation — launches GLM, primes RDP, restarts MIDI, pixel verification):
 
 ```cmd
 vol20toglm.exe --headless
+```
+
+**Headless VM without pixel reading** (MIDI-only power, but still manages GLM/RDP/MIDI):
+
+```cmd
+vol20toglm.exe --headless --no_automation
 ```
 
 **Headless VM with UI-based power** (fallback if MIDI power causes speaker disconnects):
@@ -58,37 +64,48 @@ vol20toglm.exe --headless --ui_power
 
 ## CLI Flags
 
-### Logging
+Run `vol20toglm.exe --help` for grouped flag reference. Flags are organized by category below.
+
+### Operating Mode
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--log_level` | `DEBUG` | Logging level: `DEBUG`, `INFO`, `NONE` |
-| `--log_file_name` | `vol20toglm.log` | Log file name (placed next to binary) |
+| `--desktop` | `false` | Desktop mode: disables GLM manager, RDP priming, MIDI restart, UI automation, elevated priority |
+| `--headless` | `false` | Headless VM mode: enables pixel verification and health monitoring |
+| `--ui_power` | `false` | Use UI click for power instead of MIDI. Requires `--headless`. |
+| `--no_automation` | `false` | Disable all pixel reading and mouse click simulation |
 
-Console shows INFO and above. Log file captures DEBUG for full detail. File rotates at 4MB with 5 backups.
+`--desktop` and `--headless` are mutually exclusive. `--ui_power` and `--no_automation` are mutually exclusive.
 
-### HID Device
+**Modes summary:**
+
+| Flags | GLM mgr | RDP/MIDI | Screen | Power | Use case |
+|-------|---------|----------|--------|-------|----------|
+| `--desktop` | No | No | No | MIDI CC28 | Desktop, user at screen |
+| `--headless` | Yes | Yes | Yes | MIDI CC28 (pixel verified) | Headless VM, unattended |
+| `--headless --ui_power` | Yes | Yes | Yes | UI click | Fallback if MIDI power unreliable |
+| `--headless --no_automation` | Yes | Yes | No | MIDI CC28 | Headless VM, no screen dependency |
+| *(no flags)* | Yes | Yes | No | MIDI CC28 | Same as `--headless --no_automation` |
+
+**GLM prerequisite:** MIDI Settings must have Power, Mute, and Dim set to **"Toggle"** (not "Momentary") for deterministic MIDI control. See `RESEARCH-glm-midi-cc28-power.md` Section 11 for details.
+
+### Startup
 
 | Flag | Default | Description |
 |------|---------|-------------|
+| `--startup_volume` | `-1` | Initial volume (0-127), -1 to discover from GLM startup burst |
+| `--startup_power` | `on` | Power state at startup: `on` or `off` |
+
+### Devices & MIDI
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--list` | | List available HID devices and MIDI ports, then exit |
 | `--device` | `0x07d7,0x0000` | USB VID,PID in hex |
-
-### MIDI
-
-| Flag | Default | Description |
-|------|---------|-------------|
 | `--midi_in_channel` | `GLMMIDI` | MIDI port where GLM reads (we write to this) |
 | `--midi_out_channel` | `GLMOUT` | MIDI port where GLM writes (we read from this) |
 
 Port matching is substring-based — `GLMMIDI` matches `GLMMIDI 1`, `GLMMIDI 2`, etc.
-
-### Volume Acceleration
-
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--min_click_time` | `0.2` | Min seconds between clicks to consider separate |
-| `--max_avg_click_time` | `0.15` | Max average click time for acceleration |
-| `--volume_increases_list` | `1,1,2,2,3` | Volume delta per acceleration level |
 
 ### REST API
 
@@ -101,7 +118,7 @@ Port matching is substring-based — `GLMMIDI` matches `GLMMIDI 1`, `GLMMIDI 2`,
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--mqtt_broker` | *(empty)* | MQTT broker hostname (empty to disable) |
+| `--mqtt_broker` | *(empty)* | MQTT broker hostname (empty to disable — all other MQTT flags are dormant until set) |
 | `--mqtt_port` | `1883` | MQTT broker port |
 | `--mqtt_user` | *(empty)* | MQTT username |
 | `--mqtt_pass` | *(empty)* | MQTT password |
@@ -119,7 +136,9 @@ Port matching is substring-based — `GLMMIDI` matches `GLMMIDI 1`, `GLMMIDI 2`,
 | `--glm_cpu_gating` | `true` | Wait for CPU < 10% before launching GLM |
 | `--no_glm_cpu_gating` | | Disable CPU gating |
 
-### Startup Automation
+### VM Automation
+
+Fine-tune defaults set by `--desktop` / `--headless`. These flags override the mode shorthand.
 
 | Flag | Default | Description |
 |------|---------|-------------|
@@ -130,43 +149,23 @@ Port matching is substring-based — `GLMMIDI` matches `GLMMIDI 1`, `GLMMIDI 2`,
 | `--high_priority` | `true` | Set process priority to AboveNormal |
 | `--no_high_priority` | | Run at normal priority |
 
-### Power Control Mode
+### Volume Acceleration
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--no_ui_automation` | `false` | Disable all pixel reading and mouse clicks. Power via MIDI CC28 only. Best for desktop use. |
-| `--headless` | `false` | Enable UI automation for pixel verification and speaker health monitoring. Power still via MIDI CC28 unless `--ui_power` is set. |
-| `--ui_power` | `false` | Use UI click for power instead of MIDI. Requires `--headless`. Fallback if MIDI power causes speaker disconnects. |
+| `--min_click_time` | `0.2` | Min seconds between clicks to consider separate |
+| `--max_avg_click_time` | `0.15` | Max average click time for acceleration |
+| `--volume_increases_list` | `1,1,2,2,3` | Volume delta per acceleration level |
 
-**Modes summary:**
-
-| Flags | Power control | Screen reading | Use case |
-|-------|--------------|----------------|----------|
-| `--no_ui_automation` | MIDI CC28 | Disabled | Desktop, user interacting with GLM |
-| `--headless` | MIDI CC28 | Enabled (verify + health) | Headless VM, unattended |
-| `--headless --ui_power` | UI click | Enabled | Fallback if MIDI power unreliable |
-| *(no flags)* | MIDI CC28 | Disabled | Same as `--no_ui_automation` |
-
-**GLM prerequisite:** MIDI Settings must have Power, Mute, and Dim set to **"Toggle"** (not "Momentary") for deterministic MIDI control. See `RESEARCH-glm-midi-cc28-power.md` Section 11 for details.
-
-### Startup
+### Logging & Debug
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--startup_volume` | `-1` | Initial volume (0-127), -1 to discover from GLM startup burst |
-| `--startup_power` | `on` | Power state at startup: `on` or `off` |
-
-### Discovery
-
-| Flag | Description |
-|------|-------------|
-| `--list` | List available HID devices and MIDI ports, then exit |
-
-### Debug
-
-| Flag | Default | Description |
-|------|---------|-------------|
+| `--log_level` | `DEBUG` | Logging level: `DEBUG`, `INFO`, `NONE` |
+| `--log_file_name` | `vol20toglm.log` | Log file name (placed next to binary) |
 | `--debug_captures` | `false` | Dump pixel captures to BMP files for inspection |
+
+Console shows INFO and above. Log file captures DEBUG for full detail. File rotates at 4MB with 5 backups.
 
 ## Utilities
 
