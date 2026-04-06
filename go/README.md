@@ -44,22 +44,22 @@ go build -ldflags="-s -w" -o vol20toglm.exe .
 vol20toglm.exe --desktop
 ```
 
-**Headless VM** (full automation — launches GLM, primes RDP, restarts MIDI, pixel verification):
+**Headless VM** (default — launches GLM, primes RDP, restarts MIDI, MIDI CC28 power):
 
 ```cmd
-vol20toglm.exe --headless
+vol20toglm.exe
 ```
 
-**Headless VM without pixel reading** (MIDI-only power, but still manages GLM/RDP/MIDI):
+**Headless VM with pixel verification** (opt-in screen reading for power state verification):
 
 ```cmd
-vol20toglm.exe --headless --no_automation
+vol20toglm.exe --pixel_verify
 ```
 
 **Headless VM with UI-based power** (fallback if MIDI power causes speaker disconnects):
 
 ```cmd
-vol20toglm.exe --headless --ui_power
+vol20toglm.exe --ui_power
 ```
 
 ## CLI Flags
@@ -70,22 +70,20 @@ Run `vol20toglm.exe --help` for grouped flag reference. Flags are organized by c
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--desktop` | `false` | Desktop mode: disables GLM manager, RDP priming, MIDI restart, UI automation, elevated priority |
-| `--headless` | `false` | Headless VM mode: enables pixel verification and health monitoring |
-| `--ui_power` | `false` | Use UI click for power instead of MIDI. Requires `--headless`. |
-| `--no_automation` | `false` | Disable all pixel reading and mouse click simulation |
+| `--desktop` | `false` | Desktop mode: disables GLM manager, RDP priming, MIDI restart, elevated priority |
+| `--pixel_verify` | `false` | Enable pixel reading for power state verification (opt-in) |
+| `--ui_power` | `false` | Use UI click for power instead of MIDI (implies `--pixel_verify`) |
 
-`--desktop` and `--headless` are mutually exclusive. `--ui_power` and `--no_automation` are mutually exclusive.
+`--desktop` and `--ui_power` are mutually exclusive.
 
 **Modes summary:**
 
 | Flags | GLM mgr | RDP/MIDI | Screen | Power | Use case |
 |-------|---------|----------|--------|-------|----------|
-| `--desktop` | No | No | No | MIDI CC28 | Desktop, user at screen |
-| `--headless` | Yes | Yes | Yes | MIDI CC28 (pixel verified) | Headless VM, unattended |
-| `--headless --ui_power` | Yes | Yes | Yes | UI click | Fallback if MIDI power unreliable |
-| `--headless --no_automation` | Yes | Yes | No | MIDI CC28 | Headless VM, no screen dependency |
-| *(no flags)* | Yes | Yes | No | MIDI CC28 | Same as `--headless --no_automation` |
+| *(no flags)* | Yes | Yes | No | MIDI CC28 (deterministic) | Headless VM, default |
+| `--pixel_verify` | Yes | Yes | Yes | MIDI CC28 (pixel verified) | Headless VM, extra verification |
+| `--ui_power` | Yes | Yes | Yes | UI click | Fallback if MIDI power unreliable |
+| `--desktop` | No | No | No | MIDI CC28 (deterministic) | Desktop, user at screen |
 
 **GLM prerequisite:** MIDI Settings must have Power, Mute, and Dim set to **"Toggle"** (not "Momentary") for deterministic MIDI control. See `RESEARCH-glm-midi-cc28-power.md` Section 11 for details.
 
@@ -138,7 +136,7 @@ Port matching is substring-based — `GLMMIDI` matches `GLMMIDI 1`, `GLMMIDI 2`,
 
 ### VM Automation
 
-Fine-tune defaults set by `--desktop` / `--headless`. These flags override the mode shorthand.
+Fine-tune defaults. `--desktop` disables these; individual flags override.
 
 | Flag | Default | Description |
 |------|---------|-------------|

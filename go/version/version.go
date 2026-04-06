@@ -1,4 +1,4 @@
 package version
 
 // Version is the application version, referenced by main, config, and API.
-const Version = "0.12.2.0"
+const Version = "0.12.3.0"

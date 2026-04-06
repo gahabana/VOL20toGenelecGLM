@@ -42,6 +42,7 @@ func main() {
 	log := applog.Setup(cfg.LogLevel, cfg.LogFileName)
 
 	fmt.Printf("vol20toglm v%s\n", version.Version)
+	cfg.PrintStartupSummary()
 	log.Info("========== vol20toglm start ==========",
 		"version", version.Version,
 		"vid", fmt.Sprintf("0x%04x", cfg.VID),
@@ -96,10 +97,10 @@ func main() {
 	defer midiIn.Close()
 
 	// Power commander and observer — selected based on config flags.
-	// Path A (--no-ui-automation): MIDI-only, no screen interaction.
-	// Path B (--headless, no --ui-power): MIDI power, pixel verification.
-	// Path B+ui (--headless --ui-power): UI click power, pixel verification.
-	// Default (no flags): MIDI power, no verification.
+	// Default: MIDI power, no screen interaction.
+	// --pixel_verify: MIDI power, pixel verification.
+	// --ui_power: UI click power, pixel verification.
+	// --desktop: MIDI power, no screen interaction, no GLM management.
 	var powerCmd power.Commander
 	var powerObs power.Observer
 
@@ -108,8 +109,8 @@ func main() {
 	// For now, create MIDICommander with a placeholder; we'll reassign after gate is set up.
 	// Actually we build the commander after gate is ready — see below after gate creation.
 
-	// Power observer (pixel scanning, nil unless --headless)
-	if !cfg.NoAutomation && cfg.Headless {
+	// Power observer (pixel scanning, nil unless --pixel_verify)
+	if cfg.PixelVerify {
 		powerObs = createPowerObserver(log, cfg.DebugCaptures)
 	}
 
@@ -286,8 +287,8 @@ func main() {
 	}
 
 	// Build Commander now that consumerWriter is resolved.
-	// powerObs was already set above (nil unless --headless).
-	if cfg.Headless && cfg.UIPower {
+	// powerObs was already set above (nil unless --pixel_verify).
+	if cfg.UIPower {
 		// Path B+ui: UI click for power, pixel for verification
 		powerCmd = createPowerCommander(powerObs)
 	}

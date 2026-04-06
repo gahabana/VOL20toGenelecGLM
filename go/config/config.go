@@ -15,10 +15,9 @@ type Config struct {
 	ListDevices bool // Print available HID devices and MIDI ports, then exit
 
 	// Operating mode
-	Desktop      bool // Desktop mode: disables GLM manager, RDP priming, MIDI restart, UI automation
-	Headless     bool // Headless VM mode: enables pixel verification and health monitoring
-	UIPower      bool // Use UI click for power instead of MIDI (requires --headless)
-	NoAutomation bool // Disable all pixel reading and mouse click simulation
+	Desktop     bool // Desktop mode: disables GLM manager, RDP priming, MIDI restart, elevated priority
+	PixelVerify bool // Enable pixel reading for power state verification (opt-in)
+	UIPower     bool // Use UI click for power instead of MIDI (implies PixelVerify)
 
 	// Startup
 	StartupVolume *int   // nil = discover from GLM startup burst
@@ -78,9 +77,8 @@ func Parse(args []string) Config {
 
 	// Operating mode
 	fs.BoolVar(&cfg.Desktop, "desktop", false, "Desktop mode")
-	fs.BoolVar(&cfg.Headless, "headless", false, "Headless VM mode")
-	fs.BoolVar(&cfg.UIPower, "ui_power", false, "Use UI click for power")
-	fs.BoolVar(&cfg.NoAutomation, "no_automation", false, "Disable pixel reading and mouse clicks")
+	fs.BoolVar(&cfg.PixelVerify, "pixel_verify", false, "Enable pixel reading for power state verification")
+	fs.BoolVar(&cfg.UIPower, "ui_power", false, "Use UI click for power (implies --pixel_verify)")
 
 	// Startup
 	var startupVolume int
@@ -171,31 +169,22 @@ func Parse(args []string) Config {
 		cfg.HighPriority = false
 	}
 
-	// Apply --desktop shorthand (after negation flags so explicit overrides win)
+	// Apply --desktop shorthand
 	if cfg.Desktop {
 		cfg.GLMManager = false
 		cfg.RDPPriming = false
 		cfg.MIDIRestart = false
-		cfg.NoAutomation = true
 		cfg.HighPriority = false
 	}
 
-	// --no_automation disables pixel reading; ui_power is incompatible
-	if cfg.NoAutomation {
-		cfg.UIPower = false
+	// --ui_power implies --pixel_verify
+	if cfg.UIPower {
+		cfg.PixelVerify = true
 	}
 
 	// Validate
-	if cfg.Desktop && cfg.Headless {
-		fmt.Fprintln(os.Stderr, "error: --desktop and --headless are mutually exclusive")
-		os.Exit(1)
-	}
-	if cfg.UIPower && !cfg.Headless {
-		fmt.Fprintln(os.Stderr, "error: --ui_power requires --headless")
-		os.Exit(1)
-	}
-	if cfg.UIPower && cfg.NoAutomation {
-		fmt.Fprintln(os.Stderr, "error: --ui_power and --no_automation are mutually exclusive")
+	if cfg.Desktop && cfg.UIPower {
+		fmt.Fprintln(os.Stderr, "error: --ui_power and --desktop are mutually exclusive")
 		os.Exit(1)
 	}
 	if cfg.StartupPower != "on" && cfg.StartupPower != "off" {
@@ -206,16 +195,63 @@ func Parse(args []string) Config {
 	return cfg
 }
 
+// PrintStartupSummary prints the effective configuration to stdout.
+func (cfg *Config) PrintStartupSummary() {
+	mode := "Default (headless VM)"
+	if cfg.Desktop {
+		mode = "Desktop"
+	}
+
+	power := "MIDI CC28 (deterministic)"
+	if cfg.UIPower {
+		power = "UI click (pixel verified)"
+	} else if cfg.PixelVerify {
+		power = "MIDI CC28 (pixel verified)"
+	}
+
+	pixelStr := "OFF"
+	if cfg.PixelVerify {
+		pixelStr = "ON"
+	}
+
+	mqttStr := "disabled"
+	if cfg.MQTTBroker != "" {
+		mqttStr = fmt.Sprintf("%s:%d (topic: %s)", cfg.MQTTBroker, cfg.MQTTPort, cfg.MQTTTopic)
+	}
+
+	apiStr := "disabled"
+	if cfg.APIPort > 0 {
+		apiStr = fmt.Sprintf("http://localhost:%d", cfg.APIPort)
+	}
+
+	fmt.Printf("  Mode:           %s\n", mode)
+	fmt.Printf("  GLM manager:    %s\n", onOff(cfg.GLMManager))
+	if !cfg.Desktop {
+		fmt.Printf("  RDP priming:    %s\n", onOff(cfg.RDPPriming))
+		fmt.Printf("  MIDI restart:   %s\n", onOff(cfg.MIDIRestart))
+	}
+	fmt.Printf("  Power control:  %s\n", power)
+	fmt.Printf("  Pixel verify:   %s\n", pixelStr)
+	fmt.Printf("  API:            %s\n", apiStr)
+	fmt.Printf("  MQTT:           %s\n", mqttStr)
+	fmt.Println()
+}
+
+func onOff(b bool) string {
+	if b {
+		return "ON"
+	}
+	return "OFF"
+}
+
 // printUsage writes grouped CLI help to w.
 func printUsage(w *os.File) {
 	fmt.Fprintf(w, "vol20toglm v%s — Fosi VOL20 to Genelec GLM bridge\n", version.Version)
 	fmt.Fprintf(w, `
-
 OPERATING MODE
-  --desktop              Desktop mode (disables GLM manager, RDP priming, MIDI restart, UI automation)
-  --headless             Headless VM mode (enables pixel verification and health monitoring)
-  --ui_power             Use UI click for power instead of MIDI (requires --headless)
-  --no_automation        Disable all pixel reading and mouse click simulation
+  --desktop              Desktop mode (disables GLM manager, RDP priming, MIDI restart)
+  --pixel_verify         Enable pixel reading for power state verification (opt-in)
+  --ui_power             Use UI click for power instead of MIDI (implies --pixel_verify)
 
 STARTUP
   --startup_volume N     Startup volume 0-127, -1 to discover from GLM burst (default -1)
@@ -248,7 +284,7 @@ GLM PROCESS MANAGER
   --glm_cpu_gating       Wait for CPU idle before launching GLM (default true)
   --no_glm_cpu_gating    Disable CPU gating
 
-VM AUTOMATION (fine-tune --desktop / --headless defaults)
+VM AUTOMATION (override defaults for fine-tuning)
   --rdp_priming          RDP session priming at startup (default true)
   --no_rdp_priming       Disable RDP priming
   --midi_restart         Restart Windows MIDI service at startup (default true)
