@@ -6,6 +6,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"vol20toglm/types"
 )
 
 // Config holds all application configuration.
@@ -207,7 +208,8 @@ func Parse(args []string) Config {
 
 // printUsage writes grouped CLI help to w.
 func printUsage(w *os.File) {
-	fmt.Fprintf(w, `vol20toglm — Fosi VOL20 to Genelec GLM bridge
+	fmt.Fprintf(w, "vol20toglm v%s — Fosi VOL20 to Genelec GLM bridge\n", types.Version)
+	fmt.Fprintf(w, `
 
 OPERATING MODE
   --desktop              Desktop mode (disables GLM manager, RDP priming, MIDI restart, UI automation)

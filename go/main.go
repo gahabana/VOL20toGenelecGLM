@@ -28,23 +28,21 @@ import (
 	"vol20toglm/types"
 )
 
-const version = "0.12.2.0"
-
 func main() {
 	runtime.GOMAXPROCS(2)
 	cfg := config.Parse(os.Args[1:])
 
 	if cfg.ListDevices {
-		fmt.Printf("vol20toglm v%s — device discovery\n\n", version)
+		fmt.Printf("vol20toglm v%s — device discovery\n\n", types.Version)
 		listDevices()
 		return
 	}
 
 	log := applog.Setup(cfg.LogLevel, cfg.LogFileName)
 
-	fmt.Printf("vol20toglm v%s\n", version)
+	fmt.Printf("vol20toglm v%s\n", types.Version)
 	log.Info("========== vol20toglm start ==========",
-		"version", version,
+		"version", types.Version,
 		"vid", fmt.Sprintf("0x%04x", cfg.VID),
 		"pid", fmt.Sprintf("0x%04x", cfg.PID),
 		"midi_in", cfg.MIDIInChannel,
@@ -81,7 +79,7 @@ func main() {
 	if _, err := os.Stat(filepath.Join(webDir, "index.html")); err != nil {
 		webDir = "" // No web UI found
 	}
-	apiServer := api.NewServer(ctrl, actions, version, webDir, cfg.CORSOrigin, log.With("component", "api"))
+	apiServer := api.NewServer(ctrl, actions, types.Version, webDir, cfg.CORSOrigin, log.With("component", "api"))
 	ctrl.OnStateChange(func(old, new_ types.State) {
 		apiServer.BroadcastState()
 	})
