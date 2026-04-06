@@ -281,6 +281,7 @@ GLM PROCESS MANAGER
   --glm_manager          Launch and monitor GLM process (default true)
   --no_glm_manager       Disable GLM management
   --glm_path PATH        Path to GLM executable
+                         (default "C:\Program Files (x86)\Genelec\GLMv5\GLMv5.exe")
   --glm_cpu_gating       Wait for CPU idle before launching GLM (default true)
   --no_glm_cpu_gating    Disable CPU gating
 
