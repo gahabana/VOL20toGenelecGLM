@@ -6,7 +6,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
-	"vol20toglm/types"
+	"vol20toglm/version"
 )
 
 // Config holds all application configuration.
@@ -208,7 +208,7 @@ func Parse(args []string) Config {
 
 // printUsage writes grouped CLI help to w.
 func printUsage(w *os.File) {
-	fmt.Fprintf(w, "vol20toglm v%s — Fosi VOL20 to Genelec GLM bridge\n", types.Version)
+	fmt.Fprintf(w, "vol20toglm v%s — Fosi VOL20 to Genelec GLM bridge\n", version.Version)
 	fmt.Fprintf(w, `
 
 OPERATING MODE
