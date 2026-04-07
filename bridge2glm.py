@@ -5,7 +5,7 @@ Bridges a Fosi Audio VOL20 USB volume knob to Genelec GLM software via MIDI.
 Supports volume control, mute, dim, and power management with UI automation.
 """
 
-__version__ = "3.2.34"
+__version__ = "3.2.35"
 
 import time
 import signal
@@ -717,7 +717,8 @@ class HIDToMIDIDaemon:
                  VID, PID, midi_in_channel, midi_out_channel, startup_volume=None, api_port=8080,
                  mqtt_broker=None, mqtt_port=1883, mqtt_user=None, mqtt_pass=None,
                  mqtt_topic="glm", mqtt_ha_discovery=True,
-                 glm_manager_enabled=False, glm_path=None, glm_cpu_gating=True):
+                 glm_manager_enabled=False, glm_path=None, glm_cpu_gating=True,
+                 startup_power="on"):
         self.queue = queue.Queue(maxsize=QUEUE_MAX_SIZE)
         self._stop_event = threading.Event()
         self.hid_reader_thread = threading.Thread(target=self.hid_reader, daemon=True, name="HIDReaderThread")
@@ -748,6 +749,15 @@ class HIDToMIDIDaemon:
         self._rx_seq = []  # List of (timestamp, cc) for pattern detection
         self._last_pattern_time = None  # For startup detection (double-burst)
         self._suppress_power_pattern = False  # Temporarily suppress pattern detection
+
+        # Startup power state
+        self._startup_power = startup_power  # "on" or "off"
+
+        # Startup burst probe state (threading.Condition for CC20 counting)
+        self._probe_lock = threading.Lock()
+        self._probe_condition = threading.Condition(self._probe_lock)
+        self._probe_cc20_count = 0
+        self._startup_consuming = False
 
         # GLM Manager (process lifecycle and watchdog)
         # Initialize this BEFORE power controller, since it may need to start GLM first
@@ -805,14 +815,9 @@ class HIDToMIDIDaemon:
                 # Wait for GLM UI to fully render (splash screen ~5s + OpenGL init)
                 time.sleep(1.0)
 
-                # Sync power state from UI (overrides any MIDI-based detection)
-                state = self._power_controller.get_state()
-                if state in ("on", "off"):
-                    glm_controller.power = (state == "on")
-                    glm_controller._notify_state_change()
-                    logger.info(f"power.init: State synced from GLM UI after restart: {state.upper()}")
-                else:
-                    logger.warning(f"Could not determine GLM power state after restart: {state}")
+                # Re-probe GLM state via startup burst (GLM restart produces a new burst)
+                logger.info("power.init: Re-probing GLM state after restart via startup burst...")
+                self._probe_glm_state()
 
                 # Minimize GLM window (uses same pywinauto window as power operations)
                 if minimize_after:
@@ -1034,6 +1039,12 @@ class HIDToMIDIDaemon:
                                     ).start()
 
                                 self._rx_seq = []  # Clear after detection
+
+                        # Signal startup burst probe on CC20 arrival
+                        if msg.control == GLM_VOLUME_ABS and self._startup_consuming:
+                            with self._probe_condition:
+                                self._probe_cc20_count += 1
+                                self._probe_condition.notify()
 
                         # Process state update
                         changed = glm_controller.update_from_midi(msg.control, msg.value)
@@ -1266,6 +1277,183 @@ class HIDToMIDIDaemon:
             logger.error(f"{prefix}midi.error: Setting volume failed: {e}")
             self._reset_midi_output()
 
+    def _probe_glm_state(self):
+        """
+        Probe GLM state by consuming the startup burst and sending a CC28 power probe.
+
+        Phase 1: Wait for 5 CC20 messages from GLM's startup burst.
+        Phase 2: Send CC28 power probe and wait for 2 CC20 response messages.
+
+        Falls back to the old Vol+1/Vol-1 query if no startup burst is received.
+
+        This must be called AFTER midi_reader is started so we can receive messages.
+        """
+        # Wait for MIDI output connection
+        midi_out = None
+        while midi_out is None and not self._stop_event.is_set():
+            midi_out = self._get_midi_output()
+            if midi_out is None:
+                time.sleep(RETRY_DELAY)
+
+        if midi_out is None:
+            return  # Shutting down
+
+        # Wait a moment for MIDI reader to connect and be ready
+        time.sleep(GLM_INIT_WAIT)
+
+        init_tid = trace_ids.next("sys")
+
+        # Suppress power pattern detection and enable CC20 counting
+        self._suppress_power_pattern = True
+        self._startup_consuming = True
+        with self._probe_condition:
+            self._probe_cc20_count = 0
+
+        try:
+            # ==================================================================
+            # Phase 1: Consume startup burst (expect 5 CC20 messages)
+            # ==================================================================
+            burst_target = 5
+            logger.info(f"[{init_tid}] probe: waiting for startup burst ({burst_target} CC20 messages)...")
+
+            phase1_received = self._wait_for_cc20_count(
+                target_count=burst_target,
+                first_timeout=15.0,  # GLM may take time to boot
+                subsequent_timeout=2.0,
+                trace_id=init_tid,
+                phase_label="burst",
+            )
+
+            if phase1_received == 0:
+                # No burst at all - fall back to old method
+                logger.warning(f"[{init_tid}] probe: startup burst not received, falling back to volume query")
+                self._fallback_volume_query(midi_out, init_tid)
+                return
+
+            logger.info(f"[{init_tid}] probe: startup burst consumed ({phase1_received}/{burst_target} CC20 messages)")
+
+            # ==================================================================
+            # Phase 2: Send CC28 power probe
+            # ==================================================================
+            power_value = 127 if self._startup_power == "on" else 0
+            power_label = "ON" if self._startup_power == "on" else "OFF"
+            logger.info(f"[{init_tid}] probe: sending CC28 power probe (target={power_label})")
+
+            # Reset CC20 count for phase 2
+            with self._probe_condition:
+                self._probe_cc20_count = 0
+
+            # Send CC28 power command
+            try:
+                midi_out.send(Message('control_change', control=GLM_POWER_CC, value=power_value))
+                log_midi("TX", "control_change", cc=GLM_POWER_CC, value=power_value, trace_id=init_tid)
+            except (OSError, IOError) as e:
+                logger.error(f"[{init_tid}] probe: failed to send CC28: {e}")
+                return
+
+            # Wait for 2 CC20 response messages
+            probe_target = 2
+            phase2_received = self._wait_for_cc20_count(
+                target_count=probe_target,
+                first_timeout=3.0,
+                subsequent_timeout=2.0,
+                trace_id=init_tid,
+                phase_label="power",
+            )
+
+            # Update power state on controller
+            target_power = (self._startup_power == "on")
+            with glm_controller._lock:
+                glm_controller.power = target_power
+            glm_controller._notify_state_change()
+
+            # Log final discovered state
+            state = glm_controller.get_state()
+            logger.info(
+                f"[{init_tid}] probe: state discovered "
+                f"volume={state['volume']} mute={state['mute']} "
+                f"dim={state['dim']} power={state['power']}"
+            )
+
+        finally:
+            # Clear suppression and probe state
+            self._startup_consuming = False
+            self._suppress_power_pattern = False
+            self._rx_seq = []
+
+        # Apply startup volume override if requested
+        if self.startup_volume is not None:
+            logger.info(f"[{init_tid}] probe: applying startup volume override: {self.startup_volume}")
+            glm_controller.send_volume_absolute(self.startup_volume, midi_out, trace_id=init_tid)
+            time.sleep(GLM_VOL_RESPONSE_WAIT)
+
+    def _wait_for_cc20_count(self, target_count: int, first_timeout: float,
+                             subsequent_timeout: float, trace_id: str,
+                             phase_label: str) -> int:
+        """
+        Wait for a target number of CC20 messages using the probe condition.
+
+        Args:
+            target_count: Number of CC20 messages to wait for.
+            first_timeout: Timeout for the first message (seconds).
+            subsequent_timeout: Timeout for each subsequent message (seconds).
+            trace_id: Trace ID for log correlation.
+            phase_label: Label for log messages (e.g., "burst", "power").
+
+        Returns:
+            Number of CC20 messages actually received.
+        """
+        received_at_start = 0
+        with self._probe_condition:
+            received_at_start = self._probe_cc20_count
+
+        for i in range(target_count):
+            timeout = first_timeout if i == 0 else subsequent_timeout
+            target = received_at_start + i + 1
+
+            with self._probe_condition:
+                deadline = time.time() + timeout
+                while self._probe_cc20_count < target:
+                    remaining = deadline - time.time()
+                    if remaining <= 0:
+                        # Timed out waiting for this message
+                        actual = self._probe_cc20_count - received_at_start
+                        logger.warning(
+                            f"[{trace_id}] probe: {phase_label} timeout waiting for CC20 "
+                            f"#{i+1} ({actual}/{target_count} received)"
+                        )
+                        return actual
+                    self._probe_condition.wait(timeout=remaining)
+
+            current_count = i + 1
+            if current_count % 2 == 0 or current_count == target_count:
+                logger.debug(f"[{trace_id}] probe: received {current_count}/{target_count} CC20 messages ({phase_label})")
+
+        return target_count
+
+    def _fallback_volume_query(self, midi_out, trace_id: str):
+        """Fall back to the old Vol+1/Vol-1 volume query method."""
+        try:
+            if self.startup_volume is not None:
+                logger.info(f"[{trace_id}] sys.init: Setting startup volume to {self.startup_volume}")
+                glm_controller.send_volume_absolute(self.startup_volume, midi_out, trace_id=trace_id)
+            else:
+                logger.info(f"[{trace_id}] sys.init: Querying current GLM volume (sending vol+1, vol-1)...")
+                glm_controller.send_action(Action.VOL_UP, midi_out, trace_id=trace_id)
+                time.sleep(GLM_VOL_QUERY_DELAY)
+                glm_controller.send_action(Action.VOL_DOWN, midi_out, trace_id=trace_id)
+
+            time.sleep(GLM_VOL_RESPONSE_WAIT)
+        finally:
+            self._startup_consuming = False
+            self._suppress_power_pattern = False
+            self._rx_seq = []
+
+        if glm_controller.has_valid_volume:
+            logger.info(f"[{trace_id}] sys.init: GLM volume initialized: {glm_controller.volume}")
+        else:
+            logger.warning(f"[{trace_id}] sys.init: GLM volume state not yet received. Will initialize on first volume command.")
+
     def _initialize_glm_volume(self):
         """
         Initialize GLM volume state on startup.
@@ -1352,8 +1540,8 @@ class HIDToMIDIDaemon:
         # Start MIDI reader first so we can receive GLM responses
         self.midi_reader_thread.start()
 
-        # Initialize GLM volume state
-        self._initialize_glm_volume()
+        # Probe GLM state via startup burst consumption and CC28 power probe
+        self._probe_glm_state()
 
         # Start remaining threads
         self.hid_reader_thread.start()
@@ -1473,6 +1661,7 @@ if __name__ == "__main__":
         logger.info(f"     Startup volume: {args.startup_volume}")
     else:
         logger.info(f"     Startup volume: (query current)")
+    logger.info(f"     Startup power: {args.startup_power.upper()}")
     if args.api_port > 0:
         logger.info(f"     REST API: http://0.0.0.0:{args.api_port}")
     else:
@@ -1532,6 +1721,7 @@ if __name__ == "__main__":
         args.glm_manager,
         args.glm_path,
         args.glm_cpu_gating,
+        args.startup_power,
     )
     signal.signal(signal.SIGINT, lambda sig, frame: signal_handler(sig, frame, daemon, stop_logging))
     daemon.start()
