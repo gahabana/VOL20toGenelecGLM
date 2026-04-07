@@ -13,6 +13,7 @@ from typing import Optional, Set
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -81,6 +82,7 @@ _apply_websocket_suppression()
 # Will be set by create_app()
 _action_queue = None
 _glm_controller = None
+_app_version = "0.0.0"
 
 # Track connected WebSocket clients
 _websocket_clients: Set[WebSocket] = set()
@@ -119,26 +121,38 @@ async def lifespan(app: FastAPI):
     logger.info("api.shutdown: Server stopped")
 
 
-def create_app(action_queue, glm_controller) -> FastAPI:
+def create_app(action_queue, glm_controller, cors_origin: str = "*", version: str = "0.0.0") -> FastAPI:
     """
     Create FastAPI app with references to the action queue and controller.
 
     Args:
         action_queue: The queue.Queue for submitting GlmActions
         glm_controller: The GlmController instance for reading state
+        cors_origin: CORS Allow-Origin header value (default: "*")
+        version: Application version string (shown in health endpoint)
 
     Returns:
         Configured FastAPI app
     """
-    global _action_queue, _glm_controller
+    global _action_queue, _glm_controller, _app_version
     _action_queue = action_queue
     _glm_controller = glm_controller
+    _app_version = version
 
     app = FastAPI(
         title="GLM Control API",
         description="REST API for Genelec GLM speaker control",
-        version="1.0.0",
+        version=version,
         lifespan=lifespan
+    )
+
+    # CORS middleware
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=[cors_origin] if cors_origin != "*" else ["*"],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
     )
 
     # Register API routes
@@ -152,19 +166,43 @@ def create_app(action_queue, glm_controller) -> FastAPI:
     app.websocket("/ws/state")(websocket_state)
 
     # Serve web UI
+    web_dir = Path(__file__).parent.parent / "web"
+
     @app.get("/")
     async def serve_index():
         """Serve the web UI."""
-        web_dir = Path(__file__).parent.parent / "web"
         index_path = web_dir / "index.html"
         if index_path.exists():
             return FileResponse(index_path, media_type="text/html")
         return JSONResponse({"error": "Web UI not found"}, status_code=404)
 
+    @app.get("/v1")
+    async def serve_v1():
+        """Serve alternate web UI v1."""
+        v1_path = web_dir / "v1.html"
+        if v1_path.exists():
+            return FileResponse(v1_path, media_type="text/html")
+        return JSONResponse({"error": "v1.html not found"}, status_code=404)
+
+    @app.get("/v2")
+    async def serve_v2():
+        """Serve alternate web UI v2."""
+        v2_path = web_dir / "v2.html"
+        if v2_path.exists():
+            return FileResponse(v2_path, media_type="text/html")
+        return JSONResponse({"error": "v2.html not found"}, status_code=404)
+
+    @app.get("/v3")
+    async def serve_v3():
+        """Serve alternate web UI v3."""
+        v3_path = web_dir / "v3.html"
+        if v3_path.exists():
+            return FileResponse(v3_path, media_type="text/html")
+        return JSONResponse({"error": "v3.html not found"}, status_code=404)
+
     @app.get("/favicon.svg")
     async def serve_favicon():
         """Serve the favicon."""
-        web_dir = Path(__file__).parent.parent / "web"
         favicon_path = web_dir / "favicon.svg"
         if favicon_path.exists():
             return FileResponse(favicon_path, media_type="image/svg+xml")
@@ -357,6 +395,7 @@ async def health_check():
     """Health check endpoint."""
     return {
         "status": "ok",
+        "version": _app_version,
         "volume_initialized": _glm_controller.has_valid_volume if _glm_controller else False,
     }
 
@@ -391,7 +430,8 @@ async def websocket_state(websocket: WebSocket):
         logger.info(f"api.ws: Client disconnected. Total: {len(_websocket_clients)}")
 
 
-def start_api_server(action_queue, glm_controller, host: str = "0.0.0.0", port: int = 8080):
+def start_api_server(action_queue, glm_controller, host: str = "0.0.0.0", port: int = 8080,
+                     cors_origin: str = "*", version: str = "0.0.0"):
     """
     Start the API server in a background thread.
 
@@ -400,6 +440,8 @@ def start_api_server(action_queue, glm_controller, host: str = "0.0.0.0", port: 
         glm_controller: The GlmController instance
         host: Bind address (default: 0.0.0.0)
         port: Port number (default: 8080)
+        cors_origin: CORS Allow-Origin header value (default: "*")
+        version: Application version string (shown in health endpoint)
 
     Returns:
         The server thread
@@ -414,7 +456,7 @@ def start_api_server(action_queue, glm_controller, host: str = "0.0.0.0", port: 
     uv_error_logger = logging.getLogger("uvicorn.error")
     uv_error_logger.setLevel(logging.CRITICAL)
 
-    app = create_app(action_queue, glm_controller)
+    app = create_app(action_queue, glm_controller, cors_origin=cors_origin, version=version)
 
     # Custom log config that suppresses websocket errors
     log_config = {

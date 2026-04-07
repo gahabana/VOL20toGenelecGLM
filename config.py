@@ -172,6 +172,8 @@ def parse_arguments(script_file: str = None):
     # REST API
     parser.add_argument("--api_port", type=int, default=8080,
                         help="Port for REST API server. Set to 0 to disable API. Default is 8080.")
+    parser.add_argument("--cors_origin", type=str, default="*",
+                        help="CORS Allow-Origin header for the REST API. Default is '*' (allow all).")
 
     # MQTT / Home Assistant
     parser.add_argument("--mqtt_broker", type=str, default=None,
