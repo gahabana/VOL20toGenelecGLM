@@ -1535,7 +1535,7 @@ class HIDToMIDIDaemon:
         return target_count
 
     def _fallback_volume_query(self, midi_out, trace_id: str):
-        """Fall back to the old Vol+1/Vol-1 volume query method."""
+        """Fall back to the old Vol+1/Vol-1 volume query method, then send CC28 for startup power."""
         try:
             if self.startup_volume is not None:
                 logger.info(f"[{trace_id}] sys.init: Setting startup volume to {self.startup_volume}")
@@ -1547,6 +1547,21 @@ class HIDToMIDIDaemon:
                 glm_controller.send_action(Action.VOL_DOWN, midi_out, trace_id=trace_id)
 
             time.sleep(GLM_VOL_RESPONSE_WAIT)
+
+            # Send CC28 startup power command (same as Phase 2 of the normal probe)
+            power_value = 127 if self._startup_power == "on" else 0
+            power_label = "ON" if self._startup_power == "on" else "OFF"
+            logger.info(f"[{trace_id}] probe: sending CC28 startup power (target={power_label})")
+            try:
+                midi_out.send(Message('control_change', control=GLM_POWER_CC, value=power_value))
+                log_midi("TX", "control_change", cc=GLM_POWER_CC, value=power_value, trace_id=trace_id)
+                target_power = (self._startup_power == "on")
+                with glm_controller._lock:
+                    glm_controller.power = target_power
+                glm_controller._notify_state_change()
+            except (OSError, IOError) as e:
+                logger.error(f"[{trace_id}] probe: CC28 startup power send failed: {e}")
+
         finally:
             self._startup_consuming = False
             self._suppress_power_pattern = False
