@@ -108,14 +108,48 @@ def parse_arguments(script_file: str = None):
     parser.add_argument("--log_level", choices=["DEBUG", "INFO", "NONE"], default="DEBUG",
                         help="Set logging level. Default is DEBUG.")
 
-    parser.add_argument("--log_file_name", type=str, default=default_log_file,
-                        help=f"Name of the log file. Default is '{default_log_file}'.")
+    parser.add_argument("--log_file_name", type=str, default="bridge2glm.log",
+                        help="Name of the log file. Default is 'bridge2glm.log'.")
 
-    # Single argument for click times
+    # Operating mode flags (P0-4)
+    parser.add_argument("--desktop", action="store_true", default=False,
+                        help="Desktop mode (disables GLM manager, RDP priming, MIDI restart, high priority).")
+    parser.add_argument("--pixel_verify", action="store_true", default=False,
+                        help="Enable pixel reading for power state verification.")
+    parser.add_argument("--ui_power", action="store_true", default=False,
+                        help="Use UI click for power instead of MIDI CC28 (implies --pixel_verify).")
+    parser.add_argument("--list", action="store_true", default=False,
+                        help="List HID devices and MIDI ports, then exit.")
+
+    # VM automation flags (P0-5)
+    parser.add_argument("--rdp_priming", dest="rdp_priming", action="store_true", default=True,
+                        help="Enable RDP session priming (default: enabled).")
+    parser.add_argument("--no_rdp_priming", dest="rdp_priming", action="store_false",
+                        help="Disable RDP session priming.")
+    parser.add_argument("--midi_restart", dest="midi_restart", action="store_true", default=True,
+                        help="Enable Windows MIDI service restart (default: enabled).")
+    parser.add_argument("--no_midi_restart", dest="midi_restart", action="store_false",
+                        help="Disable Windows MIDI service restart.")
+    parser.add_argument("--high_priority", dest="high_priority", action="store_true", default=True,
+                        help="Enable process priority boost (default: enabled).")
+    parser.add_argument("--no_high_priority", dest="high_priority", action="store_false",
+                        help="Disable process priority boost.")
+
+    # Startup power state (P0-3)
+    parser.add_argument("--startup_power", choices=["on", "off"], default="on",
+                        help="Desired power state at startup. Default is 'on'.")
+
+    # Single argument for click times (kept for backward compat)
     parser.add_argument("--click_times", type=validate_click_times, default=(0.2, 0.15),
                         help="Comma-separated values for MIN_CLICK_TIME and MAX_AVG_CLICK_TIME. "
                              "MIN_CLICK_TIME must be > 0.01 and < 1, and MAX_AVG_CLICK_TIME must be <= MIN_CLICK_TIME. "
                              "Default is '0.2,0.15'.")
+
+    # Separate click time flags (P1-7) — override --click_times if provided
+    parser.add_argument("--min_click_time", type=float, default=None,
+                        help="Minimum time between clicks for acceleration (seconds).")
+    parser.add_argument("--max_avg_click_time", type=float, default=None,
+                        help="Maximum average click time for acceleration (seconds).")
 
     parser.add_argument("--volume_increases_list", type=validate_volume_increases, default=[1, 1, 2, 2, 3],
                         help="List of volume increases. Must be between 2 and 15 integers, each >=1 and <=10. Default is [1, 1, 2, 2, 3].")
@@ -170,7 +204,24 @@ def parse_arguments(script_file: str = None):
     # Parse arguments
     args = parser.parse_args()
 
-    # Assign parsed click times to individual variables for clarity
-    args.min_click_time, args.max_avg_click_time = args.click_times
+    # Resolve click times: individual flags override --click_times
+    click_times_min, click_times_max_avg = args.click_times
+    if args.min_click_time is None:
+        args.min_click_time = click_times_min
+    if args.max_avg_click_time is None:
+        args.max_avg_click_time = click_times_max_avg
+
     args.vid, args.pid = args.device
+
+    # Implication: --desktop disables VM automation features
+    if args.desktop:
+        args.glm_manager = False
+        args.rdp_priming = False
+        args.midi_restart = False
+        args.high_priority = False
+
+    # Implication: --ui_power requires pixel verification
+    if args.ui_power:
+        args.pixel_verify = True
+
     return args

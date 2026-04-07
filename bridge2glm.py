@@ -504,6 +504,19 @@ def needs_rdp_priming() -> bool:
     except Exception as e:
         logger.warning(f"Failed to write RDP priming flag: {e}")
 
+    # Check if user is already connected via RDP — session is inherently primed
+    try:
+        import subprocess
+        result = subprocess.run(
+            ['query', 'session'],
+            capture_output=True, text=True, timeout=5
+        )
+        if 'rdp-tcp#' in result.stdout.lower():
+            logger.info("User already connected via RDP, session inherently primed")
+            return False
+    except Exception:
+        pass  # If query session fails, proceed with priming
+
     return True  # Need to prime
 
 
@@ -1412,8 +1425,32 @@ class HIDToMIDIDaemon:
 
         logger.info("sys.shutdown: Daemon stopped")
 
+def list_devices():
+    """List available HID devices and MIDI ports, then exit."""
+    import mido
+
+    print("HID Devices:")
+    for device_info in hid.enumerate():
+        print(f"  VID={hex(device_info['vendor_id'])} PID={hex(device_info['product_id'])}"
+              f"  {device_info.get('manufacturer_string', '')} {device_info.get('product_string', '')}")
+
+    print("\nMIDI Input Ports:")
+    for port_name in mido.get_input_names():
+        print(f"  {port_name}")
+
+    print("\nMIDI Output Ports:")
+    for port_name in mido.get_output_names():
+        print(f"  {port_name}")
+
+
 if __name__ == "__main__":
     args = parse_arguments(__file__)
+
+    # --list: print devices and exit before any daemon setup
+    if args.list:
+        list_devices()
+        sys.exit(0)
+
     logger, stop_logging = setup_logging(
         log_level=args.log_level,
         log_file_name=args.log_file_name,
@@ -1459,19 +1496,22 @@ if __name__ == "__main__":
             stop_logging()  # Stop logging thread before exit
             sys.exit(1)
 
-    set_higher_priority()
+    if args.high_priority:
+        set_higher_priority()
     minimize_console_window()
 
     # RDP session priming - prevents high CPU in GLM after RDP disconnect
     # Only runs once per boot (before GLM starts)
-    if needs_rdp_priming():
-        prime_rdp_session()
-    else:
-        logger.debug("RDP session already primed this boot, skipping")
+    if args.rdp_priming:
+        if needs_rdp_priming():
+            prime_rdp_session()
+        else:
+            logger.debug("RDP session already primed this boot, skipping")
 
     # Restart Windows MIDI Service so LoopMIDI ports are visible
     # (Windows MIDI Services doesn't detect virtual ports created before it starts)
-    restart_midi_service()
+    if args.midi_restart:
+        restart_midi_service()
 
     daemon = HIDToMIDIDaemon(
         args.min_click_time,
