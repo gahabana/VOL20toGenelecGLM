@@ -6,7 +6,83 @@ Handles CLI argument parsing and validation for the GLM Manager application.
 
 import argparse
 import os
+import sys
 from typing import List, Tuple
+
+
+def _print_usage():
+    """Print grouped CLI help matching Go's output format."""
+    # Read version without importing bridge2glm (avoids pulling in hid/mido deps)
+    __version__ = "unknown"
+    try:
+        version_file = os.path.join(os.path.dirname(__file__), "bridge2glm.py")
+        with open(version_file) as f:
+            for line in f:
+                if line.startswith("__version__"):
+                    __version__ = line.split('"')[1]
+                    break
+    except Exception:
+        pass
+
+    sys.stderr.write(f"bridge2glm v{__version__} — Fosi VOL20 to Genelec GLM bridge\n")
+    sys.stderr.write("""
+OPERATING MODE
+  --desktop              Desktop mode (disables GLM manager, RDP priming, MIDI restart)
+  --pixel_verify         Enable pixel reading for power state verification (opt-in)
+  --ui_power             Use UI click for power instead of MIDI (implies --pixel_verify)
+
+STARTUP
+  --startup_volume N     Startup volume 0-127 (default: discover from GLM burst)
+  --startup_power STATE  Power state at startup: "on" or "off" (default "on")
+
+DEVICES & MIDI
+  --list                 List available HID devices and MIDI ports, then exit
+  --device VID,PID       HID device VID,PID in hex (default "0x07d7,0x0000")
+  --midi_in_channel NAME MIDI port for commands TO GLM (default "GLMMIDI 1")
+  --midi_out_channel NAME
+                         MIDI port for state FROM GLM (default "GLMOUT 1")
+
+REST API
+  --api_port PORT        HTTP port for REST API and web UI, 0 to disable (default 8080)
+  --cors_origin ORIGIN   CORS Allow-Origin header, empty to disable (default "*")
+
+MQTT / HOME ASSISTANT
+  --mqtt_broker HOST     MQTT broker hostname (empty to disable)
+  --mqtt_port PORT       MQTT broker port (default 1883)
+  --mqtt_user USER       MQTT username
+  --mqtt_pass PASS       MQTT password
+  --mqtt_topic PREFIX    MQTT topic prefix (default "glm")
+  --mqtt_ha_discovery    Enable Home Assistant MQTT Discovery (default true)
+  --no_mqtt_ha_discovery Disable Home Assistant MQTT Discovery
+
+GLM PROCESS MANAGER
+  --glm_manager          Launch and monitor GLM process (default true)
+  --no_glm_manager       Disable GLM management
+  --glm_path PATH        Path to GLM executable
+                         (default "C:\\Program Files (x86)\\Genelec\\GLMv5\\GLMv5.exe")
+  --glm_cpu_gating       Wait for CPU idle before launching GLM (default true)
+  --no_glm_cpu_gating    Disable CPU gating
+
+VM AUTOMATION (override defaults for fine-tuning)
+  --rdp_priming          RDP session priming at startup (default true)
+  --no_rdp_priming       Disable RDP priming
+  --midi_restart         Restart Windows MIDI service at startup (default true)
+  --no_midi_restart      Disable MIDI service restart
+  --high_priority        Set process priority to AboveNormal (default true)
+  --no_high_priority     Run at normal priority
+
+VOLUME ACCELERATION
+  --min_click_time SEC   Min seconds between clicks (default 0.2)
+  --max_avg_click_time SEC
+                         Max avg click time for acceleration (default 0.15)
+  --click_times MIN,MAX  Combined click times (deprecated, use individual flags)
+  --volume_increases_list N,N,...
+                         Volume delta per acceleration level (default "1,1,2,2,3")
+
+LOGGING
+  --log_level LEVEL      DEBUG, INFO, or NONE (default "DEBUG")
+  --log_file_name NAME   Log file name (default "bridge2glm.log")
+""")
 
 
 def validate_volume_increases(value: str) -> List[int]:
@@ -97,7 +173,12 @@ def parse_arguments(script_file: str = None):
     Returns:
         Parsed arguments namespace
     """
-    parser = argparse.ArgumentParser(description="GLM Manager - HID to MIDI Agent for Genelec GLM control.")
+    parser = argparse.ArgumentParser(
+        description="GLM Manager - HID to MIDI Agent for Genelec GLM control.",
+        add_help=False,
+    )
+    parser.add_argument("-h", "--help", action="store_true", default=False,
+                        help=argparse.SUPPRESS)
 
     # Determine default log file name
     if script_file:
@@ -205,6 +286,11 @@ def parse_arguments(script_file: str = None):
 
     # Parse arguments
     args = parser.parse_args()
+
+    # Custom help output
+    if args.help:
+        _print_usage()
+        sys.exit(0)
 
     # Resolve click times: individual flags override --click_times
     click_times_min, click_times_max_avg = args.click_times
