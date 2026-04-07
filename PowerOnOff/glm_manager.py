@@ -71,7 +71,7 @@ class GlmManagerConfig:
     glm_path: str = r"C:\Program Files (x86)\Genelec\GLMv5\GLMv5.exe"
     process_name: str = "GLMv5"
 
-    # CPU gating (only at initial start, not restarts)
+    # CPU gating (runs on every start, including restarts)
     cpu_threshold: float = 10.0  # % CPU considered "idle enough"
     cpu_check_interval: float = 1.0  # seconds between checks
     cpu_max_checks: int = 300  # 300 * 1s = 5 minutes max wait
@@ -81,13 +81,13 @@ class GlmManagerConfig:
     post_start_sleep: float = 3.0  # seconds after start before priority/stabilization
     enforce_poll_interval: float = 1.0  # seconds between stabilization polls
     enforce_max_seconds: float = 60.0  # max time for stabilization
-    stable_handle_count: int = 2  # handle must be same N times (2 is enough with pywinauto)
+    stable_handle_count: int = 3  # handle must be same N times
     minimize_attempts_needed: int = 1  # minimize at least N times
     minimize_on_start: bool = True  # Minimize GLM window after startup
 
     # Watchdog
-    watchdog_interval: float = 5.0  # seconds between checks
-    max_non_responsive: int = 6  # checks before kill (6*5=30s)
+    watchdog_interval: float = 10.0  # seconds between checks
+    max_non_responsive: int = 3  # checks before kill (3*10=30s)
     restart_delay: float = 5.0  # seconds to wait before restart
 
     # Log file (None = no separate log, use main logger)
@@ -106,6 +106,7 @@ class GlmManager:
         self,
         config: Optional[GlmManagerConfig] = None,
         reinit_callback: Optional[Callable[[int], None]] = None,
+        pre_reinit_callback: Optional[Callable[[], None]] = None,
     ):
         """
         Initialize GLM Manager.
@@ -114,16 +115,18 @@ class GlmManager:
             config: Configuration options (uses defaults if None)
             reinit_callback: Called after GLM restart with GLM's PID to reinitialize
                            dependent components (e.g., power controller window handles)
+            pre_reinit_callback: Called BEFORE the restart delay when GLM is being
+                               restarted, to suppress burst events during restart
         """
         self.config = config or GlmManagerConfig()
         self.reinit_callback = reinit_callback
+        self._pre_reinit_callback = pre_reinit_callback
 
         self._process: Optional[psutil.Process] = None
         self._hwnd: int = 0  # Cached window handle
         self._running = False
         self._watchdog_thread: Optional[threading.Thread] = None
         self._non_responsive_count = 0
-        self._cpu_gating_done = False  # Only gate CPU once at first start
         self._lock = threading.Lock()
 
         # Set up logging
@@ -156,10 +159,9 @@ class GlmManager:
 
         logger.info("========== GlmManager.start() BEGIN ==========")
 
-        # CPU gating only on first start
-        if self.config.cpu_gating_enabled and not self._cpu_gating_done:
+        # CPU gating on every start
+        if self.config.cpu_gating_enabled:
             self._wait_for_cpu_calm()
-            self._cpu_gating_done = True
 
         # Start GLM process
         success = self._start_glm()
@@ -583,6 +585,11 @@ class GlmManager:
                 # Check if process is alive
                 if not self.is_alive():
                     logger.warning("Watchdog: GLM process not found. Restarting.")
+                    if self._pre_reinit_callback:
+                        try:
+                            self._pre_reinit_callback()
+                        except Exception as pre_cb_err:
+                            logger.error(f"Pre-reinit callback failed: {pre_cb_err}")
                     self._restart_glm()
                     continue
 
@@ -598,6 +605,11 @@ class GlmManager:
                         hung_time = self.config.watchdog_interval * self.config.max_non_responsive
                         logger.error(f"Watchdog: GLM hung for ~{hung_time}s. Killing and restarting.")
                         self._kill_glm()
+                        if self._pre_reinit_callback:
+                            try:
+                                self._pre_reinit_callback()
+                            except Exception as pre_cb_err:
+                                logger.error(f"Pre-reinit callback failed: {pre_cb_err}")
                         time.sleep(self.config.restart_delay)
                         self._restart_glm()
                         continue
