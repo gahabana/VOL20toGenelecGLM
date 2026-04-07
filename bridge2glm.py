@@ -1406,29 +1406,44 @@ class HIDToMIDIDaemon:
 
         init_tid = trace_ids.next("sys")
 
-        # Suppress power pattern detection and enable CC20 counting
-        self._suppress_power_pattern = True
-        self._startup_consuming = True
-        with self._probe_condition:
-            self._probe_cc20_count = 0
+        # Enable CC20 counting and suppress power pattern detection.
+        # If called from start(), these are already set and the counter may
+        # already have CC20s from GLM's startup burst — don't reset.
+        # If called from reinit (GLM restart), set them fresh.
+        if not self._startup_consuming:
+            self._suppress_power_pattern = True
+            self._startup_consuming = True
+            with self._probe_condition:
+                self._probe_cc20_count = 0
 
         try:
             # ==================================================================
             # Phase 1: Consume startup burst (expect 5 CC20 messages)
             # ==================================================================
             burst_target = 5
-            logger.info(f"[{init_tid}] probe: waiting for startup burst ({burst_target} CC20 messages)...")
 
-            phase1_received = self._wait_for_cc20_count(
-                target_count=burst_target,
-                first_timeout=15.0,  # GLM may take time to boot
-                subsequent_timeout=2.0,
-                trace_id=init_tid,
-                phase_label="burst",
-            )
+            # Check how many CC20s already arrived (e.g., during GLM window stabilization)
+            with self._probe_condition:
+                already_received = self._probe_cc20_count
+
+            if already_received >= burst_target:
+                logger.info(f"[{init_tid}] probe: startup burst already received ({already_received} CC20 messages)")
+                phase1_received = already_received
+            else:
+                remaining_needed = burst_target - already_received
+                logger.info(f"[{init_tid}] probe: waiting for startup burst ({already_received}/{burst_target} CC20 already received, need {remaining_needed} more)...")
+
+                additional = self._wait_for_cc20_count(
+                    target_count=remaining_needed,
+                    first_timeout=15.0,  # GLM may take time to boot
+                    subsequent_timeout=2.0,
+                    trace_id=init_tid,
+                    phase_label="burst",
+                )
+                phase1_received = already_received + additional
 
             if phase1_received == 0:
-                # No burst at all - fall back to old method
+                # No burst at all - send CC28 directly
                 logger.warning(f"[{init_tid}] probe: startup burst not received, sending CC28 power probe directly")
                 self._fallback_power_probe(midi_out, init_tid)
                 return
@@ -1629,6 +1644,14 @@ class HIDToMIDIDaemon:
 
     def start(self):
         """Starts all threads."""
+        # Enable CC20 counting and suppress power pattern detection BEFORE GLM starts.
+        # GLM's startup burst arrives during window stabilization (~5s after launch),
+        # so we must be ready to count CC20 messages from the very beginning.
+        self._startup_consuming = True
+        self._suppress_power_pattern = True
+        with self._probe_condition:
+            self._probe_cc20_count = 0
+
         # Start MIDI reader FIRST so it can receive GLM's startup burst messages.
         # This must happen before GLM Manager starts GLM (which triggers the burst).
         self.midi_reader_thread.start()
