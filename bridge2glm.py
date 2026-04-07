@@ -78,7 +78,7 @@ else:
 # Parameters
 MAX_EVENT_AGE = 2.0  # seconds
 SEND_DELAY = 0  # seconds for non-volume commands
-RETRY_DELAY = 2.0  # seconds
+RETRY_DELAY = 5.0  # seconds
 HID_READ_TIMEOUT_MS = 1000  # milliseconds - balance between CPU usage and shutdown responsiveness
 QUEUE_MAX_SIZE = 100  # Maximum queued events before backpressure
 
@@ -718,7 +718,7 @@ class HIDToMIDIDaemon:
                  mqtt_broker=None, mqtt_port=1883, mqtt_user=None, mqtt_pass=None,
                  mqtt_topic="glm", mqtt_ha_discovery=True,
                  glm_manager_enabled=False, glm_path=None, glm_cpu_gating=True,
-                 startup_power="on"):
+                 startup_power="on", cors_origin="*"):
         self.queue = queue.Queue(maxsize=QUEUE_MAX_SIZE)
         self._stop_event = threading.Event()
         self.hid_reader_thread = threading.Thread(target=self.hid_reader, daemon=True, name="HIDReaderThread")
@@ -736,6 +736,7 @@ class HIDToMIDIDaemon:
         self.startup_volume = startup_volume  # Optional startup volume (0-127)
         self.bindings = DEFAULT_BINDINGS.copy()  # Instance-level key bindings
         self.api_port = api_port  # REST API port (0 = disabled)
+        self.cors_origin = cors_origin  # CORS Allow-Origin header for REST API
         self.api_thread = None   # API server thread
         # MQTT settings
         self.mqtt_broker = mqtt_broker
@@ -772,6 +773,7 @@ class HIDToMIDIDaemon:
                 self._glm_manager = GlmManager(
                     config=config,
                     reinit_callback=self._reinit_power_controller,
+                    pre_reinit_callback=self._on_glm_pre_reinit,
                 )
                 logger.info("sys.init: GlmManager initialized (will start GLM and watchdog)")
             except Exception as e:
@@ -798,6 +800,16 @@ class HIDToMIDIDaemon:
                 logger.info("sys.init: GlmPowerController initialized for UI-based power control")
             except Exception as e:
                 logger.warning(f"GlmPowerController not available: {e}")
+
+    def _on_glm_pre_reinit(self):
+        """Called by GlmManager before restarting GLM.
+
+        Suppresses startup burst events during the restart window so that
+        power-pattern detection does not misfire on the initial GLM output.
+        """
+        self._startup_consuming = True
+        self._suppress_power_pattern = True
+        logger.info("pre_reinit: startup_consuming and suppress_power_pattern set (GLM restart pending)")
 
     def _reinit_power_controller(self, pid: int = None, minimize_after: bool = True):
         """Reinitialize power controller after GLM restart and sync power state.
@@ -1595,7 +1607,12 @@ class HIDToMIDIDaemon:
         # Start REST API server if enabled
         if self.api_port > 0:
             from api import start_api_server
-            self.api_thread = start_api_server(self.queue, glm_controller, port=self.api_port)
+            self.api_thread = start_api_server(
+                self.queue, glm_controller,
+                port=self.api_port,
+                cors_origin=self.cors_origin,
+                version=__version__,
+            )
 
         # Start MQTT client if enabled
         if self.mqtt_broker:
@@ -1718,6 +1735,52 @@ if __name__ == "__main__":
         logger.info(f"     MQTT: disabled")
     logger.info(f"<--- End configuration")
 
+    # Startup summary banner (matches Go output format)
+    _mode_str = "Desktop" if args.desktop else "Default (headless VM)"
+    _glm_manager_str = "ON" if args.glm_manager else "OFF"
+    if args.ui_power:
+        _power_control_str = "UI click (pixel verified)"
+    elif args.pixel_verify:
+        _power_control_str = "MIDI CC28 (pixel verified)"
+    else:
+        _power_control_str = "MIDI CC28 (deterministic)"
+    _pixel_verify_str = "ON" if args.pixel_verify else "OFF"
+    _api_str = f"http://localhost:{args.api_port}" if args.api_port > 0 else "disabled"
+    if args.mqtt_broker:
+        _mqtt_str = f"{args.mqtt_broker}:{args.mqtt_port} (topic: {args.mqtt_topic})"
+    else:
+        _mqtt_str = "disabled"
+
+    _banner_lines = [
+        f"  Mode:           {_mode_str}",
+        f"  GLM manager:    {_glm_manager_str}",
+    ]
+    if not args.desktop:
+        _rdp_priming_str = "ON" if args.rdp_priming else "OFF"
+        _midi_restart_str = "ON" if args.midi_restart else "OFF"
+        _banner_lines.append(f"  RDP priming:    {_rdp_priming_str}")
+        _banner_lines.append(f"  MIDI restart:   {_midi_restart_str}")
+    _banner_lines += [
+        f"  Power control:  {_power_control_str}",
+        f"  Pixel verify:   {_pixel_verify_str}",
+        f"  API:            {_api_str}",
+        f"  MQTT:           {_mqtt_str}",
+    ]
+
+    _startup_header = "========== bridge2glm start =========="
+    _startup_detail = (
+        f"version={__version__}  vid={hex(args.vid)}  pid={hex(args.pid)}"
+        f"  midi_in={args.midi_in_channel}  midi_out={args.midi_out_channel}"
+        f"  api_port={args.api_port}"
+    )
+    logger.info(_startup_header)
+    logger.info(_startup_detail)
+    print(_startup_header)
+    print(_startup_detail)
+    for _line in _banner_lines:
+        print(_line)
+        logger.info(_line)
+
     # Check if another instance is already running (by checking if API port is in use)
     if args.api_port > 0:
         import socket
@@ -1767,6 +1830,7 @@ if __name__ == "__main__":
         args.glm_path,
         args.glm_cpu_gating,
         args.startup_power,
+        args.cors_origin,
     )
     signal.signal(signal.SIGINT, lambda sig, frame: signal_handler(sig, frame, daemon, stop_logging))
     daemon.start()
