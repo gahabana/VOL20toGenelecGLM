@@ -5,7 +5,7 @@ Bridges a Fosi Audio VOL20 USB volume knob to Genelec GLM software via MIDI.
 Supports volume control, mute, dim, and power management with UI automation.
 """
 
-__version__ = "3.2.35"
+__version__ = "3.2.36"
 
 import time
 import signal
@@ -996,23 +996,68 @@ class HIDToMIDIDaemon:
                                     self._rx_seq = []
                                     continue
 
-                                # Power pattern detected - toggle state immediately, verify later
-                                new_power = glm_controller.toggle_power_from_midi_pattern()
-                                logger.info(f"power.pattern: RF power toggle detected - now {'ON' if new_power else 'OFF'}")
+                                # --- Self-ACK suppression ---
+                                # If we recently sent a CC28 follow-through, GLM echoes
+                                # back its own 5-message pattern. The cooldown check above
+                                # (can_accept_power_command) already handles this, but
+                                # double-check the transition timestamp explicitly.
+                                if glm_controller._power_transition_start > 0:
+                                    elapsed_since_transition = time.time() - glm_controller._power_transition_start
+                                    if elapsed_since_transition < POWER_TOTAL_LOCKOUT:
+                                        logger.debug(f"power.pattern: Self-ACK suppressed ({elapsed_since_transition:.1f}s into lockout)")
+                                        self._last_pattern_time = time.time()
+                                        self._rx_seq = []
+                                        continue
 
-                                # Start power cooldown (blocks further power commands, but NOT volume/mute/dim)
-                                # Unlike start_power_transition(), this only sets the timestamp
-                                # without _power_settling, so can_accept_command() still allows through.
+                                # --- Startup duplicate suppression ---
+                                # GLM can emit duplicate bursts during startup. Suppress
+                                # patterns that arrive within 3s of a previous match.
+                                if self._last_pattern_time is not None:
+                                    since_last_pattern = time.time() - self._last_pattern_time
+                                    if since_last_pattern < POWER_STARTUP_WINDOW:
+                                        logger.debug(f"power.pattern: Startup duplicate suppressed ({since_last_pattern:.1f}s since last)")
+                                        self._last_pattern_time = time.time()
+                                        self._rx_seq = []
+                                        continue
+
+                                # --- Follow-through logic ---
+                                # External RF remote toggled power. Send CC28 to align
+                                # deterministic state, matching Go behavior.
                                 with glm_controller._lock:
-                                    glm_controller._power_transition_start = time.time()
+                                    target_power = not glm_controller.power
 
-                                # Deferred verification via pixel read (non-blocking)
+                                logger.info(f"power.pattern: RF power toggle detected - sending CC28 follow-through to {'ON' if target_power else 'OFF'}")
+
+                                # 500ms settle for GLM to process the RF toggle
+                                time.sleep(0.5)
+
+                                cc28_value = 127 if target_power else 0
+                                midi_out = self._get_midi_output()
+                                if midi_out is not None:
+                                    try:
+                                        midi_out.send(Message('control_change', control=GLM_POWER_CC, value=cc28_value))
+                                        log_midi("TX", "control_change", cc=GLM_POWER_CC, value=cc28_value, trace_id="ext-followthrough")
+                                    except (OSError, IOError) as e:
+                                        logger.warning(f"power.pattern: CC28 send failed: {e}, falling back to state flip only")
+                                        midi_out = None  # Signal failure for fallback below
+
+                                # Update controller state
+                                with glm_controller._lock:
+                                    glm_controller.power = target_power
+                                    glm_controller._power_transition_start = time.time()
+                                glm_controller._notify_state_change()
+                                self._last_pattern_time = time.time()
+
+                                if midi_out is None:
+                                    logger.warning(f"power.pattern: No MIDI output - state flipped to {'ON' if target_power else 'OFF'} without CC28")
+
+                                # Deferred verification via pixel read (optional safety net)
                                 # OFFLINE labels take ~1.5s to appear/disappear after power toggle,
                                 # so we wait before checking. Runs in a daemon thread to avoid
                                 # blocking MIDI reader.
                                 if self._power_controller:
                                     power_controller = self._power_controller
-                                    def _deferred_power_verify(expected_power=new_power):
+                                    def _deferred_power_verify(expected_power=target_power):
                                         time.sleep(1.5)
                                         if ensure_session_connected:
                                             ensure_session_connected(logger=logger)
@@ -1024,13 +1069,13 @@ class HIDToMIDIDaemon:
                                                     with glm_controller._lock:
                                                         glm_controller.power = actual_power
                                                     glm_controller._notify_state_change()
-                                                    logger.warning(f"power.verify: Corrected state to {'ON' if actual_power else 'OFF'} (pattern said {'ON' if expected_power else 'OFF'})")
+                                                    logger.warning(f"power.verify: Corrected state to {'ON' if actual_power else 'OFF'} (follow-through said {'ON' if expected_power else 'OFF'})")
                                                 else:
                                                     logger.debug(f"power.verify: Confirmed {'ON' if actual_power else 'OFF'}")
                                             else:
-                                                logger.debug(f"power.verify: Read returned '{actual_state}', keeping pattern result")
+                                                logger.debug(f"power.verify: Read returned '{actual_state}', keeping follow-through result")
                                         except Exception as e:
-                                            logger.debug(f"power.verify: Failed: {e}, keeping pattern result")
+                                            logger.debug(f"power.verify: Failed: {e}, keeping follow-through result")
 
                                     threading.Thread(
                                         target=_deferred_power_verify,
