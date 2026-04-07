@@ -5,7 +5,7 @@ Bridges a Fosi Audio VOL20 USB volume knob to Genelec GLM software via MIDI.
 Supports volume control, mute, dim, and power management with UI automation.
 """
 
-__version__ = "0.12.3.1"
+__version__ = "0.12.4.0"
 
 import time
 import signal
@@ -718,7 +718,8 @@ class HIDToMIDIDaemon:
                  mqtt_broker=None, mqtt_port=1883, mqtt_user=None, mqtt_pass=None,
                  mqtt_topic="glm", mqtt_ha_discovery=True,
                  glm_manager_enabled=False, glm_path=None, glm_cpu_gating=True,
-                 startup_power="on", cors_origin="*"):
+                 startup_power="on", cors_origin="*",
+                 ui_power=False, pixel_verify=False):
         self.queue = queue.Queue(maxsize=QUEUE_MAX_SIZE)
         self._stop_event = threading.Event()
         self.hid_reader_thread = threading.Thread(target=self.hid_reader, daemon=True, name="HIDReaderThread")
@@ -754,6 +755,14 @@ class HIDToMIDIDaemon:
         # Startup power state
         self._startup_power = startup_power  # "on" or "off"
 
+        # Power control mode flags
+        self._ui_power = ui_power          # Use UI automation (click + pixel) for power
+        self._pixel_verify = pixel_verify  # Use pixel read to verify power state
+
+        # Initial startup flag — prevents _reinit_power_controller from probing
+        # before MIDI reader is connected. Cleared after start() does its own probe.
+        self._initial_startup = True
+
         # Startup burst probe state (threading.Condition for CC20 counting)
         self._probe_lock = threading.Lock()
         self._probe_condition = threading.Condition(self._probe_lock)
@@ -783,8 +792,10 @@ class HIDToMIDIDaemon:
 
         # Power control via UI automation
         # Skip init if GLM Manager is enabled - it will init after starting GLM
+        # Only create if ui_power or pixel_verify is needed
         self._power_controller = None
-        if POWER_CONTROL_AVAILABLE and not self._glm_manager:
+        needs_power_controller = self._ui_power or self._pixel_verify
+        if POWER_CONTROL_AVAILABLE and needs_power_controller and not self._glm_manager:
             try:
                 # Log display/session diagnostics (for debugging)
                 if get_display_diagnostics:
@@ -814,30 +825,44 @@ class HIDToMIDIDaemon:
     def _reinit_power_controller(self, pid: int = None, minimize_after: bool = True):
         """Reinitialize power controller after GLM restart and sync power state.
 
+        Only creates GlmPowerController if ui_power or pixel_verify is enabled
+        (needed for UI click or pixel read). In pure CC28 mode, it's still created
+        for window minimize support when glm_manager is active.
+
         Args:
             pid: GLM process ID for window filtering
             minimize_after: If True, minimize GLM window after reinit (for restarts)
         """
-        if POWER_CONTROL_AVAILABLE:
+        # Create power controller if we need UI power, pixel verify, or window minimize
+        needs_power_controller = self._ui_power or self._pixel_verify or self._glm_manager
+        if POWER_CONTROL_AVAILABLE and needs_power_controller:
             try:
                 # Recreate power controller with PID to find correct window
                 self._power_controller = GlmPowerController(steal_focus=True, pid=pid)
                 logger.info(f"power.init: Controller reinitialized after GLM restart (PID={pid})")
-
-                # Wait for GLM UI to fully render (splash screen ~5s + OpenGL init)
-                time.sleep(1.0)
-
-                # Re-probe GLM state via startup burst (GLM restart produces a new burst)
-                logger.info("power.init: Re-probing GLM state after restart via startup burst...")
-                self._probe_glm_state()
-
-                # Minimize GLM window (uses same pywinauto window as power operations)
-                if minimize_after:
-                    time.sleep(1.0)  # Let GLM finish any startup animation
-                    logger.info("Minimizing GLM window after reinit")
-                    self._power_controller.minimize()
             except Exception as e:
                 logger.warning(f"Failed to reinitialize power controller: {e}")
+                return
+
+        # Wait for GLM UI to fully render (splash screen ~5s + OpenGL init)
+        time.sleep(1.0)
+
+        # Skip probe during initial startup — start() will probe after MIDI reader is running
+        if self._initial_startup:
+            logger.debug("power.init: Skipping probe during initial startup (MIDI reader not yet connected)")
+        else:
+            # Re-probe GLM state via startup burst (GLM restart produces a new burst)
+            logger.info("power.init: Re-probing GLM state after restart via startup burst...")
+            self._probe_glm_state()
+
+        # Minimize GLM window (uses same pywinauto window as power operations)
+        if minimize_after and self._power_controller:
+            time.sleep(1.0)  # Let GLM finish any startup animation
+            logger.info("Minimizing GLM window after reinit")
+            try:
+                self._power_controller.minimize()
+            except Exception as e:
+                logger.warning(f"Failed to minimize GLM window: {e}")
 
     def _get_midi_output(self):
         """Get connected MIDI output, reconnecting if necessary. Thread-safe."""
@@ -1067,7 +1092,7 @@ class HIDToMIDIDaemon:
                                 # OFFLINE labels take ~1.5s to appear/disappear after power toggle,
                                 # so we wait before checking. Runs in a daemon thread to avoid
                                 # blocking MIDI reader.
-                                if self._power_controller:
+                                if self._pixel_verify and self._power_controller:
                                     power_controller = self._power_controller
                                     def _deferred_power_verify(expected_power=target_power):
                                         time.sleep(1.5)
@@ -1206,16 +1231,15 @@ class HIDToMIDIDaemon:
 
     def _handle_power_action(self, action: SetPower, trace_id: str = ""):
         """
-        Handle power control via UI automation.
+        Handle power control.
 
-        This uses GlmPowerController to click the power button in GLM,
-        providing deterministic state control with verification.
+        When ui_power is True: uses GlmPowerController to click the power button
+        in GLM, providing deterministic state control with pixel verification.
+
+        When ui_power is False: sends MIDI CC28 directly for deterministic
+        power control without UI automation.
         """
         prefix = f"[{trace_id}] " if trace_id else ""
-
-        if self._power_controller is None:
-            logger.error(f"{prefix}power.error: GlmPowerController not initialized")
-            return
 
         # Determine target state
         if action.state is None:
@@ -1225,42 +1249,64 @@ class HIDToMIDIDaemon:
             target_state = action.state
 
         desired = "on" if target_state else "off"
-        logger.info(f"{prefix}power.begin: Setting to {desired.upper()} via UI automation")
 
-        # Start power transition (blocks all commands)
-        glm_controller.start_power_transition(target_state, trace_id=trace_id)
-        transition_start = time.time()
-
-        # Ensure session is connected to console before UI automation
-        # This uses WTSEnumerateSessionsW to detect disconnected RDP sessions
-        # and reconnects via tscon if needed
-        if ensure_session_connected:
-            if not ensure_session_connected(logger=logger):
-                logger.error(f"{prefix}power.error: Could not ensure session is connected to console")
-                glm_controller.end_power_transition(success=False)
+        if self._ui_power:
+            # --- UI automation path (click + pixel verify) ---
+            if self._power_controller is None:
+                logger.error(f"{prefix}power.error: GlmPowerController not initialized")
                 return
 
-        success = False
-        try:
-            # Execute via UI automation
-            self._power_controller.set_state(desired, verify=True)
-            success = True
-        except Exception as e:
-            logger.error(f"{prefix}power.error: UI automation failed: {e}")
+            logger.info(f"{prefix}power.begin: Setting to {desired.upper()} via UI automation")
 
-        # Wait for full settling time before ending transition
-        # This ensures UI shows transitioning state for the full 2 seconds
-        elapsed = time.time() - transition_start
-        if elapsed < POWER_SETTLING_TIME:
-            remaining = POWER_SETTLING_TIME - elapsed
-            logger.debug(f"{prefix}power.settling: Waiting {remaining:.1f}s")
-            time.sleep(remaining)
+            # Start power transition (blocks all commands)
+            glm_controller.start_power_transition(target_state, trace_id=trace_id)
+            transition_start = time.time()
 
-        # Now end transition (UI will stop showing transitioning state)
-        if success:
-            glm_controller.end_power_transition(success=True, actual_state=target_state)
+            # Ensure session is connected to console before UI automation
+            if ensure_session_connected:
+                if not ensure_session_connected(logger=logger):
+                    logger.error(f"{prefix}power.error: Could not ensure session is connected to console")
+                    glm_controller.end_power_transition(success=False)
+                    return
+
+            success = False
+            try:
+                self._power_controller.set_state(desired, verify=True)
+                success = True
+            except Exception as e:
+                logger.error(f"{prefix}power.error: UI automation failed: {e}")
+
+            # Wait for full settling time before ending transition
+            elapsed = time.time() - transition_start
+            if elapsed < POWER_SETTLING_TIME:
+                remaining = POWER_SETTLING_TIME - elapsed
+                logger.debug(f"{prefix}power.settling: Waiting {remaining:.1f}s")
+                time.sleep(remaining)
+
+            if success:
+                glm_controller.end_power_transition(success=True, actual_state=target_state)
+            else:
+                glm_controller.end_power_transition(success=False)
         else:
-            glm_controller.end_power_transition(success=False)
+            # --- Deterministic CC28 path (no UI automation) ---
+            logger.info(f"{prefix}power.begin: Setting to {desired.upper()} via MIDI CC28")
+
+            midi_out = self._get_midi_output()
+            if midi_out is None:
+                logger.error(f"{prefix}power.error: MIDI output not connected")
+                return
+
+            glm_controller.start_power_transition(target_state, trace_id=trace_id)
+
+            cc28_value = 127 if target_state else 0
+            try:
+                midi_out.send(Message('control_change', control=GLM_POWER_CC, value=cc28_value))
+                log_midi("TX", "control_change", cc=GLM_POWER_CC, value=cc28_value, trace_id=trace_id)
+                glm_controller.end_power_transition(success=True, actual_state=target_state)
+            except (OSError, IOError) as e:
+                logger.error(f"{prefix}power.error: CC28 send failed: {e}")
+                self._reset_midi_output()
+                glm_controller.end_power_transition(success=False)
 
     def _handle_adjust_volume(self, delta: int, trace_id: str = ""):
         """
@@ -1564,13 +1610,18 @@ class HIDToMIDIDaemon:
 
     def start(self):
         """Starts all threads."""
-        # Start GLM Manager first (ensures GLM is running before we try to sync state)
+        # Start MIDI reader FIRST so it can receive GLM's startup burst messages.
+        # This must happen before GLM Manager starts GLM (which triggers the burst).
+        self.midi_reader_thread.start()
+
+        # Start GLM Manager (ensures GLM is running before we try to sync state)
         if self._glm_manager:
             logger.info("Starting GLM Manager (will start GLM and watchdog)...")
             if self._glm_manager.start():
                 logger.info("GLM Manager started successfully")
                 # Reinitialize power controller now that GLM is running (window still visible)
                 # Don't minimize here - we do it at end of start() after all init complete
+                # _initial_startup flag prevents this from probing (MIDI reader needs time to connect)
                 self._reinit_power_controller(pid=self._glm_manager.pid, minimize_after=False)
             else:
                 logger.error("GLM Manager failed to start")
@@ -1594,10 +1645,9 @@ class HIDToMIDIDaemon:
             except Exception as e:
                 logger.warning(f"Failed to sync power state: {e}")
 
-        # Start MIDI reader first so we can receive GLM responses
-        self.midi_reader_thread.start()
-
-        # Probe GLM state via startup burst consumption and CC28 power probe
+        # Probe GLM state via startup burst consumption and CC28 power probe.
+        # Now safe: MIDI reader is already running to receive GLM's burst messages.
+        self._initial_startup = False  # Allow future reinit callbacks to probe
         self._probe_glm_state()
 
         # Start remaining threads
@@ -1831,6 +1881,8 @@ if __name__ == "__main__":
         args.glm_cpu_gating,
         args.startup_power,
         args.cors_origin,
+        ui_power=args.ui_power,
+        pixel_verify=args.pixel_verify,
     )
     signal.signal(signal.SIGINT, lambda sig, frame: signal_handler(sig, frame, daemon, stop_logging))
     daemon.start()
