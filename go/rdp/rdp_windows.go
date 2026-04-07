@@ -153,8 +153,20 @@ type WindowsPrimer struct {
 }
 
 // NeedsPriming checks whether RDP priming is needed for this boot.
+// Returns false if already primed this boot, or if the user is already
+// connected via RDP (session is inherently primed — priming would disrupt it).
 func (w *WindowsPrimer) NeedsPriming() bool {
-	return bootflag.NeedsRun(flagFileName, w.Log)
+	if !bootflag.NeedsRun(flagFileName, w.Log) {
+		return false
+	}
+	// Boot flag is now written. Check if user is already on RDP —
+	// if so, the session is inherently primed and priming would
+	// yank their active RDP session to console.
+	if findSessionID("rdp-tcp#", "", w.Log) != "" {
+		w.Log.Info("user already connected via RDP, session inherently primed")
+		return false
+	}
+	return true
 }
 
 // readCredential attempts to read a generic credential from Windows Credential Manager.
