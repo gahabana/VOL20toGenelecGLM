@@ -1429,8 +1429,8 @@ class HIDToMIDIDaemon:
 
             if phase1_received == 0:
                 # No burst at all - fall back to old method
-                logger.warning(f"[{init_tid}] probe: startup burst not received, falling back to volume query")
-                self._fallback_volume_query(midi_out, init_tid)
+                logger.warning(f"[{init_tid}] probe: startup burst not received, sending CC28 power probe directly")
+                self._fallback_power_probe(midi_out, init_tid)
                 return
 
             logger.info(f"[{init_tid}] probe: startup burst consumed ({phase1_received}/{burst_target} CC20 messages)")
@@ -1534,21 +1534,15 @@ class HIDToMIDIDaemon:
 
         return target_count
 
-    def _fallback_volume_query(self, midi_out, trace_id: str):
-        """Fall back to the old Vol+1/Vol-1 volume query method, then send CC28 for startup power."""
+    def _fallback_power_probe(self, midi_out, trace_id: str):
+        """Fallback when startup burst not received: send CC28 power command.
+
+        GLM's response to CC28 includes a 5-message burst (Mute→Vol→Dim→Mute→Vol)
+        which update_from_midi() will process automatically, discovering volume,
+        mute, and dim state. No vol+/vol- query needed.
+        """
         try:
-            if self.startup_volume is not None:
-                logger.info(f"[{trace_id}] sys.init: Setting startup volume to {self.startup_volume}")
-                glm_controller.send_volume_absolute(self.startup_volume, midi_out, trace_id=trace_id)
-            else:
-                logger.info(f"[{trace_id}] sys.init: Querying current GLM volume (sending vol+1, vol-1)...")
-                glm_controller.send_action(Action.VOL_UP, midi_out, trace_id=trace_id)
-                time.sleep(GLM_VOL_QUERY_DELAY)
-                glm_controller.send_action(Action.VOL_DOWN, midi_out, trace_id=trace_id)
-
-            time.sleep(GLM_VOL_RESPONSE_WAIT)
-
-            # Send CC28 startup power command (same as Phase 2 of the normal probe)
+            # Send CC28 startup power command
             power_value = 127 if self._startup_power == "on" else 0
             power_label = "ON" if self._startup_power == "on" else "OFF"
             logger.info(f"[{trace_id}] probe: sending CC28 startup power (target={power_label})")
@@ -1561,6 +1555,16 @@ class HIDToMIDIDaemon:
                 glm_controller._notify_state_change()
             except (OSError, IOError) as e:
                 logger.error(f"[{trace_id}] probe: CC28 startup power send failed: {e}")
+                return
+
+            # Wait for GLM's response burst to arrive and be processed by update_from_midi
+            time.sleep(GLM_VOL_RESPONSE_WAIT)
+
+            # Apply startup volume override if requested
+            if self.startup_volume is not None:
+                logger.info(f"[{trace_id}] sys.init: Setting startup volume to {self.startup_volume}")
+                glm_controller.send_volume_absolute(self.startup_volume, midi_out, trace_id=trace_id)
+                time.sleep(GLM_VOL_RESPONSE_WAIT)
 
         finally:
             self._startup_consuming = False
@@ -1568,9 +1572,9 @@ class HIDToMIDIDaemon:
             self._rx_seq = []
 
         if glm_controller.has_valid_volume:
-            logger.info(f"[{trace_id}] sys.init: GLM volume initialized: {glm_controller.volume}")
+            logger.info(f"[{trace_id}] sys.init: GLM state discovered: volume={glm_controller.volume}")
         else:
-            logger.warning(f"[{trace_id}] sys.init: GLM volume state not yet received. Will initialize on first volume command.")
+            logger.warning(f"[{trace_id}] sys.init: GLM volume not yet received. Will initialize on first knob turn.")
 
     def _initialize_glm_volume(self):
         """
