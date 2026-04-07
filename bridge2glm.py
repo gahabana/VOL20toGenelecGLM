@@ -1431,11 +1431,14 @@ class HIDToMIDIDaemon:
                 phase1_received = already_received
             else:
                 remaining_needed = burst_target - already_received
-                logger.info(f"[{init_tid}] probe: waiting for startup burst ({already_received}/{burst_target} CC20 already received, need {remaining_needed} more)...")
+                # If we already have some messages, the burst has started — use short timeout.
+                # If we have none, GLM may still be booting — use long timeout.
+                first_wait = 2.0 if already_received > 0 else 15.0
+                logger.info(f"[{init_tid}] probe: waiting for startup burst ({already_received}/{burst_target} CC20 already received, need {remaining_needed} more, timeout={first_wait}s)...")
 
                 additional = self._wait_for_cc20_count(
                     target_count=remaining_needed,
-                    first_timeout=15.0,  # GLM may take time to boot
+                    first_timeout=first_wait,
                     subsequent_timeout=2.0,
                     trace_id=init_tid,
                     phase_label="burst",
