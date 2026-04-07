@@ -1868,13 +1868,16 @@ if __name__ == "__main__":
         f"  midi_in={args.midi_in_channel}  midi_out={args.midi_out_channel}"
         f"  api_port={args.api_port}"
     )
-    logger.info(_startup_header)
-    logger.info(_startup_detail)
+    # Print banner to stdout only (Go approach) — log file gets the structured detail line
     print(_startup_header)
     print(_startup_detail)
     for _line in _banner_lines:
         print(_line)
-        logger.info(_line)
+    # Log structured startup info to file only (not duplicated on console)
+    logger.debug(_startup_header)
+    logger.debug(_startup_detail)
+    for _line in _banner_lines:
+        logger.debug(_line)
 
     # Check if another instance is already running (by checking if API port is in use)
     if args.api_port > 0:
