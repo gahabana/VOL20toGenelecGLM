@@ -645,6 +645,36 @@ def prime_rdp_session() -> bool:
         logger.error(f"RDP priming failed: {e}")
         return False
 
+def needs_midi_restart() -> bool:
+    """Check if MIDI service restart is needed (only once per boot).
+
+    Returns True if restart is needed, False if already done this boot.
+    """
+    if not IS_WINDOWS:
+        return False
+
+    flag_file = os.path.join(os.environ.get('TEMP', r'C:\temp'), 'midi_restarted.flag')
+    current_boot = get_boot_time()
+
+    if os.path.exists(flag_file):
+        try:
+            with open(flag_file, 'r') as f:
+                stored_boot = int(f.read().strip())
+            if abs(stored_boot - current_boot) < 60:
+                return False  # Already restarted this boot
+        except Exception:
+            pass  # Flag file corrupted, re-restart
+
+    # Write current boot time as flag
+    try:
+        with open(flag_file, 'w') as f:
+            f.write(str(current_boot))
+    except Exception as e:
+        logger.warning(f"Failed to write MIDI restart flag: {e}")
+
+    return True
+
+
 def restart_midi_service():
     """Restart Windows MIDI Service so LoopMIDI virtual ports are visible.
 
@@ -1907,8 +1937,12 @@ if __name__ == "__main__":
 
     # Restart Windows MIDI Service so LoopMIDI ports are visible
     # (Windows MIDI Services doesn't detect virtual ports created before it starts)
+    # Only runs once per boot (like RDP priming)
     if args.midi_restart:
-        restart_midi_service()
+        if needs_midi_restart():
+            restart_midi_service()
+        else:
+            logger.debug("MIDI service already restarted this boot, skipping")
 
     daemon = HIDToMIDIDaemon(
         args.min_click_time,
