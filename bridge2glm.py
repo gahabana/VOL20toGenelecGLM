@@ -973,6 +973,19 @@ class HIDToMIDIDaemon:
                     if msg.type == 'control_change':
                         log_midi("RX", "control_change", cc=msg.control, value=msg.value)
 
+                        # Process state update FIRST (unconditional, like Go's UpdateFromMIDI)
+                        changed = glm_controller.update_from_midi(msg.control, msg.value)
+                        if changed:
+                            state = glm_controller.get_state()
+                            logger.debug(f"state.change: vol={state['volume']}, mute={state['mute']}, dim={state['dim']}, pwr={state['power']}")
+
+                        # Count CC20 for startup burst probe BEFORE pattern detection
+                        # (pattern detection uses 'continue' which would skip this)
+                        if msg.control == GLM_VOLUME_ABS and self._startup_consuming:
+                            with self._probe_condition:
+                                self._probe_cc20_count += 1
+                                self._probe_condition.notify()
+
                         # Power pattern detection
                         now = time.time()
                         self._rx_seq.append((now, msg.control))
@@ -1122,17 +1135,6 @@ class HIDToMIDIDaemon:
 
                                 self._rx_seq = []  # Clear after detection
 
-                        # Signal startup burst probe on CC20 arrival
-                        if msg.control == GLM_VOLUME_ABS and self._startup_consuming:
-                            with self._probe_condition:
-                                self._probe_cc20_count += 1
-                                self._probe_condition.notify()
-
-                        # Process state update
-                        changed = glm_controller.update_from_midi(msg.control, msg.value)
-                        if changed:
-                            state = glm_controller.get_state()
-                            logger.debug(f"state.change: vol={state['volume']}, mute={state['mute']}, dim={state['dim']}, pwr={state['power']}")
                     else:
                         # Log non-control_change messages (unexpected but want to see them)
                         log_midi("RX", msg.type, raw=str(msg))
