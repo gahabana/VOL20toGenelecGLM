@@ -70,6 +70,12 @@ The `-s -w` flags strip debug symbols for a smaller binary (~7 MB).
 
 ## Quick Start
 
+**All options** — print full usage and available flags:
+
+```cmd
+vol20toglm.exe --help
+```
+
 **Desktop user** — GLM already running, you're sitting at the screen:
 
 ```cmd
