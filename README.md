@@ -190,9 +190,9 @@ For unattended operation on a Windows VM (e.g., Hyper-V, VMware):
 
 See [CLAUDE.md](CLAUDE.md) for detailed RDP priming setup, NLA configuration, and troubleshooting.
 
-## Python Version (Legacy)
+## Python Version
 
-The original Python implementation (`bridge2glm.py`) requires Python 3.10+, pip/uv, and several packages including `python-rtmidi` (which needs a C++ compiler). The Go version is a complete rewrite with feature parity and no external dependencies. The Python version is no longer actively developed.
+The Python implementation (`bridge2glm.py`) has feature parity with the Go version. It requires Python 3.10+ and several packages (see `requirements.txt`), including `python-rtmidi` which needs a C++ compiler on Windows. The Go version has no external dependencies — just copy and run.
 
 ## License
 
