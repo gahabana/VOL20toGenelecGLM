@@ -24,9 +24,9 @@ Available as a single Go binary (no runtime dependencies — just copy and run) 
 | Component | Purpose | Notes |
 |-----------|---------|-------|
 | [Genelec GLM v5](https://www.genelec.com/glm) | Speaker management software | MIDI must be enabled in GLM Settings |
-| [LoopMIDI](https://www.tobias-erichsen.de/software/loopmidi.html) | Virtual MIDI ports | Create two ports: `GLMMIDI` and `GLMOUT` |
-| Fosi VOL20 | Bluetooth USB HID knob | Pair via Windows Bluetooth settings |
-| [FreeRDP](https://github.com/FreeRDP/FreeRDP/releases) | RDP session priming | Headless VM only — `wfreerdp.exe` in PATH |
+| [LoopMIDI](https://www.tobias-erichsen.de/software/loopmidi.html) | Virtual MIDI ports | **Required** — create two ports: `GLMMIDI` and `GLMOUT`. Only tested MIDI transport. |
+| Fosi VOL20 | Bluetooth USB HID knob | Optional — web UI, REST API, and Home Assistant work without it |
+| [FreeRDP](https://github.com/FreeRDP/FreeRDP/releases) | RDP session priming | Optional — headless VM only, `wfreerdp.exe` in PATH |
 
 ### GLM MIDI Configuration
 
