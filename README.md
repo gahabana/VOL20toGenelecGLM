@@ -26,9 +26,12 @@ Built as a single Go binary. No runtime dependencies, no installers — just cop
 ### GLM MIDI Configuration
 
 1. Open GLM → Settings → MIDI
-2. Enable MIDI
-3. Set **Power**, **Mute**, and **Dim** to **"Toggle"** mode (not "Momentary") — this enables deterministic CC28 control
-4. Assign MIDI input to `GLMMIDI`, output to `GLMOUT`
+2. Enable **"Enable GLM MIDI interface"**
+3. Set MIDI Input Device to **GLMMIDI**, Output Device to **GLMOUT**
+4. Set **System Power** (CC 28), **Mute** (CC 23), and **Dim** (CC 24) Type to **"Toggle"** — this enables deterministic ON/OFF control. "Momentary" is a blind toggle and will cause state drift.
+5. Click **Confirm**
+
+![GLM MIDI Settings](docs/glm-screenshots/glm-midi-settings.png)
 
 ## Installation
 
