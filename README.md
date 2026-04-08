@@ -1,8 +1,13 @@
 # VOL20toGenelecGLM
 
-A bridge between a **Fosi VOL20** Bluetooth volume knob and **Genelec GLM** speaker management software. Translates USB HID input into MIDI control messages, giving you physical knob control over volume, mute, dim, and power — with a REST API, WebSocket streaming, web UI, and Home Assistant integration via MQTT.
+Control **Genelec GLM** speakers from anywhere — a web browser, your phone, Home Assistant, or a physical volume knob. Bridges external controls to GLM via MIDI, giving you volume, mute, dim, and power control through:
 
-Built as a single Go binary. No runtime dependencies, no installers — just copy and run.
+- **Web UI / Mobile** — responsive browser interface, works from any device on the network
+- **Home Assistant** — auto-discovered MQTT entities with volume slider and on/off switches
+- **REST API + WebSocket** — real-time state for custom dashboards and automation
+- **USB HID knob** — physical control via Fosi VOL20 (or similar Bluetooth/USB HID devices)
+
+Available as a single Go binary (no runtime dependencies — just copy and run) or as a Python application (requires Python 3.10+ and dependencies). Both versions have full feature parity. The Go version is simpler to install and lighter on resources.
 
 ## Features
 
