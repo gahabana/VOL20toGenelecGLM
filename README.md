@@ -118,7 +118,7 @@ vol20toglm.exe --list
 | `--mqtt_ha_discovery` | `true` | Auto-create entities in Home Assistant |
 | `--no_mqtt_ha_discovery` | | Disable HA MQTT Discovery |
 
-When connected, Home Assistant auto-discovers these entities:
+See [Home Assistant Setup](docs/home-assistant-setup.md) for full MQTT broker configuration. When connected, Home Assistant auto-discovers these entities:
 
 | Entity | Type | Controls |
 |--------|------|----------|
