@@ -9,6 +9,10 @@ Control **Genelec GLM** speakers from anywhere — a web browser, your phone, Ho
 
 Available as a single Go binary (no runtime dependencies — just copy and run) or as a Python application (requires Python 3.10+ and dependencies). Both versions have full feature parity. The Go version is simpler to install and lighter on resources.
 
+<p align="center">
+  <img src="docs/glm-screenshots/web-ui.png" alt="Web UI" width="400">
+</p>
+
 ## Features
 
 - **Physical volume knob** — smooth, responsive control with configurable acceleration
