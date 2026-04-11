@@ -222,10 +222,20 @@ func getCredentials() (username, password string, err error) {
 
 // Prime performs the full RDP priming sequence:
 //  1. Read credentials from Credential Manager
-//  2. Snapshot existing rdp-tcp# sessions (stale / other users)
+//  2. Snapshot existing rdp-tcp# sessions AND pre-existing disc sessions
+//     for the user (both needed later for set-diff identification)
 //  3. Launch FreeRDP to localhost
-//  4. Poll until a NEW rdp-tcp# session appears (the one we just created)
-//  5. Kill FreeRDP and reconnect our now-disconnected session to console
+//  4. Poll until a NEW rdp-tcp# session appears (FreeRDP is ready)
+//  5. Kill FreeRDP
+//  6. Poll until a NEW disc session owned by the user appears — this is
+//     the user's original console session which FreeRDP bumped off the
+//     console when it connected. Reconnect it to console via tscon.
+//
+// Note: the FreeRDP-created session ("ours") is NOT the tscon target —
+// it typically gets destroyed on kill rather than transitioning to Disc,
+// and even if it didn't, reconnecting it would evict the real user. The
+// correct target is whichever session was bumped off the console, which
+// we identify by looking for a new disc session owned by our user.
 func (w *WindowsPrimer) Prime() error {
 	// Step 1: Read credentials
 	username, password, err := getCredentials()
@@ -238,18 +248,32 @@ func (w *WindowsPrimer) Prime() error {
 	if !strings.Contains(username, `\`) {
 		username = `.\` + username
 	}
+	// query session shows bare usernames — strip .\ for matching.
+	sessionUser := strings.TrimPrefix(username, `.\`)
 
-	// Step 2: Snapshot existing rdp-tcp# session IDs BEFORE launching FreeRDP.
-	// Anything present now is pre-existing (crashed prior run, orphan) and
-	// must be excluded when identifying our newly-created session. This
-	// replaces the previous race-prone "first rdp-tcp# found wins" logic.
-	staleSessionIDs := listSessionIDs("rdp-tcp#", w.Log)
-	if len(staleSessionIDs) > 0 {
-		preExisting := make([]string, 0, len(staleSessionIDs))
-		for id := range staleSessionIDs {
-			preExisting = append(preExisting, id)
+	// Step 2: Take two snapshots BEFORE launching FreeRDP:
+	//  - rdp-tcp# sessions → excludes stale RDP sessions from FreeRDP-ready
+	//    detection (first-seen-wins would otherwise race against leftovers).
+	//  - disc sessions owned by the user → excludes stale disconnected
+	//    sessions from the post-kill restore-to-console lookup (a stale
+	//    disc session from a prior crashed run must not be picked up as
+	//    "the session FreeRDP just bumped").
+	staleRDPSessionIDs := listSessionIDs("rdp-tcp#", "", w.Log)
+	staleUserDiscIDs := listSessionIDs(sessionUser, "Disc", w.Log)
+	if len(staleRDPSessionIDs) > 0 {
+		ids := make([]string, 0, len(staleRDPSessionIDs))
+		for id := range staleRDPSessionIDs {
+			ids = append(ids, id)
 		}
-		w.Log.Debug("pre-existing rdp-tcp# sessions before priming", "ids", preExisting)
+		w.Log.Debug("pre-existing rdp-tcp# sessions before priming", "ids", ids)
+	}
+	if len(staleUserDiscIDs) > 0 {
+		ids := make([]string, 0, len(staleUserDiscIDs))
+		for id := range staleUserDiscIDs {
+			ids = append(ids, id)
+		}
+		w.Log.Debug("pre-existing disc sessions for user before priming",
+			"username", sessionUser, "ids", ids)
 	}
 
 	// Step 3: Launch FreeRDP
@@ -273,70 +297,75 @@ func (w *WindowsPrimer) Prime() error {
 	}
 	w.Log.Info("launched FreeRDP", "pid", cmd.Process.Pid)
 
-	// Step 4: Poll for OUR rdp-tcp# session — the first ID not in the snapshot.
-	ourSessionID := ""
+	// Step 4: Poll for the FIRST new rdp-tcp# session — our signal that
+	// FreeRDP has finished handshaking. Used only for readiness detection;
+	// this session is NOT a tscon target.
+	rdpSessionID := ""
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
-		for id := range listSessionIDs("rdp-tcp#", w.Log) {
-			if _, stale := staleSessionIDs[id]; !stale {
-				ourSessionID = id
+		for id := range listSessionIDs("rdp-tcp#", "", w.Log) {
+			if _, stale := staleRDPSessionIDs[id]; !stale {
+				rdpSessionID = id
 				break
 			}
 		}
-		if ourSessionID != "" {
-			w.Log.Info("RDP session detected", "session_id", ourSessionID)
+		if rdpSessionID != "" {
+			w.Log.Info("RDP session detected", "session_id", rdpSessionID)
 			break
 		}
 		time.Sleep(500 * time.Millisecond)
 	}
-
-	if ourSessionID == "" {
-		w.Log.Warn("RDP session not detected within timeout — skipping tscon to avoid grabbing an unrelated session")
+	if rdpSessionID == "" {
+		w.Log.Warn("RDP session not detected within timeout, proceeding to kill anyway")
 	}
 
-	// Step 5: Wait 1s for Windows to fully register session
+	// Step 5: Let Windows fully register the session, then kill FreeRDP.
 	time.Sleep(1 * time.Second)
-
-	// Step 6: Kill FreeRDP
 	if err := cmd.Process.Kill(); err != nil {
 		w.Log.Warn("failed to kill FreeRDP process", "error", err)
 	}
 	_ = cmd.Wait() // reap the process
 	w.Log.Info("killed FreeRDP process")
 
-	// Step 7: Reconnect OUR now-disconnected session to console via tscon.
-	// If we never identified our session we skip tscon entirely rather than
-	// fall back to a guess — grabbing the wrong session is strictly worse
-	// than a one-off priming failure.
-	//
-	// After killing FreeRDP the session transitions from Active → Disc, but
-	// the transition is not instantaneous: a fixed 1s sleep was observed to
-	// be too short on v0.12.4.1, causing tscon to fail with error 5023
-	// ("group or resource not in the correct state"). Instead, poll for up
-	// to 5s until the session is confirmed Disc, then run tscon.
-	if ourSessionID != "" {
-		discReady := false
-		deadline := time.Now().Add(5 * time.Second)
-		for time.Now().Before(deadline) {
-			if isSessionDisc(ourSessionID, w.Log) {
-				discReady = true
+	// Step 6: Poll for a NEW disc session owned by our user — this is the
+	// user's original console session, which FreeRDP bumped off when it
+	// connected and is now disconnected after FreeRDP was killed. Using
+	// set-diff against the snapshot ensures we don't pick up an unrelated
+	// stale disc session from a prior crash.
+	userDiscSessionID := ""
+	deadline = time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		for id := range listSessionIDs(sessionUser, "Disc", w.Log) {
+			if _, stale := staleUserDiscIDs[id]; !stale {
+				userDiscSessionID = id
 				break
 			}
-			time.Sleep(200 * time.Millisecond)
 		}
-		if !discReady {
-			w.Log.Warn("session did not reach Disc state before timeout, skipping tscon",
-				"session_id", ourSessionID)
+		if userDiscSessionID != "" {
+			w.Log.Debug("user session reached Disc state after FreeRDP kill",
+				"session_id", userDiscSessionID)
+			break
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+
+	// Step 7: Reconnect the user's now-disconnected session to console.
+	// If no new disc session was observed, skip tscon rather than guess.
+	if userDiscSessionID == "" {
+		w.Log.Warn("no new disc session for user found, skipping tscon",
+			"username", sessionUser)
+	} else {
+		w.Log.Info("reconnecting session to console",
+			"session_id", userDiscSessionID, "username", username)
+		tsconCmd := exec.Command("tscon", userDiscSessionID, "/dest:console")
+		if output, err := tsconCmd.CombinedOutput(); err != nil {
+			w.Log.Warn("tscon failed",
+				"error", err, "output", string(output), "session_id", userDiscSessionID)
 		} else {
-			w.Log.Info("reconnecting session to console", "session_id", ourSessionID, "username", username)
-			tsconCmd := exec.Command("tscon", ourSessionID, "/dest:console")
-			if output, err := tsconCmd.CombinedOutput(); err != nil {
-				w.Log.Warn("tscon failed", "error", err, "output", string(output), "session_id", ourSessionID)
-			} else {
-				w.Log.Info("reconnected console session via tscon", "session_id", ourSessionID)
-			}
-			time.Sleep(1 * time.Second)
+			w.Log.Info("reconnected console session via tscon",
+				"session_id", userDiscSessionID)
 		}
+		time.Sleep(1 * time.Second)
 	}
 
 	w.Log.Info("RDP session primed successfully")
@@ -344,10 +373,13 @@ func (w *WindowsPrimer) Prime() error {
 }
 
 // listSessionIDs runs "query session" and returns the set of session IDs
-// whose line contains keyword (case-insensitive substring). Returns an empty
-// (non-nil) map if nothing matches. Used by Prime() to snapshot the set of
-// rdp-tcp# sessions so a newly-created session can be identified by diff.
-func listSessionIDs(keyword string, log *slog.Logger) map[string]struct{} {
+// whose line contains keyword (case-insensitive substring). If stateFilter
+// is non-empty, only sessions whose STATE column equals stateFilter
+// (case-insensitive) are included. Returns an empty (non-nil) map if
+// nothing matches. Used by Prime() to snapshot both rdp-tcp# sessions (for
+// FreeRDP-ready detection) and disc+user sessions (for post-kill restore
+// of the user's bumped console session), in each case via set-diff.
+func listSessionIDs(keyword, stateFilter string, log *slog.Logger) map[string]struct{} {
 	result := make(map[string]struct{})
 	cmd := exec.Command("query", "session")
 	output, _ := cmd.CombinedOutput()
@@ -367,53 +399,22 @@ func listSessionIDs(keyword string, log *slog.Logger) map[string]struct{} {
 			continue
 		}
 		// Extract session ID: first numeric field in the valid session range.
-		for _, f := range strings.Fields(line) {
-			id, err := strconv.Atoi(f)
-			if err != nil || id <= 0 || id >= 65536 {
-				continue
-			}
-			result[strconv.Itoa(id)] = struct{}{}
-			break
-		}
-	}
-	return result
-}
-
-// isSessionDisc reports whether the session with the given ID is currently
-// in the Disc (disconnected) state according to "query session". Used after
-// killing FreeRDP to wait for the session to finish tearing down before
-// running tscon — calling tscon on a session still mid-transition fails
-// with error 5023 ("group or resource not in the correct state").
-func isSessionDisc(sessionID string, log *slog.Logger) bool {
-	if sessionID == "" {
-		return false
-	}
-	cmd := exec.Command("query", "session")
-	output, _ := cmd.CombinedOutput()
-	if len(output) == 0 {
-		return false
-	}
-	scanner := bufio.NewScanner(strings.NewReader(string(output)))
-	for scanner.Scan() {
-		line := scanner.Text()
 		fields := strings.Fields(line)
 		for i, f := range fields {
 			id, err := strconv.Atoi(f)
 			if err != nil || id <= 0 || id >= 65536 {
 				continue
 			}
-			if strconv.Itoa(id) != sessionID {
-				break
+			if stateFilter != "" {
+				if i+1 >= len(fields) || !strings.EqualFold(fields[i+1], stateFilter) {
+					break
+				}
 			}
-			// Found our session. State is the next field.
-			if i+1 < len(fields) && strings.EqualFold(fields[i+1], "Disc") {
-				log.Debug("session reached Disc state", "session_id", sessionID)
-				return true
-			}
-			return false
+			result[strconv.Itoa(id)] = struct{}{}
+			break
 		}
 	}
-	return false
+	return result
 }
 
 // hasActiveSession returns true if "query session" contains any session whose
