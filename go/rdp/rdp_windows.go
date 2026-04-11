@@ -22,9 +22,9 @@ var (
 	modadvapi32 = windows.NewLazySystemDLL("advapi32.dll")
 	modwtsapi32 = windows.NewLazySystemDLL("wtsapi32.dll")
 
-	procProcessIdToSessionId = modkernel32.NewProc("ProcessIdToSessionId")
-	procCredReadW            = modadvapi32.NewProc("CredReadW")
-	procCredFree             = modadvapi32.NewProc("CredFree")
+	procProcessIdToSessionId  = modkernel32.NewProc("ProcessIdToSessionId")
+	procCredReadW             = modadvapi32.NewProc("CredReadW")
+	procCredFree              = modadvapi32.NewProc("CredFree")
 	procWTSEnumerateSessionsW = modwtsapi32.NewProc("WTSEnumerateSessionsW")
 	procWTSFreeMemory         = modwtsapi32.NewProc("WTSFreeMemory")
 )
@@ -159,10 +159,11 @@ func (w *WindowsPrimer) NeedsPriming() bool {
 	if !bootflag.NeedsRun(flagFileName, w.Log) {
 		return false
 	}
-	// Boot flag is now written. Check if user is already on RDP —
-	// if so, the session is inherently primed and priming would
-	// yank their active RDP session to console.
-	if findSessionID("rdp-tcp#", "", w.Log) != "" {
+	// A stale rdp-tcp# session from a prior crashed run can linger in
+	// Disc/Down state — we must only skip priming for a session that is
+	// actually Active, otherwise the CPU bug we are trying to avoid can
+	// re-emerge on this boot.
+	if hasActiveSession("rdp-tcp#", w.Log) {
 		w.Log.Info("user already connected via RDP, session inherently primed")
 		return false
 	}
@@ -220,10 +221,11 @@ func getCredentials() (username, password string, err error) {
 }
 
 // Prime performs the full RDP priming sequence:
-// 1. Read credentials from Credential Manager
-// 2. Launch FreeRDP to localhost
-// 3. Wait for RDP session to appear
-// 4. Kill FreeRDP and reconnect console via tscon
+//  1. Read credentials from Credential Manager
+//  2. Snapshot existing rdp-tcp# sessions (stale / other users)
+//  3. Launch FreeRDP to localhost
+//  4. Poll until a NEW rdp-tcp# session appears (the one we just created)
+//  5. Kill FreeRDP and reconnect our now-disconnected session to console
 func (w *WindowsPrimer) Prime() error {
 	// Step 1: Read credentials
 	username, password, err := getCredentials()
@@ -237,7 +239,20 @@ func (w *WindowsPrimer) Prime() error {
 		username = `.\` + username
 	}
 
-	// Step 2: Launch FreeRDP
+	// Step 2: Snapshot existing rdp-tcp# session IDs BEFORE launching FreeRDP.
+	// Anything present now is pre-existing (crashed prior run, orphan) and
+	// must be excluded when identifying our newly-created session. This
+	// replaces the previous race-prone "first rdp-tcp# found wins" logic.
+	staleSessionIDs := listSessionIDs("rdp-tcp#", w.Log)
+	if len(staleSessionIDs) > 0 {
+		preExisting := make([]string, 0, len(staleSessionIDs))
+		for id := range staleSessionIDs {
+			preExisting = append(preExisting, id)
+		}
+		w.Log.Debug("pre-existing rdp-tcp# sessions before priming", "ids", preExisting)
+	}
+
+	// Step 3: Launch FreeRDP
 	freerdpPath, err := exec.LookPath("wfreerdp")
 	if err != nil {
 		freerdpPath, err = exec.LookPath("wfreerdp.exe")
@@ -258,101 +273,123 @@ func (w *WindowsPrimer) Prime() error {
 	}
 	w.Log.Info("launched FreeRDP", "pid", cmd.Process.Pid)
 
-	// Step 3: Poll for RDP session (up to 10s, every 500ms)
-	rdpDetected := false
+	// Step 4: Poll for OUR rdp-tcp# session — the first ID not in the snapshot.
+	ourSessionID := ""
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
-		if findSessionID("rdp-tcp#", "", w.Log) != "" {
-			rdpDetected = true
-			w.Log.Info("RDP session detected")
+		for id := range listSessionIDs("rdp-tcp#", w.Log) {
+			if _, stale := staleSessionIDs[id]; !stale {
+				ourSessionID = id
+				break
+			}
+		}
+		if ourSessionID != "" {
+			w.Log.Info("RDP session detected", "session_id", ourSessionID)
 			break
 		}
 		time.Sleep(500 * time.Millisecond)
 	}
 
-	if !rdpDetected {
-		w.Log.Warn("RDP session not detected within timeout, proceeding anyway")
+	if ourSessionID == "" {
+		w.Log.Warn("RDP session not detected within timeout — skipping tscon to avoid grabbing an unrelated session")
 	}
 
-	// Step 4: Wait 1s for Windows to fully register session
+	// Step 5: Wait 1s for Windows to fully register session
 	time.Sleep(1 * time.Second)
 
-	// Step 5: Kill FreeRDP
+	// Step 6: Kill FreeRDP
 	if err := cmd.Process.Kill(); err != nil {
 		w.Log.Warn("failed to kill FreeRDP process", "error", err)
 	}
 	_ = cmd.Wait() // reap the process
 	w.Log.Info("killed FreeRDP process")
 
-	// Step 6: Wait 1s then find the disconnected session to reconnect
-	time.Sleep(1 * time.Second)
-	// Strip .\  prefix (added for NLA) — query session shows bare username
-	sessionUser := strings.TrimPrefix(username, ".\\")
-	discSessionID := findSessionID("disc", sessionUser, w.Log)
-	if discSessionID == "" {
-		w.Log.Warn("no disconnected session found for user, trying fallback", "username", username)
-		discSessionID = "1"
+	// Step 7: Reconnect OUR now-disconnected session to console via tscon.
+	// If we never identified our session we skip tscon entirely rather than
+	// fall back to a guess — grabbing the wrong session is strictly worse
+	// than a one-off priming failure.
+	if ourSessionID != "" {
+		time.Sleep(1 * time.Second)
+		w.Log.Info("reconnecting session to console", "session_id", ourSessionID, "username", username)
+		tsconCmd := exec.Command("tscon", ourSessionID, "/dest:console")
+		if output, err := tsconCmd.CombinedOutput(); err != nil {
+			w.Log.Warn("tscon failed", "error", err, "output", string(output), "session_id", ourSessionID)
+		} else {
+			w.Log.Info("reconnected console session via tscon", "session_id", ourSessionID)
+		}
+		time.Sleep(1 * time.Second)
 	}
-
-	// Step 7: Reconnect disconnected session to console via tscon
-	w.Log.Info("reconnecting session to console", "session_id", discSessionID, "username", username)
-	tsconCmd := exec.Command("tscon", discSessionID, "/dest:console")
-	if output, err := tsconCmd.CombinedOutput(); err != nil {
-		w.Log.Warn("tscon failed", "error", err, "output", string(output), "session_id", discSessionID)
-	} else {
-		w.Log.Info("reconnected console session via tscon", "session_id", discSessionID)
-	}
-
-	// Step 8: Final settle time
-	time.Sleep(1 * time.Second)
 
 	w.Log.Info("RDP session primed successfully")
 	return nil
 }
 
-// findSessionID runs "query session" and finds a session matching the given
-// keyword (e.g. "rdp-tcp#" or "disc") and optionally a username. Returns
-// the session ID as a string, or "" if not found. Logs all sessions at DEBUG level.
-func findSessionID(keyword, username string, log *slog.Logger) string {
+// listSessionIDs runs "query session" and returns the set of session IDs
+// whose line contains keyword (case-insensitive substring). Returns an empty
+// (non-nil) map if nothing matches. Used by Prime() to snapshot the set of
+// rdp-tcp# sessions so a newly-created session can be identified by diff.
+func listSessionIDs(keyword string, log *slog.Logger) map[string]struct{} {
+	result := make(map[string]struct{})
 	cmd := exec.Command("query", "session")
 	output, _ := cmd.CombinedOutput()
 	if len(output) == 0 {
 		log.Debug("query session returned empty output")
-		return ""
+		return result
 	}
 
-	keyword = strings.ToLower(keyword)
-	username = strings.ToLower(username)
-	matchedID := ""
-
+	keywordLower := strings.ToLower(keyword)
 	scanner := bufio.NewScanner(strings.NewReader(string(output)))
 	for scanner.Scan() {
 		line := scanner.Text()
-		trimmed := strings.TrimSpace(line)
-		if trimmed == "" {
+		if strings.TrimSpace(line) == "" {
 			continue
 		}
-		lower := strings.ToLower(line)
-
-		// Raw session lines omitted from logs (uncomment for debugging):
-		// log.Debug("query session", "line", trimmed)
-
-		if !strings.Contains(lower, keyword) {
+		if !strings.Contains(strings.ToLower(line), keywordLower) {
 			continue
 		}
-		if username != "" && !strings.Contains(lower, username) {
-			continue
-		}
-		// Extract session ID: first numeric field in the line
-		fields := strings.Fields(line)
-		for _, f := range fields {
-			if id, err := strconv.Atoi(f); err == nil && id > 0 && id < 65536 {
-				matchedID = strconv.Itoa(id)
-				log.Debug("session matched", "keyword", keyword, "username", username, "session_id", matchedID)
-				return matchedID
+		// Extract session ID: first numeric field in the valid session range.
+		for _, f := range strings.Fields(line) {
+			id, err := strconv.Atoi(f)
+			if err != nil || id <= 0 || id >= 65536 {
+				continue
 			}
+			result[strconv.Itoa(id)] = struct{}{}
+			break
 		}
 	}
-	log.Debug("no session matched", "keyword", keyword, "username", username)
-	return ""
+	return result
+}
+
+// hasActiveSession returns true if "query session" contains any session whose
+// line matches keyword (case-insensitive substring) AND whose STATE column is
+// Active. Used by NeedsPriming() so a stale rdp-tcp# entry in Disc/Down state
+// from a prior crashed run does not cause priming to be skipped.
+func hasActiveSession(keyword string, log *slog.Logger) bool {
+	cmd := exec.Command("query", "session")
+	output, _ := cmd.CombinedOutput()
+	if len(output) == 0 {
+		return false
+	}
+	keywordLower := strings.ToLower(keyword)
+	scanner := bufio.NewScanner(strings.NewReader(string(output)))
+	for scanner.Scan() {
+		line := scanner.Text()
+		if !strings.Contains(strings.ToLower(line), keywordLower) {
+			continue
+		}
+		// State is the field immediately after the numeric session ID.
+		fields := strings.Fields(line)
+		for i, f := range fields {
+			id, err := strconv.Atoi(f)
+			if err != nil || id <= 0 || id >= 65536 {
+				continue
+			}
+			if i+1 < len(fields) && strings.EqualFold(fields[i+1], "Active") {
+				log.Debug("active session matched", "keyword", keyword, "session_id", id)
+				return true
+			}
+			break
+		}
+	}
+	return false
 }
