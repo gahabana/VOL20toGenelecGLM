@@ -458,17 +458,24 @@ def minimize_console_window():
 # RDP SESSION PRIMING - Prevents high CPU after RDP disconnect
 # ==============================================================================
 
-def get_boot_time() -> int:
-    """Get system boot time as Unix timestamp (Windows only)."""
+def get_boot_time() -> float:
+    """
+    Get system boot time as Unix timestamp (float seconds, Windows only).
+
+    Returned as a float to match Go's bootflag package format ("%.1f"), so
+    Python and Go share the same %TEMP%\\rdp_primed.flag / midi_restarted.flag
+    bidirectionally. Previously returned int, which caused Python to
+    silently fail parsing flag files written by Go (ValueError on
+    int("1776286329.4")) and re-run once-per-boot tasks unnecessarily.
+    """
     if not IS_WINDOWS:
-        return 0
+        return 0.0
     try:
         kernel32 = ctypes.windll.kernel32
         tick_count = kernel32.GetTickCount64()
-        boot_time = time.time() - (tick_count / 1000)
-        return int(boot_time)
+        return time.time() - (tick_count / 1000)
     except Exception:
-        return 0
+        return 0.0
 
 
 def _list_session_ids(keyword: str, state_filter: Optional[str] = None):
@@ -556,7 +563,7 @@ def needs_rdp_priming() -> bool:
     if os.path.exists(flag_file):
         try:
             with open(flag_file, 'r') as f:
-                stored_boot = int(f.read().strip())
+                stored_boot = float(f.read().strip())
             # Same boot session (within 60 second tolerance for clock drift)
             if abs(stored_boot - current_boot) < 60:
                 return False  # Already primed this boot
@@ -566,7 +573,7 @@ def needs_rdp_priming() -> bool:
     # Write current boot time as flag
     try:
         with open(flag_file, 'w') as f:
-            f.write(str(current_boot))
+            f.write(f"{current_boot:.1f}")
     except Exception as e:
         logger.warning(f"Failed to write RDP priming flag: {e}")
 
@@ -795,7 +802,7 @@ def needs_midi_restart() -> bool:
     if os.path.exists(flag_file):
         try:
             with open(flag_file, 'r') as f:
-                stored_boot = int(f.read().strip())
+                stored_boot = float(f.read().strip())
             if abs(stored_boot - current_boot) < 60:
                 return False  # Already restarted this boot
         except Exception:
@@ -804,7 +811,7 @@ def needs_midi_restart() -> bool:
     # Write current boot time as flag
     try:
         with open(flag_file, 'w') as f:
-            f.write(str(current_boot))
+            f.write(f"{current_boot:.1f}")
     except Exception as e:
         logger.warning(f"Failed to write MIDI restart flag: {e}")
 
