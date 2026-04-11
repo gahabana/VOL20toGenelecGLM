@@ -13,3 +13,8 @@ func FindGLMWindow(pid int) (uintptr, error) {
 func FindAllGLMWindows(pid int) []WindowInfo {
 	return nil
 }
+
+// MinimizeWindow is not supported on non-Windows platforms.
+func MinimizeWindow(hwnd uintptr) error {
+	return fmt.Errorf("window minimize not supported on this platform")
+}

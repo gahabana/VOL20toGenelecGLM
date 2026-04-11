@@ -57,6 +57,13 @@ func main() {
 		setProcessPriority(log)
 	}
 
+	// Minimize our console window on headless-VM startups — nothing looks
+	// at the terminal there. In --desktop mode (GLMManager disabled) the
+	// user is interactively watching the terminal, so leave it alone.
+	if cfg.GLMManager {
+		minimizeConsoleWindow(log)
+	}
+
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
@@ -321,6 +328,13 @@ func main() {
 			// Re-probe after GLM restart — consume startup burst + force power state.
 			log.Info("re-probing GLM state after restart")
 			probeGLMState(midiOut, probeCh, ctrl, &startupConsuming, cfg.StartupPower, log)
+			// Re-minimize the restarted GLM window. The watchdog relaunches
+			// GLM with a default visible window, so without this the window
+			// would stay on screen until the user interacted with it.
+			time.Sleep(1 * time.Second)
+			if err := glmMgr.MinimizeWindow(); err != nil {
+				log.Warn("failed to minimize GLM window after restart", "err", err)
+			}
 		})
 	}
 
@@ -382,6 +396,19 @@ func main() {
 		}
 	}
 
+	// Minimize GLM window as the very last startup step. Done after the
+	// API server and MQTT client are up so any late pixel-verify captures
+	// have already read the initial state. Gated on glmMgr != nil so it
+	// never runs in --desktop mode. The 1s sleep lets GLM finish any
+	// fade-in or layout animation before ShowWindow is called, matching
+	// Python bridge2glm.py's behavior.
+	if glmMgr != nil {
+		time.Sleep(1 * time.Second)
+		if err := glmMgr.MinimizeWindow(); err != nil {
+			log.Warn("failed to minimize GLM window", "err", err)
+		}
+	}
+
 	log.Info("running — press Ctrl+C to stop")
 	<-ctx.Done()
 	log.Info("shutting down")
@@ -428,9 +455,9 @@ func probeGLMState(midiOut midi.Writer, probeCh <-chan int, ctrl *controller.Con
 func consumeStartupBurst(probeCh <-chan int, startupConsuming *atomic.Bool,
 	ctrl *controller.Controller, log *slog.Logger) {
 
-	const expectedCC20 = 5                      // 12 messages total, 5 are CC20
-	const firstTimeout = 15 * time.Second       // max wait for first CC20 (GLM boot time)
-	const msgTimeout = 2 * time.Second          // max wait between consecutive CC20s
+	const expectedCC20 = 5                // 12 messages total, 5 are CC20
+	const firstTimeout = 15 * time.Second // max wait for first CC20 (GLM boot time)
+	const msgTimeout = 2 * time.Second    // max wait between consecutive CC20s
 
 	probeStart := time.Now()
 
@@ -461,9 +488,9 @@ func consumeStartupBurst(probeCh <-chan int, startupConsuming *atomic.Bool,
 func sendPowerProbe(midiOut midi.Writer, probeCh <-chan int,
 	ctrl *controller.Controller, startupPower string, log *slog.Logger) {
 
-	const expectedCC20 = 2                // response has 2 CC20 messages
-	const respTimeout = 3 * time.Second   // max wait for first response CC20
-	const msgTimeout = 2 * time.Second    // max wait between CC20s within response
+	const expectedCC20 = 2              // response has 2 CC20 messages
+	const respTimeout = 3 * time.Second // max wait for first response CC20
+	const msgTimeout = 2 * time.Second  // max wait between CC20s within response
 
 	powerOn := startupPower == "on"
 	cc28Value := 0

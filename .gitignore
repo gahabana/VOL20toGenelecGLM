@@ -18,5 +18,12 @@ ENV/
 *.swp
 *.swo
 
-# Go binaries
+# Go binaries and build artifacts
 go/vol20toglm
+go/vol20toglm.exe
+go/midiprobe
+go/midiprobe.exe
+
+# Go debug captures (pixel verify BMP/PNG dumps)
+go/glm_capture_*.bmp
+go/glm_capture_*.png

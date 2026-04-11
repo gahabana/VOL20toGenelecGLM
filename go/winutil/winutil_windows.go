@@ -17,7 +17,25 @@ var (
 	procGetClassNameW            = user32.NewProc("GetClassNameW")
 	procGetWindowTextW           = user32.NewProc("GetWindowTextW")
 	procGetWindowThreadProcessId = user32.NewProc("GetWindowThreadProcessId")
+	procShowWindow               = user32.NewProc("ShowWindow")
 )
+
+// SW_MINIMIZE value for ShowWindow — matches the Windows SDK constant.
+const swMinimize = 6
+
+// MinimizeWindow minimizes the given top-level window via ShowWindow(hwnd,
+// SW_MINIMIZE). Returns an error if hwnd is zero; otherwise returns nil
+// regardless of ShowWindow's return value (which reports the *previous*
+// visibility state, not success/failure — a zero return just means the
+// window was already hidden, which is still a successful "it's minimized
+// now" outcome for our purposes).
+func MinimizeWindow(hwnd uintptr) error {
+	if hwnd == 0 {
+		return fmt.Errorf("cannot minimize: hwnd is zero")
+	}
+	procShowWindow.Call(hwnd, swMinimize) //nolint:errcheck
+	return nil
+}
 
 // FindGLMWindow finds the first top-level window whose class starts with
 // "JUCE_" and whose title contains "GLM". If pid > 0, only windows belonging

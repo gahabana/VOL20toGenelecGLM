@@ -292,6 +292,25 @@ func setProcessPriority(log *slog.Logger) {
 	}
 }
 
+// minimizeConsoleWindow hides the binary's attached console window by
+// calling GetConsoleWindow() + ShowWindow(SW_MINIMIZE). Mirrors Python
+// bridge2glm.minimize_console_window(). Gated by the caller on GLMManager
+// mode — we only minimize in headless-VM setups, never in --desktop mode
+// where the user is interactively watching the terminal.
+//
+// If the process has no attached console (e.g., launched as a hidden Task
+// Scheduler task), GetConsoleWindow returns 0 and this function is a no-op.
+func minimizeConsoleWindow(log *slog.Logger) {
+	hwnd, _, _ := windows.NewLazySystemDLL("kernel32.dll").NewProc("GetConsoleWindow").Call()
+	if hwnd == 0 {
+		log.Debug("no console window attached, skipping minimize")
+		return
+	}
+	// SW_MINIMIZE = 6
+	windows.NewLazySystemDLL("user32.dll").NewProc("ShowWindow").Call(hwnd, 6) //nolint:errcheck
+	log.Debug("console window minimized", "hwnd", fmt.Sprintf("0x%X", hwnd))
+}
+
 func runStartupTasks(cfg config.Config, log *slog.Logger) {
 	// RDP priming must complete before MIDI restart — the MIDI virtual ports
 	// depend on a stable desktop session, and RDP priming disconnects/reconnects it.
@@ -316,4 +335,3 @@ func runStartupTasks(cfg config.Config, log *slog.Logger) {
 		}
 	}
 }
-

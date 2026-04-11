@@ -19,6 +19,10 @@ func setProcessPriority(log *slog.Logger) {
 	// No-op on non-Windows
 }
 
+func minimizeConsoleWindow(log *slog.Logger) {
+	// No-op on non-Windows
+}
+
 func listDevices() {
 	fmt.Println("Device listing is only available on Windows.")
 	fmt.Println("Run this command on the Windows machine where GLM is installed.")

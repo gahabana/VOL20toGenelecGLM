@@ -83,15 +83,15 @@ var (
 
 // WindowsManager manages the GLM application lifecycle on Windows.
 type WindowsManager struct {
-	glmPath         string
-	cpuGating       bool
-	log             *slog.Logger
-	pid             int
-	hwnd            uintptr
+	glmPath            string
+	cpuGating          bool
+	log                *slog.Logger
+	pid                int
+	hwnd               uintptr
 	preRestartCallback func()
 	restartCallback    func(pid int)
 	stopCh             chan struct{}
-	mu              sync.Mutex
+	mu                 sync.Mutex
 }
 
 // NewWindowsManager creates a new WindowsManager.
@@ -149,6 +149,25 @@ func (m *WindowsManager) Start() error {
 	// Start watchdog goroutine.
 	go m.watchdogLoop()
 
+	return nil
+}
+
+// MinimizeWindow minimizes the stabilized GLM window via ShowWindow.
+// Mirrors Python bridge2glm.py's end-of-startup behavior — on a headless
+// VM where nothing looks at the display, a minimized GLM window avoids
+// compositing and throttles the OpenGL render loop, saving a few percent
+// of baseline CPU and improving responsiveness.
+func (m *WindowsManager) MinimizeWindow() error {
+	m.mu.Lock()
+	hwnd := m.hwnd
+	m.mu.Unlock()
+	if hwnd == 0 {
+		return fmt.Errorf("no stabilized GLM window to minimize")
+	}
+	if err := winutil.MinimizeWindow(hwnd); err != nil {
+		return fmt.Errorf("ShowWindow(minimize): %w", err)
+	}
+	m.log.Info("GLM window minimized", "hwnd", fmt.Sprintf("0x%X", hwnd))
 	return nil
 }
 

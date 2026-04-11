@@ -15,4 +15,8 @@ type Manager interface {
 	SetPreRestartCallback(fn func())
 	// SetRestartCallback sets a function called after GLM restarts.
 	SetRestartCallback(fn func(pid int))
+	// MinimizeWindow minimizes the tracked GLM window. Returns an error
+	// if no window has been stabilized yet, or if the underlying syscall
+	// reports a failure. Safe to call after Start() returns successfully.
+	MinimizeWindow() error
 }
