@@ -350,23 +350,29 @@ func (w *WindowsPrimer) Prime() error {
 	}
 
 	// Step 7: Reconnect the user's now-disconnected session to console.
-	// If no new disc session was observed, skip tscon rather than guess.
+	// If the snapshot-diff detection found nothing — which happens on
+	// localized Windows (STATE column not "Disc"), domain-username
+	// mismatches, truncated usernames, or unusually slow Disc transitions
+	// — fall back to session ID "1", matching Python's historical
+	// hardcoded `tscon 1 /dest:console`. On a typical single-user box the
+	// user session IS session 1, so this is the same target the primary
+	// path would have picked. On an unusual box it's a best-effort no-op.
 	if userDiscSessionID == "" {
-		w.Log.Warn("no new disc session for user found, skipping tscon",
+		w.Log.Warn("snapshot-diff found no new disc session for user, falling back to tscon 1",
 			"username", sessionUser)
-	} else {
-		w.Log.Info("reconnecting session to console",
-			"session_id", userDiscSessionID, "username", username)
-		tsconCmd := exec.Command("tscon", userDiscSessionID, "/dest:console")
-		if output, err := tsconCmd.CombinedOutput(); err != nil {
-			w.Log.Warn("tscon failed",
-				"error", err, "output", string(output), "session_id", userDiscSessionID)
-		} else {
-			w.Log.Info("reconnected console session via tscon",
-				"session_id", userDiscSessionID)
-		}
-		time.Sleep(1 * time.Second)
+		userDiscSessionID = "1"
 	}
+	w.Log.Info("reconnecting session to console",
+		"session_id", userDiscSessionID, "username", username)
+	tsconCmd := exec.Command("tscon", userDiscSessionID, "/dest:console")
+	if output, err := tsconCmd.CombinedOutput(); err != nil {
+		w.Log.Warn("tscon failed",
+			"error", err, "output", string(output), "session_id", userDiscSessionID)
+	} else {
+		w.Log.Info("reconnected console session via tscon",
+			"session_id", userDiscSessionID)
+	}
+	time.Sleep(1 * time.Second)
 
 	w.Log.Info("RDP session primed successfully")
 	return nil
