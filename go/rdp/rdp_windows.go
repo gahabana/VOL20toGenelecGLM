@@ -308,16 +308,35 @@ func (w *WindowsPrimer) Prime() error {
 	// If we never identified our session we skip tscon entirely rather than
 	// fall back to a guess — grabbing the wrong session is strictly worse
 	// than a one-off priming failure.
+	//
+	// After killing FreeRDP the session transitions from Active → Disc, but
+	// the transition is not instantaneous: a fixed 1s sleep was observed to
+	// be too short on v0.12.4.1, causing tscon to fail with error 5023
+	// ("group or resource not in the correct state"). Instead, poll for up
+	// to 5s until the session is confirmed Disc, then run tscon.
 	if ourSessionID != "" {
-		time.Sleep(1 * time.Second)
-		w.Log.Info("reconnecting session to console", "session_id", ourSessionID, "username", username)
-		tsconCmd := exec.Command("tscon", ourSessionID, "/dest:console")
-		if output, err := tsconCmd.CombinedOutput(); err != nil {
-			w.Log.Warn("tscon failed", "error", err, "output", string(output), "session_id", ourSessionID)
-		} else {
-			w.Log.Info("reconnected console session via tscon", "session_id", ourSessionID)
+		discReady := false
+		deadline := time.Now().Add(5 * time.Second)
+		for time.Now().Before(deadline) {
+			if isSessionDisc(ourSessionID, w.Log) {
+				discReady = true
+				break
+			}
+			time.Sleep(200 * time.Millisecond)
 		}
-		time.Sleep(1 * time.Second)
+		if !discReady {
+			w.Log.Warn("session did not reach Disc state before timeout, skipping tscon",
+				"session_id", ourSessionID)
+		} else {
+			w.Log.Info("reconnecting session to console", "session_id", ourSessionID, "username", username)
+			tsconCmd := exec.Command("tscon", ourSessionID, "/dest:console")
+			if output, err := tsconCmd.CombinedOutput(); err != nil {
+				w.Log.Warn("tscon failed", "error", err, "output", string(output), "session_id", ourSessionID)
+			} else {
+				w.Log.Info("reconnected console session via tscon", "session_id", ourSessionID)
+			}
+			time.Sleep(1 * time.Second)
+		}
 	}
 
 	w.Log.Info("RDP session primed successfully")
@@ -358,6 +377,43 @@ func listSessionIDs(keyword string, log *slog.Logger) map[string]struct{} {
 		}
 	}
 	return result
+}
+
+// isSessionDisc reports whether the session with the given ID is currently
+// in the Disc (disconnected) state according to "query session". Used after
+// killing FreeRDP to wait for the session to finish tearing down before
+// running tscon — calling tscon on a session still mid-transition fails
+// with error 5023 ("group or resource not in the correct state").
+func isSessionDisc(sessionID string, log *slog.Logger) bool {
+	if sessionID == "" {
+		return false
+	}
+	cmd := exec.Command("query", "session")
+	output, _ := cmd.CombinedOutput()
+	if len(output) == 0 {
+		return false
+	}
+	scanner := bufio.NewScanner(strings.NewReader(string(output)))
+	for scanner.Scan() {
+		line := scanner.Text()
+		fields := strings.Fields(line)
+		for i, f := range fields {
+			id, err := strconv.Atoi(f)
+			if err != nil || id <= 0 || id >= 65536 {
+				continue
+			}
+			if strconv.Itoa(id) != sessionID {
+				break
+			}
+			// Found our session. State is the next field.
+			if i+1 < len(fields) && strings.EqualFold(fields[i+1], "Disc") {
+				log.Debug("session reached Disc state", "session_id", sessionID)
+				return true
+			}
+			return false
+		}
+	}
+	return false
 }
 
 // hasActiveSession returns true if "query session" contains any session whose
