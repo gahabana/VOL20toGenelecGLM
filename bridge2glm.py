@@ -5,7 +5,7 @@ Bridges a Fosi Audio VOL20 USB volume knob to Genelec GLM software via MIDI.
 Supports volume control, mute, dim, and power management with UI automation.
 """
 
-__version__ = "0.12.4.0"
+__version__ = "0.12.4.4"
 
 import time
 import signal
@@ -471,6 +471,72 @@ def get_boot_time() -> int:
         return 0
 
 
+def _list_session_ids(keyword: str, state_filter: Optional[str] = None):
+    """
+    Run `query session` and return a set of session ID strings whose line
+    contains keyword (case-insensitive substring). If state_filter is given,
+    only sessions whose STATE column equals state_filter (case-insensitive)
+    are included.
+
+    Used by prime_rdp_session() to snapshot existing rdp-tcp# sessions and
+    pre-existing disc sessions for the user, so the newly-created session
+    and the user's bumped-off session can each be identified via set-diff
+    rather than fragile first-match or substring logic.
+
+    Mirrors Go listSessionIDs() in rdp_windows.go (v0.12.4.3+).
+    """
+    result: set = set()
+    if not IS_WINDOWS:
+        return result
+    try:
+        import subprocess
+        proc = subprocess.run(
+            ["query", "session"],
+            capture_output=True, text=True, timeout=5
+        )
+    except Exception:
+        return result
+
+    output = proc.stdout or ""
+    if not output:
+        return result
+
+    keyword_lower = keyword.lower()
+    state_lower = state_filter.lower() if state_filter else None
+
+    for line in output.splitlines():
+        if not line.strip():
+            continue
+        if keyword_lower not in line.lower():
+            continue
+        fields = line.split()
+        for i, f in enumerate(fields):
+            try:
+                sid = int(f)
+            except ValueError:
+                continue
+            if sid <= 0 or sid >= 65536:
+                continue
+            if state_lower is not None:
+                if i + 1 >= len(fields) or fields[i + 1].lower() != state_lower:
+                    break
+            result.add(str(sid))
+            break
+    return result
+
+
+def _has_active_session(keyword: str) -> bool:
+    """
+    Return True if `query session` contains any session matching keyword
+    whose STATE column is Active. Used so a stale rdp-tcp# session in
+    Disc/Down state from a prior crashed run does not cause priming to be
+    skipped (would leave the high-CPU bug uncured).
+
+    Mirrors Go hasActiveSession() in rdp_windows.go (v0.12.4.1+).
+    """
+    return bool(_list_session_ids(keyword, state_filter="Active"))
+
+
 def needs_rdp_priming() -> bool:
     """
     Check if RDP priming is needed (only once per boot).
@@ -504,18 +570,13 @@ def needs_rdp_priming() -> bool:
     except Exception as e:
         logger.warning(f"Failed to write RDP priming flag: {e}")
 
-    # Check if user is already connected via RDP — session is inherently primed
-    try:
-        import subprocess
-        result = subprocess.run(
-            ['query', 'session'],
-            capture_output=True, text=True, timeout=5
-        )
-        if 'rdp-tcp#' in result.stdout.lower():
-            logger.info("User already connected via RDP, session inherently primed")
-            return False
-    except Exception:
-        pass  # If query session fails, proceed with priming
+    # Check if user is already ACTIVELY connected via RDP — session is
+    # inherently primed. Only Active rdp-tcp# counts: a stale entry left
+    # in Disc/Down from a prior crashed run must not cause priming to be
+    # skipped (would leave the CPU bug uncured on this boot).
+    if _has_active_session("rdp-tcp#"):
+        logger.info("User already connected via RDP, session inherently primed")
+        return False
 
     return True  # Need to prime
 
@@ -548,12 +609,30 @@ def prime_rdp_session() -> bool:
     """
     Prime the RDP session to prevent high CPU after disconnect.
 
-    This does an RDP connect/disconnect cycle using FreeRDP, which initializes
+    Does a FreeRDP localhost connect/disconnect cycle, which initializes
     the Windows display driver properly. Without this, GLM (OpenGL app) may
-    consume high CPU after the first RDP disconnect on a headless VM.
+    consume high CPU after the first real RDP disconnect on a headless VM.
+
+    Full flow (mirrors Go Prime() in rdp_windows.go v0.12.4.4):
+      1. Read credentials from Windows Credential Manager.
+      2. Snapshot existing rdp-tcp# session IDs AND pre-existing disc
+         sessions owned by the user (needed for set-diff identification).
+      3. Launch FreeRDP to localhost.
+      4. Poll for a NEW rdp-tcp# session via set-diff — signals FreeRDP is
+         ready. This session is readiness-detection only, NOT the tscon
+         target (it gets destroyed on kill, not transitioned to Disc).
+      5. Kill FreeRDP.
+      6. Poll for a NEW disc session owned by the user via set-diff —
+         this is the user's original console session which FreeRDP bumped
+         to Disc when it connected. Reconnect it to console via tscon.
+      7. If snapshot-diff detection finds nothing (localized Windows STATE
+         strings, domain username mismatch, truncated long usernames, or
+         unusually slow Disc transitions), fall back to `tscon 1
+         /dest:console` — the historical Python behavior, which is also
+         the correct target on any typical single-user box.
 
     Credentials are read from Windows Credential Manager for security.
-    To set up: cmdkey /add:localhost /user:.\\USERNAME /pass:PASSWORD
+    To set up: cmdkey /generic:localhost /user:.\\USERNAME /pass:PASSWORD
 
     Returns True if priming succeeded, False otherwise.
     """
@@ -569,8 +648,7 @@ def prime_rdp_session() -> bool:
         logger.warning("RDP priming skipped: wfreerdp not found in PATH")
         return False
 
-    # Try to get credentials from Windows Credential Manager
-    # Try multiple target names that might have been created
+    # Step 1: Read credentials
     credential = None
     for target in ["localhost", "TERMSRV/localhost"]:
         credential = get_credential_from_manager(target)
@@ -589,56 +667,114 @@ def prime_rdp_session() -> bool:
     # Ensure username has local domain prefix for NLA
     if not username.startswith(".\\") and "\\" not in username:
         username = ".\\" + username
+    # query session shows bare usernames — strip .\ for substring matching
+    session_user = username[2:] if username.startswith(".\\") else username
 
     logger.info("Priming RDP session to prevent high CPU after disconnect...")
 
-    try:
-        # Start FreeRDP connection to localhost
-        # Note: Don't use stdout/stderr=DEVNULL - causes 12s blocking delay on Windows
-        proc = subprocess.Popen(
-            [wfreerdp, "/v:localhost", "/u:" + username, "/p:" + password, "/cert:ignore", "/sec:nla"],
+    # Step 2: Snapshot pre-existing sessions BEFORE launching FreeRDP.
+    stale_rdp_ids = _list_session_ids("rdp-tcp#")
+    stale_user_disc_ids = _list_session_ids(session_user, state_filter="Disc")
+    if stale_rdp_ids:
+        logger.debug(
+            f"Pre-existing rdp-tcp# sessions before priming: {sorted(stale_rdp_ids)}"
+        )
+    if stale_user_disc_ids:
+        logger.debug(
+            f"Pre-existing disc sessions for user {session_user!r} before priming: "
+            f"{sorted(stale_user_disc_ids)}"
         )
 
-        # Poll for RDP session to establish (max 10s)
-        logger.debug("Waiting for RDP session...")
-        rdp_connected = False
-        for i in range(20):
-            time.sleep(0.5)
-            result = subprocess.run(["query", "session"], capture_output=True, timeout=5)
-            output = result.stdout.decode('utf-8', errors='replace')
-            if "rdp-tcp#" in output:
-                rdp_connected = True
-                logger.debug(f"RDP session detected after {(i+1)*0.5:.1f}s")
-                time.sleep(1.0)  # Allow Windows to fully register session before tscon
-                break
+    try:
+        # Step 3: Launch FreeRDP
+        # Note: Don't use stdout/stderr=DEVNULL - causes 12s blocking delay on Windows
+        proc = subprocess.Popen(
+            [wfreerdp, "/v:localhost", "/u:" + username, "/p:" + password,
+             "/cert:ignore", "/sec:nla"],
+        )
+        logger.debug(f"Launched FreeRDP (pid {proc.pid})")
 
-        if not rdp_connected:
+        # Step 4: Poll for OUR new rdp-tcp# session — readiness detection
+        # via set-diff against the pre-launch snapshot. This ensures a
+        # stale rdp-tcp# session from a prior crashed run cannot race-win.
+        rdp_session_id = ""
+        deadline = time.monotonic() + 10.0
+        while time.monotonic() < deadline:
+            for sid in _list_session_ids("rdp-tcp#"):
+                if sid not in stale_rdp_ids:
+                    rdp_session_id = sid
+                    break
+            if rdp_session_id:
+                logger.debug(f"RDP session detected (session_id={rdp_session_id})")
+                break
+            time.sleep(0.5)
+
+        if not rdp_session_id:
             logger.warning("RDP session not detected within 10s, continuing anyway...")
 
-        # Kill FreeRDP to disconnect
+        # Step 5: Let Windows fully register the session, then kill FreeRDP.
+        time.sleep(1.0)
         proc.terminate()
         try:
             proc.wait(timeout=2)
         except subprocess.TimeoutExpired:
             proc.kill()
-
         logger.debug("FreeRDP disconnected")
 
-        # Reconnect session to console
+        # Step 6: Poll for a NEW disc session owned by our user — this is
+        # the user's original console session, which FreeRDP bumped when
+        # it connected and is now disconnected after FreeRDP was killed.
+        # Set-diff ensures we don't pick up an unrelated stale disc
+        # session from a prior crash.
+        user_disc_session_id = ""
+        deadline = time.monotonic() + 5.0
+        while time.monotonic() < deadline:
+            for sid in _list_session_ids(session_user, state_filter="Disc"):
+                if sid not in stale_user_disc_ids:
+                    user_disc_session_id = sid
+                    break
+            if user_disc_session_id:
+                logger.debug(
+                    f"User session reached Disc state after FreeRDP kill "
+                    f"(session_id={user_disc_session_id})"
+                )
+                break
+            time.sleep(0.2)
+
+        # Step 7: Reconnect the user's now-disconnected session to console.
+        # Fall back to session ID "1" if snapshot-diff found nothing —
+        # matches Python's historical hardcoded behavior and is the correct
+        # target on typical single-user boxes.
+        if not user_disc_session_id:
+            logger.warning(
+                f"Snapshot-diff found no new disc session for user {session_user!r}, "
+                "falling back to tscon 1"
+            )
+            user_disc_session_id = "1"
+
+        logger.debug(
+            f"Reconnecting session {user_disc_session_id} to console "
+            f"(username={username})"
+        )
         result = subprocess.run(
-            ["tscon", "1", "/dest:console"],
+            ["tscon", user_disc_session_id, "/dest:console"],
             capture_output=True,
             timeout=10,
         )
 
         if result.returncode == 0:
-            logger.debug("tscon reconnected session to console")
+            logger.debug(
+                f"tscon reconnected session {user_disc_session_id} to console"
+            )
             logger.info("RDP session primed successfully")
             time.sleep(1)
             return True
         else:
             stderr = result.stderr.decode('utf-8', errors='ignore').strip()
-            logger.warning(f"tscon failed during priming: {stderr}")
+            logger.warning(
+                f"tscon failed during priming (session_id={user_disc_session_id}): "
+                f"{stderr}"
+            )
             return False
 
     except Exception as e:
