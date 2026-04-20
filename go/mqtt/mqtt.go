@@ -5,6 +5,7 @@
 package mqtt
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -15,8 +16,11 @@ import (
 	pahomqtt "github.com/eclipse/paho.mqtt.golang"
 
 	"vol20toglm/controller"
+	applog "vol20toglm/logging"
 	"vol20toglm/types"
 )
+
+const mqttRetryInterval = 15 * time.Second
 
 const haDiscoveryPrefix = "homeassistant"
 
@@ -47,8 +51,12 @@ func boolToOnOff(b bool) string {
 	return "OFF"
 }
 
-// Start creates and connects the MQTT client. Returns nil if broker is empty.
+// Start creates the MQTT client and begins connecting in the background.
+// Returns nil only if broker is empty. The client retries the initial
+// connection every mqttRetryInterval until it succeeds or ctx is cancelled;
+// after that paho's SetAutoReconnect handles subsequent drops.
 func Start(
+	ctx context.Context,
 	broker string,
 	port int,
 	username, password string,
@@ -87,21 +95,63 @@ func Start(
 
 	c.client = pahomqtt.NewClient(opts)
 
-	token := c.client.Connect()
-	token.Wait()
-	if err := token.Error(); err != nil {
-		log.Error("MQTT connect failed", "broker", broker, "port", port, "err", err)
-		return nil
-	}
-
-	log.Info("MQTT client started", "broker", broker, "port", port, "topic", topicPrefix)
-
-	// Register state callback so changes are published automatically
+	// Register state callback so changes are published automatically.
+	// publishState guards on IsConnected(), so this is safe before connect.
 	ctrl.OnStateChange(func(_, new_ types.State) {
 		c.publishState(new_)
 	})
 
+	// Connect in background — retry until success or shutdown.
+	go c.connectWithRetry(ctx, broker, port)
+
 	return c
+}
+
+// connectWithRetry attempts the initial MQTT connection, retrying every
+// mqttRetryInterval. Exits once connected or ctx is cancelled.
+// After the first successful connect, paho's AutoReconnect takes over.
+func (c *Client) connectWithRetry(ctx context.Context, broker string, port int) {
+	retryLog := applog.NewRetryLogger([]float64{0, 60, 600, 3600})
+	const key = "mqtt-connect"
+
+	for {
+		token := c.client.Connect()
+		// Wait with ctx awareness so shutdown isn't blocked by a slow broker.
+		doneCh := make(chan struct{})
+		go func() { token.Wait(); close(doneCh) }()
+		select {
+		case <-ctx.Done():
+			return
+		case <-doneCh:
+		}
+
+		if err := token.Error(); err != nil {
+			if retryLog.ShouldLog(key) {
+				c.log.Warn("mqtt.connect: failed, retrying",
+					"broker", broker, "port", port,
+					"err", err,
+					"info", retryLog.RetryInfo(key),
+				)
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(mqttRetryInterval):
+			}
+			continue
+		}
+
+		// Connected — log success (with retry count if this wasn't the first attempt).
+		if retryLog.RetryCount(key) > 1 {
+			c.log.Info("mqtt.connect: connected after retries",
+				"broker", broker, "port", port,
+				"attempts", retryLog.RetryCount(key),
+			)
+		} else {
+			c.log.Info("MQTT client started", "broker", broker, "port", port)
+		}
+		return
+	}
 }
 
 // Stop disconnects the client gracefully.

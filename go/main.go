@@ -381,19 +381,18 @@ func main() {
 		}()
 	}
 
-	// Start MQTT client if configured
+	// Start MQTT client if configured — connects in background with retry.
 	var mqttClient *appmqtt.Client
 	if cfg.MQTTBroker != "" {
 		mqttClient = appmqtt.Start(
+			ctx,
 			cfg.MQTTBroker, cfg.MQTTPort,
 			cfg.MQTTUser, cfg.MQTTPass,
 			cfg.MQTTTopic, cfg.MQTTHADiscovery,
 			ctrl, actions, traceGen,
 			log.With("component", "mqtt"),
 		)
-		if mqttClient != nil {
-			log.Info("MQTT enabled", "broker", cfg.MQTTBroker, "port", cfg.MQTTPort, "topic", cfg.MQTTTopic, "ha_discovery", cfg.MQTTHADiscovery)
-		}
+		log.Info("MQTT enabled", "broker", cfg.MQTTBroker, "port", cfg.MQTTPort, "topic", cfg.MQTTTopic, "ha_discovery", cfg.MQTTHADiscovery)
 	}
 
 	// Minimize GLM window as the very last startup step. Done after the
