@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"os"
 	"os/exec"
 	"strings"
 	"time"
@@ -23,8 +24,20 @@ import (
 	"vol20toglm/types"
 )
 
+// midiAcquireTimeout bounds how long startup waits for the configured MIDI
+// ports to appear. Typical success is <1 s; the margin covers a slow
+// loopMIDI autostart after reboot. On timeout we exit non-zero rather than
+// silently falling back to a stub — a stub makes the agent look healthy
+// while doing nothing (see incident on 2026-04-20 after KB5083769).
+const midiAcquireTimeout = 30 * time.Second
+
 func createMIDIWriter(cfg config.Config, ctx context.Context, log *slog.Logger) midi.Writer {
-	// MIDIInChannel = GLM's input port (where we WRITE to)
+	// MIDIInChannel = GLM's input port (where we WRITE to).
+	// Bounded retry window; on timeout we exit non-zero rather than returning
+	// a stub, because a stub masks the failure and makes the agent look healthy.
+	acquireCtx, cancel := context.WithTimeout(ctx, midiAcquireTimeout)
+	defer cancel()
+
 	retryLog := applog.NewRetryLogger(nil)
 	for {
 		w, err := midi.OpenWinMMWriter(cfg.MIDIInChannel, log)
@@ -42,9 +55,19 @@ func createMIDIWriter(cfg config.Config, ctx context.Context, log *slog.Logger) 
 			)
 		}
 		select {
-		case <-ctx.Done():
-			log.Error("MIDI output not available, using stub", "port", cfg.MIDIInChannel)
-			return &midi.StubWriter{Log: log}
+		case <-acquireCtx.Done():
+			if ctx.Err() != nil {
+				// Parent cancelled (shutdown) — exit cleanly via nil return path.
+				log.Error("MIDI output unavailable during shutdown", "port", cfg.MIDIInChannel)
+				return &midi.StubWriter{Log: log}
+			}
+			log.Error("MIDI output unavailable after timeout — exiting",
+				"port", cfg.MIDIInChannel,
+				"timeout", midiAcquireTimeout,
+				"hint", "check loopMIDI is running; a pending Windows reboot can also break MIDI after service restart",
+			)
+			os.Exit(1)
+			return nil // unreachable
 		case <-time.After(5 * time.Second):
 		}
 	}
@@ -62,7 +85,11 @@ func createHIDReader(cfg config.Config, accel *hid.AccelerationHandler, traceGen
 }
 
 func createMIDIReader(cfg config.Config, ctx context.Context, log *slog.Logger) midi.Reader {
-	// MIDIOutChannel = GLM's output port (where we READ from)
+	// MIDIOutChannel = GLM's output port (where we READ from).
+	// See createMIDIWriter for rationale on the bounded timeout + hard exit.
+	acquireCtx, cancel := context.WithTimeout(ctx, midiAcquireTimeout)
+	defer cancel()
+
 	retryLog := applog.NewRetryLogger(nil)
 	for {
 		r, err := midi.OpenWinMMReader(cfg.MIDIOutChannel, log)
@@ -80,9 +107,18 @@ func createMIDIReader(cfg config.Config, ctx context.Context, log *slog.Logger) 
 			)
 		}
 		select {
-		case <-ctx.Done():
-			log.Error("MIDI input not available, using stub", "port", cfg.MIDIOutChannel)
-			return &midi.StubReader{Log: log}
+		case <-acquireCtx.Done():
+			if ctx.Err() != nil {
+				log.Error("MIDI input unavailable during shutdown", "port", cfg.MIDIOutChannel)
+				return &midi.StubReader{Log: log}
+			}
+			log.Error("MIDI input unavailable after timeout — exiting",
+				"port", cfg.MIDIOutChannel,
+				"timeout", midiAcquireTimeout,
+				"hint", "check loopMIDI is running; a pending Windows reboot can also break MIDI after service restart",
+			)
+			os.Exit(1)
+			return nil // unreachable
 		case <-time.After(5 * time.Second):
 		}
 	}
@@ -323,15 +359,47 @@ func runStartupTasks(cfg config.Config, log *slog.Logger) {
 		}
 	}
 
-	// MIDI service restart (once per boot)
+	// MIDI service restart (once per boot).
+	// Skip if the configured ports already enumerate — a service restart would
+	// tear them down, and in a degraded state (e.g., pending Windows reboot
+	// after a KB install) they may not come back. Observed on 2026-04-20 after
+	// KB5083769: working ports torn down, never re-registered, agent fell back
+	// to stubs for a full session.
 	if cfg.MIDIRestart {
 		if bootflag.NeedsRun("midi_restarted.flag", log) {
-			log.Info("restarting Windows MIDI service")
-			exec.Command("net", "stop", "midisrv").Run()
-			time.Sleep(1 * time.Second)
-			exec.Command("net", "start", "midisrv").Run()
-			time.Sleep(1 * time.Second)
-			log.Info("MIDI service restarted")
+			if midiPortsPresent(cfg.MIDIInChannel, cfg.MIDIOutChannel) {
+				log.Info("MIDI ports already present, skipping service restart",
+					"out", cfg.MIDIInChannel, "in", cfg.MIDIOutChannel)
+			} else {
+				log.Info("restarting Windows MIDI service")
+				exec.Command("net", "stop", "midisrv").Run()
+				time.Sleep(1 * time.Second)
+				exec.Command("net", "start", "midisrv").Run()
+				time.Sleep(1 * time.Second)
+				log.Info("MIDI service restarted")
+			}
 		}
 	}
+}
+
+// midiPortsPresent returns true iff both the configured output (to GLM) and
+// input (from GLM) port names currently enumerate. Used to decide whether
+// the MIDI service restart is worth the risk.
+func midiPortsPresent(outName, inName string) bool {
+	haveOut := false
+	for _, p := range midi.ListOutputPorts() {
+		if p == outName {
+			haveOut = true
+			break
+		}
+	}
+	if !haveOut {
+		return false
+	}
+	for _, p := range midi.ListInputPorts() {
+		if p == inName {
+			return true
+		}
+	}
+	return false
 }
