@@ -94,6 +94,18 @@ All tunable constants that define the behavior of the Go binary. When adding new
 | `PowerPatternPreGap` | 0.12s | Min silence before pattern starts |
 | `PowerStartupWindow` | 3.0s | Second pattern within this = GLM startup, suppress |
 
+## Platform Startup (`platform_windows.go`)
+
+### MIDI Service Restart
+
+On boot, always `net stop midisrv && net start midisrv` once (guarded by `midi_restarted.flag`). This is the Microsoft-documented workaround for the Jan–Mar 2026 Windows MIDI Services regression (microsoft/MIDI#835) where virtual MIDI ports (loopMIDI, teVirtualMIDI) aren't visible to midisrv if created before midisrv starts.
+
+**Do not probe port presence first** — the probe (`midiOutGetNumDevs`/`midiOutGetDevCaps`) auto-starts midisrv in the race-lose state, and a later restart can't fully recover it. The v0.12.4.7 probe-then-restart change caused 100 % post-boot auto-start failure; v0.12.4.10 reverts to the v0.12.4.5 always-restart path.
+
+| Constant | Value | Purpose |
+|----------|-------|---------|
+| `midiAcquireTimeout` | 30s | Downstream opener timeout in `createMIDIWriter`/`Reader` before `os.Exit(1)`. Hard exit beats silent stub fallback — a stub masks failure and makes the agent look healthy while doing nothing. |
+
 ## MIDI Gate (`midigate/gate.go`)
 
 | Constant | Value | Purpose |

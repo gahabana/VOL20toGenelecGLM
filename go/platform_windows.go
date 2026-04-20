@@ -360,46 +360,23 @@ func runStartupTasks(cfg config.Config, log *slog.Logger) {
 	}
 
 	// MIDI service restart (once per boot).
-	// Skip if the configured ports already enumerate — a service restart would
-	// tear them down, and in a degraded state (e.g., pending Windows reboot
-	// after a KB install) they may not come back. Observed on 2026-04-20 after
-	// KB5083769: working ports torn down, never re-registered, agent fell back
-	// to stubs for a full session.
+	//
+	// Do NOT probe for MIDI port presence before this restart. On current
+	// Windows state (post Jan–Mar 2026 MIDI Services rollout), the first
+	// WinMM API call (midiOutGetNumDevs / midiOutGetDevCaps) auto-starts
+	// midisrv in a "race-lose" state where it misses loopMIDI's PnP port
+	// registrations (microsoft/MIDI#835). Once midisrv is up in that state
+	// a later `net stop/start` does not fully recover it. The v0.12.4.7
+	// probe-then-restart regression caused 100 % auto-start failure on
+	// 2026-04-20; reverting to always-restart (v0.12.4.5 behaviour) works.
 	if cfg.MIDIRestart {
 		if bootflag.NeedsRun("midi_restarted.flag", log) {
-			if midiPortsPresent(cfg.MIDIInChannel, cfg.MIDIOutChannel) {
-				log.Info("MIDI ports already present, skipping service restart",
-					"out", cfg.MIDIInChannel, "in", cfg.MIDIOutChannel)
-			} else {
-				log.Info("restarting Windows MIDI service")
-				exec.Command("net", "stop", "midisrv").Run()
-				time.Sleep(1 * time.Second)
-				exec.Command("net", "start", "midisrv").Run()
-				time.Sleep(1 * time.Second)
-				log.Info("MIDI service restarted")
-			}
+			log.Info("restarting Windows MIDI service")
+			exec.Command("net", "stop", "midisrv").Run()
+			time.Sleep(1 * time.Second)
+			exec.Command("net", "start", "midisrv").Run()
+			time.Sleep(1 * time.Second)
+			log.Info("MIDI service restarted")
 		}
 	}
-}
-
-// midiPortsPresent returns true iff both the configured output (to GLM) and
-// input (from GLM) port names currently enumerate. Used to decide whether
-// the MIDI service restart is worth the risk.
-func midiPortsPresent(outName, inName string) bool {
-	haveOut := false
-	for _, p := range midi.ListOutputPorts() {
-		if p == outName {
-			haveOut = true
-			break
-		}
-	}
-	if !haveOut {
-		return false
-	}
-	for _, p := range midi.ListInputPorts() {
-		if p == inName {
-			return true
-		}
-	}
-	return false
 }
