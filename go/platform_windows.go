@@ -66,6 +66,7 @@ func createMIDIWriter(cfg config.Config, ctx context.Context, log *slog.Logger) 
 				"timeout", midiAcquireTimeout,
 				"hint", "check loopMIDI is running; a pending Windows reboot can also break MIDI after service restart",
 			)
+			config.WriteStartupError(fmt.Errorf("MIDI output port %q unavailable after %s — check loopMIDI is running; a pending Windows reboot can also break MIDI after service restart", cfg.MIDIInChannel, midiAcquireTimeout))
 			os.Exit(1)
 			return nil // unreachable
 		case <-time.After(5 * time.Second):
@@ -117,6 +118,7 @@ func createMIDIReader(cfg config.Config, ctx context.Context, log *slog.Logger) 
 				"timeout", midiAcquireTimeout,
 				"hint", "check loopMIDI is running; a pending Windows reboot can also break MIDI after service restart",
 			)
+			config.WriteStartupError(fmt.Errorf("MIDI input port %q unavailable after %s — check loopMIDI is running; a pending Windows reboot can also break MIDI after service restart", cfg.MIDIOutChannel, midiAcquireTimeout))
 			os.Exit(1)
 			return nil // unreachable
 		case <-time.After(5 * time.Second):

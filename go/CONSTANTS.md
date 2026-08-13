@@ -106,6 +106,16 @@ On boot, always `net stop midisrv && net start midisrv` once (guarded by `midi_r
 |----------|-------|---------|
 | `midiAcquireTimeout` | 30s | Downstream opener timeout in `createMIDIWriter`/`Reader` before `os.Exit(1)`. Hard exit beats silent stub fallback — a stub masks failure and makes the agent look healthy while doing nothing. |
 
+## Startup Error File (`config/startuperr.go`)
+
+Every hard startup failure is written to a single-line file next to the binary before exiting. On headless VMs the console window is minimized and the rotating log may not be open yet, so a fail-fast exit otherwise leaves no visible trace of why the agent never came up.
+
+| Constant | Value | Purpose |
+|----------|-------|---------|
+| `startupErrorFileName` | `vol20toglm-startup-error.log` | Written to the binary's directory (not the working directory), matching how `log_file_name` is resolved. Truncated on each write, so it holds exactly the most recent failure. Format: `<RFC3339> vol20toglm <version>: <error>`. |
+
+Call sites: flag parse errors (excluding `--help`), `--ui_power`/`--desktop` conflict, invalid `--startup_power`, and both MIDI acquire timeouts in `platform_windows.go`.
+
 ## MIDI Gate (`midigate/gate.go`)
 
 | Constant | Value | Purpose |

@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -132,6 +133,10 @@ func Parse(args []string) Config {
 	fs.BoolVar(&cfg.DebugCaptures, "debug_captures", false, "Dump pixel captures to BMP files for inspection")
 
 	if err := fs.Parse(args); err != nil {
+		// --help is a normal exit, not a failure worth recording.
+		if !errors.Is(err, flag.ErrHelp) {
+			WriteStartupError(err)
+		}
 		os.Exit(0)
 	}
 
@@ -184,12 +189,10 @@ func Parse(args []string) Config {
 
 	// Validate
 	if cfg.Desktop && cfg.UIPower {
-		fmt.Fprintln(os.Stderr, "error: --ui_power and --desktop are mutually exclusive")
-		os.Exit(1)
+		failStartup(errors.New("--ui_power and --desktop are mutually exclusive"))
 	}
 	if cfg.StartupPower != "on" && cfg.StartupPower != "off" {
-		fmt.Fprintln(os.Stderr, `error: --startup_power must be "on" or "off"`)
-		os.Exit(1)
+		failStartup(errors.New(`--startup_power must be "on" or "off"`))
 	}
 
 	return cfg
