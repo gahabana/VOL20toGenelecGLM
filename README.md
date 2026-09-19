@@ -144,7 +144,7 @@ See [Home Assistant Setup](docs/home-assistant-setup.md) for full MQTT broker co
 | `--glm_manager` / `--no_glm_manager` | `true` | Launch and monitor GLM process |
 | `--glm_path` | `C:\Program Files (x86)\Genelec\GLMv5\GLMv5.exe` | GLM executable path |
 | `--rdp_priming` / `--no_rdp_priming` | `true` | RDP session priming at startup |
-| `--midi_restart` / `--no_midi_restart` | `true` | Restart Windows MIDI service at startup |
+| `--midi_restart` / `--no_midi_restart` | `false` | Restart Windows MIDI service at startup (obsolete workaround for microsoft/MIDI#835, fixed Apr 2026) |
 | `--high_priority` / `--no_high_priority` | `true` | Run at AboveNormal process priority |
 
 ### Power Control Modes

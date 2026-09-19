@@ -142,8 +142,8 @@ Fine-tune defaults. `--desktop` disables these; individual flags override.
 |------|---------|-------------|
 | `--rdp_priming` | `true` | RDP connect/disconnect cycle at startup |
 | `--no_rdp_priming` | | Disable RDP priming |
-| `--midi_restart` | `true` | Restart Windows MIDI service at startup |
-| `--no_midi_restart` | | Disable MIDI service restart |
+| `--midi_restart` | `false` | Restart Windows MIDI service at startup (workaround for microsoft/MIDI#835; fixed by Windows Apr 2026, no longer needed) |
+| `--no_midi_restart` | | Disable MIDI service restart (already the default) |
 | `--high_priority` | `true` | Set process priority to AboveNormal |
 | `--no_high_priority` | | Run at normal priority |
 

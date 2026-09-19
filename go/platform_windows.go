@@ -361,16 +361,17 @@ func runStartupTasks(cfg config.Config, log *slog.Logger) {
 		}
 	}
 
-	// MIDI service restart (once per boot).
+	// MIDI service restart (once per boot), opt-in via --midi_restart=true.
 	//
-	// Do NOT probe for MIDI port presence before this restart. On current
-	// Windows state (post Jan–Mar 2026 MIDI Services rollout), the first
-	// WinMM API call (midiOutGetNumDevs / midiOutGetDevCaps) auto-starts
-	// midisrv in a "race-lose" state where it misses loopMIDI's PnP port
-	// registrations (microsoft/MIDI#835). Once midisrv is up in that state
-	// a later `net stop/start` does not fully recover it. The v0.12.4.7
-	// probe-then-restart regression caused 100 % auto-start failure on
-	// 2026-04-20; reverting to always-restart (v0.12.4.5 behaviour) works.
+	// Workaround for microsoft/MIDI#835: after the Jan–Mar 2026 Windows MIDI
+	// Services rollout, midisrv missed loopMIDI's PnP port registrations if
+	// the ports were created after the service had started, so the first
+	// WinMM call (which auto-starts midisrv before loopMIDI's delayed
+	// autostart) left the ports invisible. Microsoft's fix shipped via CFR
+	// from 2026-04-30; verified fixed on the GLM VM 2026-09-19 (build
+	// 26100.9457): with the restart off, midisrv auto-starts, loopMIDI
+	// creates its ports ~2 s later, and they open normally. Default is now
+	// off; the flag remains for Windows builds still missing the fix.
 	if cfg.MIDIRestart {
 		if bootflag.NeedsRun("midi_restarted.flag", log) {
 			log.Info("restarting Windows MIDI service")

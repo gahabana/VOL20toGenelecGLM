@@ -47,8 +47,8 @@ func TestDefaults(t *testing.T) {
 	if !cfg.RDPPriming {
 		t.Error("RDPPriming should default to true")
 	}
-	if !cfg.MIDIRestart {
-		t.Error("MIDIRestart should default to true")
+	if cfg.MIDIRestart {
+		t.Error("MIDIRestart should default to false (microsoft/MIDI#835 fixed upstream)")
 	}
 	wantList := []int{1, 1, 2, 2, 3}
 	if len(cfg.VolumeIncreases) != len(wantList) {

@@ -116,7 +116,7 @@ func Parse(args []string) Config {
 	// VM Automation
 	fs.BoolVar(&cfg.RDPPriming, "rdp_priming", true, "Prime RDP session at startup (headless VM)")
 	noRDPPriming := fs.Bool("no_rdp_priming", false, "Disable RDP session priming")
-	fs.BoolVar(&cfg.MIDIRestart, "midi_restart", true, "Restart Windows MIDI service at startup")
+	fs.BoolVar(&cfg.MIDIRestart, "midi_restart", false, "Restart Windows MIDI service at startup (workaround for microsoft/MIDI#835, fixed Apr 2026)")
 	noMIDIRestart := fs.Bool("no_midi_restart", false, "Disable MIDI service restart")
 	fs.BoolVar(&cfg.HighPriority, "high_priority", true, "Set process priority to AboveNormal")
 	noHighPriority := fs.Bool("no_high_priority", false, "Disable elevated process priority")
@@ -291,8 +291,9 @@ GLM PROCESS MANAGER
 VM AUTOMATION (override defaults for fine-tuning)
   --rdp_priming          RDP session priming at startup (default true)
   --no_rdp_priming       Disable RDP priming
-  --midi_restart         Restart Windows MIDI service at startup (default true)
-  --no_midi_restart      Disable MIDI service restart
+  --midi_restart         Restart Windows MIDI service at startup (default false; only for
+                         Windows builds still missing the microsoft/MIDI#835 fix)
+  --no_midi_restart      Disable MIDI service restart (already the default)
   --high_priority        Set process priority to AboveNormal (default true)
   --no_high_priority     Run at normal priority
 
