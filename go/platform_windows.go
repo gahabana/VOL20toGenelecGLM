@@ -367,8 +367,9 @@ func runStartupTasks(cfg config.Config, log *slog.Logger) {
 	// Services rollout, midisrv missed loopMIDI's PnP port registrations if
 	// the ports were created after the service had started, so the first
 	// WinMM call (which auto-starts midisrv before loopMIDI's delayed
-	// autostart) left the ports invisible. Microsoft's fix shipped via CFR
-	// from 2026-04-30; verified fixed on the GLM VM 2026-09-19 (build
+	// autostart) left the ports invisible. Microsoft's fix shipped in
+	// KB5083631 (26100.8328) via 30-day CFR from 2026-04-30 (installed on the
+	// GLM VM 2026-05-01); verified fixed on the GLM VM 2026-09-19 (build
 	// 26100.9457): with the restart off, midisrv auto-starts, loopMIDI
 	// creates its ports ~2 s later, and they open normally. Default is now
 	// off; the flag remains for Windows builds still missing the fix.

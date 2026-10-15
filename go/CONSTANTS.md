@@ -102,7 +102,7 @@ All tunable constants that define the behavior of the Go binary. When adding new
 
 This was the Microsoft-documented workaround for the Jan–Mar 2026 Windows MIDI Services regression (microsoft/MIDI#835): midisrv missed virtual MIDI ports (loopMIDI, teVirtualMIDI) created after the service had started, and the bridge's first WinMM call auto-started midisrv before loopMIDI's delayed autostart, so the ports never became visible. The v0.12.4.7 probe-then-restart change hit exactly that path and caused 100 % post-boot failure on 2026-04-20; v0.12.4.10 went back to always-restart.
 
-Microsoft's fix shipped via 30-day CFR from 2026-04-30. Verified on the GLM VM 2026-09-19 (build 26100.9457) over two boots with the restart disabled: midisrv auto-started at the first WinMM call, loopMIDI created its ports ~1–2 s later, and both ports opened within ~1 s. Keep the flag only for Windows builds that still lack the fix.
+Microsoft's fix shipped in KB5083631 (26100.8328) via 30-day CFR from 2026-04-30; the GLM VM installed it on 2026-05-01. Verified on the GLM VM 2026-09-19 (build 26100.9457) over two boots with the restart disabled: midisrv auto-started at the first WinMM call, loopMIDI created its ports ~1–2 s later, and both ports opened within ~1 s. Keep the flag only for Windows builds that still lack the fix.
 
 | Constant | Value | Purpose |
 |----------|-------|---------|
