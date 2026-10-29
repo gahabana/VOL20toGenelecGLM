@@ -131,3 +131,48 @@ virsh attach-device glmv5 glmnet.xml --live
 
 GLM shows all speakers offline while detached and reconnects by itself on reattach. The
 adapter applies its own standalone level to the speakers while no host polls it.
+
+## Inside GLMv5.exe (Ghidra 12.1.4 via REA, GLM 5.2.0 x64, sha256 5440da85…)
+
+Function addresses are from the shipped binary; names are ours.
+
+| Address | Role |
+|---|---|
+| `FUN_14031b0f0` | HID writer. Splits a bus frame into 64-byte output reports: intermediate reports carry header `0x3E` and 62 payload bytes, the last carries `0x80 | remaining`. hidapi's report-ID byte is prepended. |
+| `FUN_14031b420` | HID reply reader. `hid_read_timeout` 40 ms per report (300 ms after command `15` commit), appends report bytes until `7E`. |
+| `FUN_1402ce9e0` | Frame sender. Appends `7E`, computes CRC-16 from a table and inverts it (CRC-16/GSM), then escapes `7E`/`7D` **starting at byte index 2**: the address and command bytes are never escaped. Sends under a mutex, then reads and unescapes the reply unless the frame was a broadcast other than `FE`. ~270 call sites, one per command builder. |
+| `FUN_1402cd780` | Adapter detection. Sends `01 08`, requires reply address `01`, retries once on failure (the doubled poll seen on the wire), then sends `01 22` and classifies the adapter from the reply text: `G…` → type 5 (`GLM Adapter`), `9…` → type 6, otherwise type 4 (legacy). |
+| `FUN_1402a82e0` | Periodic adapter poll. For adapter types other than 6 sends `01 08`; on a `09` reply calls the status decoder below. |
+| `FUN_1402a2290` | **Adapter status / remote event decoder** (below). |
+
+### Adapter `01 08` reply format, as GLM decodes it
+
+Payload after `09` is a stream of tags up to the CRC. A tag with bits `0xC0` clear is a
+one-byte flag; any other tag is followed by a 4-byte big-endian signed value.
+
+| Tag | Meaning in GLM |
+|---|---|
+| `30` / `31` | Clears/sets a mode flag. While `30` is active a remote volume press is treated as **ChangeGroup** instead of Volume; `31` returns to volume mode. Idle replies carry `31`. |
+| `32` / `33` | Second flag; `33` also zeroes the value last received with `DE`. Idle replies carry `33`. |
+| `DF` + int32 | Knob/level position, clamped below −1200 to −1300 (0.1 dB units, so −120.0 dB floor). Change notifies the UI. |
+| `DD` + int32 | Stored level (default −120). |
+| `DE` + int32 | Value cleared by `33`; purpose unknown. |
+| `DC` + int32 | **Remote event**. GLM reads the adapter firmware number (from the `22`/`39` identity reply) and uses the table below when it is ≥ 3000; older adapters send a signed step instead. |
+
+Remote event values for firmware ≥ 3000 (adapter 1.4.0.6113 qualifies):
+
+| Value | Event |
+|---|---|
+| `0x00080000`…`0x00080003` | Volume + |
+| `0x00088000` | Volume − |
+| `0x00068000` | Mute toggle |
+| `0x00060000` | Power |
+| `0x00100000` / `0x00900000` | ChangeGroup + |
+| `0x00108000` / `0x00908000` | ChangeGroup − |
+
+Captured bytes match: `DC 00 08 80 00` = Volume −, `DC 00 08 00 00` = Volume +,
+`DC 00 06 80 00` = Mute. Power and group events exist on the remote but were not pressed.
+
+Volume acceleration is GLM-side: consecutive volume events are counted and the step is
+1, 1, then 2 units for presses 3–7, 10 for 8–12, 20 from 13 on, in 0.5 dB units. That is
+why the capture shows 0.5 dB and 1 dB steps.
