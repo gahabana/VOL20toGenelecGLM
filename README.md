@@ -182,6 +182,8 @@ See [Home Assistant Setup](docs/home-assistant-setup.md) for full MQTT broker co
 
 See [go/README.md](go/README.md) for the full architecture diagram, behavioral constants reference, and implementation details.
 
+For what GLM itself sends to the GLM Net adapter and the speakers (USB HID framing, bus commands, remote-control events), see [docs/glm-protocol-notes.md](docs/glm-protocol-notes.md) and the decoder in `tools/glm-protocol/`.
+
 ```
   VOL20 Knob ──► HID Reader ──► Actions Channel ──► Consumer ──► MIDI Gate ──► GLM
                                       ▲                              │
