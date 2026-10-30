@@ -176,3 +176,37 @@ Captured bytes match: `DC 00 08 80 00` = Volume −, `DC 00 08 00 00` = Volume +
 Volume acceleration is GLM-side: consecutive volume events are counted and the step is
 1, 1, then 2 units for presses 3–7, 10 for 8–12, 20 from 13 on, in 0.5 dB units. That is
 why the capture shows 0.5 dB and 1 dB steps.
+
+## Input meter with programme material (2026-10-29, TV via AES3)
+
+149 s capture, TV audio playing. Tag `42` per speaker: `0xCF`–`0xF8`, median `0xF1`. Silent
+baseline (23 min, AES3 carrier on, digital zeros): `0x80` on every sample, no exceptions. The
+meter reports decoded content, not link state, so `42 > 0x80` on any speaker is a reliable
+"signal present" test for a digital feed. While audio plays every poll returns telemetry
+(~1 frame/s per speaker); the sub's `46` meter stayed at `0x80` throughout.
+
+## Compared with prior art
+
+hlm spec v13 already cross-validates espgensam, so one column covers both. genlc is the
+Python USB-side client.
+
+| Item | genlc | hlm/espgensam | This work |
+|---|---|---|---|
+| OUT report `0x80\|len`, intermediate `0x3E` | single report only | n/a (bus side) | from Ghidra writer |
+| IN report `0x3F` + raw frame; `01 7E` = timeout | extra "response code" byte | n/a | corrected |
+| Escaping scope | everything after address | payload + CRC | from byte index 2, command byte never escaped |
+| `01 08` reply tag stream (`30/31/32/33`, `DC/DD/DE/DF`) | bytes 3–5 read as mic SPL | not covered | full decoder |
+| RF remote events (`DC` values), fw ≥ 3000 branch, GLM-side acceleration | – | – (knob path listed unknown) | new |
+| 10 Hz doubled adapter poll | – | – | new |
+| `01 51 82` → "202026" | `51 82 44` as mic serial | – | observed, meaning unknown |
+| `01 2B 01/00` to adapter on mute-all | – | – | new |
+| `04` keep-alive | sent | every 1.2–1.8 s in OEM traffic | none while idle (GLM 5.2), only in enumeration |
+| Dim | – | plain `1F −20 dB` | `1F` ×2, then `2B 04` + `3D 00 00` round |
+| Standby timing | 02,00 each ×2 | `02`×2 then `00`×2, ~22 ms | `02`, 90 ms, `00`; pair repeated 0.8 s later |
+| Sub config block sent 3× | – | – | new |
+| Tag `42` floor | – | `0x89` (8320A) | `0x80` (8330A/7350A fw 1.14.7) |
+| Tags `49`, `8A` | – | – | new |
+| Telemetry split over two polls | – | – | new |
+| GLM startup volume before discovery; never reads volume back | – | – | new |
+| GLM quit sends nothing | – | bus-side hub takeover after 2.6 s | consistent |
+| Software ISS in the app ("fires standby after silence") | – | claimed | not tested here |
