@@ -227,10 +227,25 @@ only. Capture command for every hands test (new file name each time):
 | T5 | Adapter take-over timing when the host stops polling: how long until it broadcasts its own level, and do speakers jump audibly? | Daemon restart behaviour and crash fallback. | Detach; `glmtalk.py poll 30` while music plays, then stop polling, listen and time any level change; check telemetry `42`→`43` delta before/after. | hands |
 | T6 | How long do speaker sessions survive without `ss 08` polls? Do speakers go standby or drop sessions? | Minimum poll cadence for the daemon; what a daemon pause costs. | Detach; discover with `glmtalk.py`, poll once, pause 1/5/15 min, poll again: ACK vs timeout, re-discovery needed? | hands |
 | T7 | Minimal host sequence: is `FE` → `F0 02` → `1F` enough for sound, or are `2D 00`, `3D 00 00`, `2B 04`, `10 01 00` level required before speakers pass audio? | Size of the daemon's enumeration code. | Same detach session as T2: bring speakers up with fewer frames each round, listen. | hands |
-| T8 | Meaning of `01 51 82` → "202026", `FF 2D 00`, `FF 3D 00 00`, telemetry tags `49` and `8A`. | Replay vs understand; mostly curiosity. | Ghidra: find builders for `51`, `2D`, `3D` among the 266 decompiled senders; find the telemetry TLV decoder for `49`/`8A`. | desk |
-| T9 | Extract the per-HWID config blobs (full DSP push) from `s5_standby.pcap`/`s6_quit.pcap` as replayable byte sequences. | Fallback for T2 if speakers do not retain DSP. | Decoder script, output JSON keyed by HWID. | desk |
-| T10 | Does the subwoofer `46` meter ever leave `0x80`? LFE path vs bass-managed path. | Whether to use `46` for sub signal detection. | Check with sub-heavy material in the `meter` capture or a new one. | desk, then hands |
-| T11 | Where does the Bluetooth HID controller live today (dongle passed to VM?) and what does it expose on Linux (evdev consumer keys vs hidraw)? | Replacement input path without MIDI. | `lsusb`, libvirt XML, `evtest` on muc. | desk |
+| T8 | ~~Meaning of `01 51 82`, `FF 2D 00`, `FF 3D 00 00`, tags `49`/`8A`.~~ **Done 2026-10-30, see §Ghidra results.** `51 82` = read calibration-mic serial from adapter (`51 02` + 6 chars writes it). `2D`/`3D` carry one global boolean, `0` in every capture, sent after a −130 dB duck. Tags `49`/`8A` parser not reachable statically (JUCE timer vtable); left unknown, harmless. | | | desk |
+| T9 | ~~Extract per-HWID config blobs.~~ **Done.** `tools/glm-protocol/glmblobs.py` → `tools/glm-protocol/config-2026-10-29.json`. Wake and GLM-restart blobs are byte-identical per speaker (34/52/34 frames). | | | desk |
+| T10 | ~~Sub `46` meter.~~ **Done.** `46` = `0x80` in all 1753 sub telemetry frames incl. TV audio; dead on 7350A fw 1.14.7. Sub `42` (input) and `45` (LF out, `0xC4`–`0xDC` with audio) are live. Use `42` for all three. | | | desk |
+| T11 | ~~Bluetooth HID controller location.~~ **Done.** Fosi VOL20 is a BLE HID (HOGP) device, MAC `F8:3B:26:D9:73:5C`, VID `0x07D7`, bonded to a Realtek BT 5.4 USB dongle (`0bda:a728`) on PCI USB controller `c7:00.4`, which is VFIO-passed to the VM whole. Host has its own MediaTek BT (`0489:e0cd`), `bluetooth.service` inactive, no `/sys/class/bluetooth`. Report byte 1 = key bitmask (1 down, 2 up, 4 long, 8 triple, 16 double, 32 click), vendor usages, so read via hidraw as the Go bridge does. Move = unpair in VM, `modprobe btusb`, enable bluetooth.service, pair on host. BLE bonds to one central at a time. | | | desk |
 
 Order: T1, T3, T4 need only GLM running and the remote (one evening). T2, T5, T6, T7 share one
 detached-adapter session (speakers unusable for TV meanwhile). T8–T11 anytime.
+
+### Ghidra results for T8 (2026-10-30)
+
+| Address | Role |
+|---|---|
+| `FUN_1402ce430(ctx, float dB)` | Volume broadcast builder: `FF 1F` with `floor(10^(dB/20)·8388607)` split into 3 bytes. Called with −130 dB as a duck before mode changes. |
+| `FUN_1402ce680` | `FF 04` keep-alive. Called between configuration steps during enumeration only, which is why `04` never appears in the idle cycle. |
+| `FUN_1402cced0` | Discovery: `FF FE`, reads 3-byte HW ID, picks next free session (2…124, wraps), sends `F0 02 hwid sess`, stores HW ID in a 125-entry session table. After >100 empty probes the table is cleared. |
+| `FUN_1402ce700` | Ping sweep: `ss 08` to every table entry, two tries, drops the entry on no `09`. Reply content discarded. |
+| `FUN_1402c6de0` | Per-speaker presence check: `ss 08`, four tries, then speaker dropped (skips "SE Monitor"). Reply content discarded. |
+| `FUN_1402872f0(ctx, bool, str)` | Sends the mode flag: duck to −130 dB, 150 ms, then `FF 2D <flag>` and `FF 3D 00 <flag>` (8381 models get per-unit `3D 00 <value>` instead), stores flag per speaker at +0x96, 400 ms sleep. Nine UI callers; flag is a global (`DAT_1433ac140`), `0` in every capture. Semantics not traced. |
+| `FUN_1402aab30` | `01 51 82` to adapter, reply (len 11) parsed as ASCII: calibration microphone serial ("202026"). `FUN_1402aa2f0` sends `01 51 02` + 6 chars to write it. |
+
+Telemetry TLV parsing (`41 42 43 45 46 47 49 81 83 84 8A`) is not in any direct caller of the frame
+sender; the periodic poll runs from a JUCE timer through a vtable, so `49`/`8A` stay undocumented.
