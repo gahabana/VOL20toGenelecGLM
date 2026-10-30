@@ -210,3 +210,27 @@ Python USB-side client.
 | GLM startup volume before discovery; never reads volume back | – | – | new |
 | GLM quit sends nothing | – | bus-side hub takeover after 2.6 s | consistent |
 | Software ISS in the app ("fires standby after silence") | – | claimed | not tested here |
+
+## Open questions and pending tests
+
+Decision 2026-10-30: no GLM-replacement PoC until this list is exhausted. "Hands" = needs
+the user at the speakers (sudo, virsh, remote, ears); "desk" = Ghidra or existing captures
+only. Capture command for every hands test (new file name each time):
+`sudo sh -c 'nohup tcpdump -i usbmon7 -U -s 0 -w /var/tmp/glm-capture/<name>.pcap -Z zh >/var/tmp/glm-capture/<name>.log 2>&1 &'`
+
+| # | Question | Why it matters | How | Needs |
+|---|---|---|---|---|
+| T1 | Does the adapter report its level (`DD`/`DF` tag) when a host (re)connects? GLM showed −44.5 after the detach test although all remote events were consumed on the host. | Volume read-back on daemon start; avoids stomping the standalone level. | Capture `reattach`: detach adapter, press remote vol− ×3 (also mute and power once), reattach, note GLM volume before/after. Look for `DD`/`DF` in `01 08` replies and for `DC` bursts. | hands |
+| T2 | Do speakers keep their DSP (PEQ, level, delay, XO, routing) after standby → wake with **no** config push? What is in their flash now? | Decides between "push nothing" and "replay captured blob" in the replacement. | Detach adapter; with `glmtalk.py`: wake pairs ×3, discover, assign sessions, poll telemetry; play known material, compare `43`/`45` meters and listen against GLM-driven state. Before that, do a GLM "Store" so flash is known-good. | hands |
+| T3 | Does GLM 5.2 itself fire standby after silence (software ISS, hlm spec claim)? | If yes with AES zeros, the power-off feature may already exist; tells which ISS failed for the user. | GLM: ISS delay 2 min. Capture `swiss`: play, pause source, wait 3 min, look for `FF 3A 03 02`. | hands |
+| T4 | Remote Power and Group button values and GLM's reaction. | Completes the `DC` table; shows whether remote power = UI standby sequence. | Capture `rpower`: GLM connected, press Power (speakers off), wait 10 s, Power again; press Group ± once each. | hands |
+| T5 | Adapter take-over timing when the host stops polling: how long until it broadcasts its own level, and do speakers jump audibly? | Daemon restart behaviour and crash fallback. | Detach; `glmtalk.py poll 30` while music plays, then stop polling, listen and time any level change; check telemetry `42`→`43` delta before/after. | hands |
+| T6 | How long do speaker sessions survive without `ss 08` polls? Do speakers go standby or drop sessions? | Minimum poll cadence for the daemon; what a daemon pause costs. | Detach; discover with `glmtalk.py`, poll once, pause 1/5/15 min, poll again: ACK vs timeout, re-discovery needed? | hands |
+| T7 | Minimal host sequence: is `FE` → `F0 02` → `1F` enough for sound, or are `2D 00`, `3D 00 00`, `2B 04`, `10 01 00` level required before speakers pass audio? | Size of the daemon's enumeration code. | Same detach session as T2: bring speakers up with fewer frames each round, listen. | hands |
+| T8 | Meaning of `01 51 82` → "202026", `FF 2D 00`, `FF 3D 00 00`, telemetry tags `49` and `8A`. | Replay vs understand; mostly curiosity. | Ghidra: find builders for `51`, `2D`, `3D` among the 266 decompiled senders; find the telemetry TLV decoder for `49`/`8A`. | desk |
+| T9 | Extract the per-HWID config blobs (full DSP push) from `s5_standby.pcap`/`s6_quit.pcap` as replayable byte sequences. | Fallback for T2 if speakers do not retain DSP. | Decoder script, output JSON keyed by HWID. | desk |
+| T10 | Does the subwoofer `46` meter ever leave `0x80`? LFE path vs bass-managed path. | Whether to use `46` for sub signal detection. | Check with sub-heavy material in the `meter` capture or a new one. | desk, then hands |
+| T11 | Where does the Bluetooth HID controller live today (dongle passed to VM?) and what does it expose on Linux (evdev consumer keys vs hidraw)? | Replacement input path without MIDI. | `lsusb`, libvirt XML, `evtest` on muc. | desk |
+
+Order: T1, T3, T4 need only GLM running and the remote (one evening). T2, T5, T6, T7 share one
+detached-adapter session (speakers unusable for TV meanwhile). T8–T11 anytime.
