@@ -231,8 +231,259 @@ only. Capture command for every hands test (new file name each time):
 | T9 | ~~Extract per-HWID config blobs.~~ **Done.** `tools/glm-protocol/glmblobs.py` → `tools/glm-protocol/config-2026-10-29.json`. Wake and GLM-restart blobs are byte-identical per speaker (34/52/34 frames). | | | desk |
 | T10 | ~~Sub `46` meter.~~ **Done.** `46` = `0x80` in all 1753 sub telemetry frames incl. TV audio; dead on 7350A fw 1.14.7. Sub `42` (input) and `45` (LF out, `0xC4`–`0xDC` with audio) are live. Use `42` for all three. | | | desk |
 | T11 | ~~Bluetooth HID controller location.~~ **Done.** Fosi VOL20 is a BLE HID (HOGP) device, MAC `F8:3B:26:D9:73:5C`, VID `0x07D7`, bonded to a Realtek BT 5.4 USB dongle (`0bda:a728`) on PCI USB controller `c7:00.4`, which is VFIO-passed to the VM whole. Host has its own MediaTek BT (`0489:e0cd`), `bluetooth.service` inactive, no `/sys/class/bluetooth`. Report byte 1 = key bitmask (1 down, 2 up, 4 long, 8 triple, 16 double, 32 click), vendor usages, so read via hidraw as the Go bridge does. Move = unpair in VM, `modprobe btusb`, enable bluetooth.service, pair on host. BLE bonds to one central at a time. | | | desk |
+# GLM 5 ↔ GLM Net adapter ↔ SAM speakers: protocol notes
+
+Observed 2026-10-29 on this setup by capturing USB traffic on the host (`usbmon`) between
+the Windows VM running GLM 5.2.0 and the GLM Net adapter (firmware 1.4.0.6113). Speakers:
+two 8330A and one 7350A, firmware 1.14.7.6281. Bus-level command semantics follow the
+public spec in [robcazzaro/hlm](https://github.com/robcazzaro/hlm) (`docs/Genelec GLM
+Protocol.13.md`); this file records what GLM 5.2 actually does on the wire, and where it
+differs. Tools: `tools/glm-protocol/`.
+
+These are observations, not Genelec documentation. Nothing here is ported from the GPL
+projects (genlc, hlm, espgensam); only protocol facts are used.
+
+## USB layer
+
+- Adapter: USB `1781:0e39`, full speed, HID vendor page `0xFFA0`, 64-byte interrupt IN
+  (EP1) and OUT (EP3), 1-byte feature report, no report IDs.
+- **Host → adapter**: one output report: `0x80 | len`, then the bus frame (escaped), zero
+  padded. hidapi's leading `0x00` is the report-ID byte, not data.
+- **Adapter → host**: input report `0x3F`, then the bus frame directly (address, payload,
+  CRC, `7E`). A reply may span up to three reports.
+- Bus frame: `addr cmd data… CRC16-BE 7E`. CRC-16/GSM over `addr…data`. HDLC escaping of
+  `7E`/`7D` after the CRC. Speaker and adapter replies both use address `01`.
+- Adapter timeout marker: reply `01 7E` (payload is a bare `7E`) means nobody answered.
+
+## Idle cycle (GLM connected, speakers on)
+
+Every ~545 ms:
+
+1. `FF FE` discovery probe → `01 7E` when no unassigned speaker exists
+2. `FF 1F vvvvvv` volume broadcast, current level, `floor(10^(dB/20)·2^23)`
+3. `ss 08` telemetry poll to each session → bare ACK `01 09` or telemetry `01 09 41 …`
+
+Independently, every 100 ms, **two** polls 2 ms apart: `01 08` to the adapter itself →
+`01 09 33 31`. This is the adapter's event queue (see remote). No `04` keep-alive is sent
+while idle; `04` appears only during enumeration.
+
+Telemetry TLVs seen beyond the spec: `49` (1 byte, counter that resets to 1 on wake,
+increments ~1/s) and `8A` (2 bytes, slow counter). Telemetry is occasionally split over two
+consecutive polls (`41 temp 81 83` half, then `42…84` half). Input-meter silence floor is
+`0x80` on these units.
+
+## Remote control (9101 RF)
+
+The remote talks to the adapter. GLM learns about it through the 10 Hz `01 08` poll:
+
+| Adapter reply | Meaning |
+|---|---|
+| `01 09 33 31` | idle |
+| `01 09 33 31 DC 00 08 80 00` | volume down step |
+| `01 09 33 31 DC 00 08 00 00` | volume up step |
+| `01 09 33 31 DC 00 06 80 00` | mute toggle |
+
+The event is returned on the first poll of each pair; the second poll reads idle. The
+remote auto-repeats (3–4 events per press). GLM then sends its own `FF 1F` (±0.5 or 1 dB)
+or mute frames within ~4 ms. The adapter does not change speaker volume itself while a host
+is polling it. The same poll works from Linux via hidraw with GLM absent (verified).
+
+## Volume, dim, mute
+
+- Volume: `FF 1F` broadcast immediately per 0.5 dB UI step, plus the cyclic broadcast.
+  No ACK, no retry.
+- Dim on: `FF 1F (level−20 dB)` twice, 1 ms apart; ~100 ms later one round of `2B 04` and
+  `3D 00 00` to every speaker. Dim off: same with the restored level.
+- Mute all: `FF 1F` re-broadcast, then **`01 2B 01` to the adapter**, then `2B 03` to each
+  speaker, two rounds. Unmute all: `01 2B 00`, then `2B 04` ×2 rounds.
+- Single mute: target `2B 03`, others `2B 04` (sync), two rounds, no adapter frame.
+  "Play all": `2B 04` to all ×2, no adapter frame.
+- Mute is invisible in telemetry.
+
+## Standby and wake
+
+- Standby: `FF 3A 03 02`, 90 ms, `FF 3A 03 00`; same pair again ~0.8 s later
+  (order 02,00,02,00). Speakers report `47 02` and flags `03 xx` within 0.6 s; polling,
+  probing and volume broadcasts continue; sessions are kept.
+- Wake: `FF 3A 03 7F` + `FF 3A 03 01`, three pairs 12 ms apart. `3D` to the old sessions
+  times out: speakers dropped their sessions. GLM re-discovers (`FE` → HW ID → `F0 02 hwid
+  sess`, new IDs) and pushes the full configuration (below). Speakers live ~1.7 s after the
+  first wake frame.
+
+## GLM start and enumeration
+
+On start GLM opens the HID device (`SET_IDLE`, string descriptors), then:
+
+1. Adapter identity: `01 22` → `GLM Adapter 0 0000 0104 06113`; `01 39` →
+   `c-0;model-GLM Adapter;ver-1.4.0.6113;hw-0.0.64;build-2025.05.19.s`; `01 19 01` →
+   serial `H99999F000`
+2. Wake pairs ×3; `01 51 82` → ASCII `202026` (meaning unknown)
+3. `FF 2D 00`, `FF 3D 00 00`, then **the GLM startup-volume setting as `FF 1F`**, before
+   any speaker is discovered. GLM, not the speakers, applies the startup level.
+4. Discovery from session `02`, then per speaker: `39`, `04`, `05 04 00 …` (generator off),
+   `17 01`, `10 02` delay, `10 01 00` level, `10 01 09 000000`, `10 0E` PEQ ×20, `3B`
+   crossover, `3D`, `40` routing, `39`, `19 01`. The subwoofer block additionally has `3C`,
+   `3E`, `42` and is sent three times over.
+5. `3D` rounds, `2B 04` round, idle cycle begins. ~2.7 s from device open to telemetry.
+
+GLM quit sends nothing; the pending IN URB is just cancelled. Adapter then runs standalone
+(RS-485 only, invisible on USB). GLM never reads volume back; on reconnect it re-broadcasts
+its own value.
+
+## This system's configuration as pushed by GLM
+
+| Session (fresh start) | HW ID | Model, serial | Level | Delay | XO | Input (`40`) |
+|---|---|---|---|---|---|---|
+| 02 | 0f1f03 | 8330A 8330apm1002181 (R) | −7.6 dB | 0 | 60 Hz | `00 02 00 02` AES3 B |
+| 03 | 10e752 | 7350A 7350APM61003048 | 0 dB | 267 samples | 60 Hz | `00 02 00 03` sum, `01 02 00 00` |
+| 04 | 0f1f02 | 8330A 8330apm1002180 (L) | −8.0 dB | 0 | 60 Hz | `00 02 00 01` AES3 A |
+
+Session IDs change on every wake and every GLM start. Anything addressing speakers directly
+must re-discover after a power toggle.
+
+## Capturing again
+
+Host side, no USBPcap in the VM needed (bus 7 holds only the adapter):
+
+```sh
+sudo modprobe usbmon
+sudo tcpdump -i usbmon7 -U -s 0 -w /var/tmp/glm-capture/glm.pcap -Z $USER
+python3 -I tools/glm-protocol/glmdecode.py /var/tmp/glm-capture/glm.pcap --summary
+python3 -I tools/glm-protocol/glmdecode.py /var/tmp/glm-capture/glm.pcap | less
+```
+
+To talk to the adapter from the host, detach it from the VM, then use `glmtalk.py`:
+
+```sh
+virsh detach-device glmv5 glmnet.xml --live   # hostdev xml with vendor 0x1781 product 0x0e39
+sudo chmod 666 /dev/hidrawN                   # the new hidraw node
+python3 -I tools/glm-protocol/glmtalk.py /dev/hidrawN ident
+python3 -I tools/glm-protocol/glmtalk.py /dev/hidrawN poll 60
+virsh attach-device glmv5 glmnet.xml --live
+```
+
+GLM shows all speakers offline while detached and reconnects by itself on reattach. The
+adapter applies its own standalone level to the speakers while no host polls it.
+
+## Inside GLMv5.exe (Ghidra 12.1.4 via REA, GLM 5.2.0 x64, sha256 5440da85…)
+
+Function addresses are from the shipped binary; names are ours.
+
+| Address | Role |
+|---|---|
+| `FUN_14031b0f0` | HID writer. Splits a bus frame into 64-byte output reports: intermediate reports carry header `0x3E` and 62 payload bytes, the last carries `0x80 | remaining`. hidapi's report-ID byte is prepended. |
+| `FUN_14031b420` | HID reply reader. `hid_read_timeout` 40 ms per report (300 ms after command `15` commit), appends report bytes until `7E`. |
+| `FUN_1402ce9e0` | Frame sender. Appends `7E`, computes CRC-16 from a table and inverts it (CRC-16/GSM), then escapes `7E`/`7D` **starting at byte index 2**: the address and command bytes are never escaped. Sends under a mutex, then reads and unescapes the reply unless the frame was a broadcast other than `FE`. ~270 call sites, one per command builder. |
+| `FUN_1402cd780` | Adapter detection. Sends `01 08`, requires reply address `01`, retries once on failure (the doubled poll seen on the wire), then sends `01 22` and classifies the adapter from the reply text: `G…` → type 5 (`GLM Adapter`), `9…` → type 6, otherwise type 4 (legacy). |
+| `FUN_1402a82e0` | Periodic adapter poll. For adapter types other than 6 sends `01 08`; on a `09` reply calls the status decoder below. |
+| `FUN_1402a2290` | **Adapter status / remote event decoder** (below). |
+
+### Adapter `01 08` reply format, as GLM decodes it
+
+Payload after `09` is a stream of tags up to the CRC. A tag with bits `0xC0` clear is a
+one-byte flag; any other tag is followed by a 4-byte big-endian signed value.
+
+| Tag | Meaning in GLM |
+|---|---|
+| `30` / `31` | Clears/sets a mode flag. While `30` is active a remote volume press is treated as **ChangeGroup** instead of Volume; `31` returns to volume mode. Idle replies carry `31`. |
+| `32` / `33` | Second flag; `33` also zeroes the value last received with `DE`. Idle replies carry `33`. |
+| `DF` + int32 | Knob/level position, clamped below −1200 to −1300 (0.1 dB units, so −120.0 dB floor). Change notifies the UI. |
+| `DD` + int32 | Stored level (default −120). |
+| `DE` + int32 | Value cleared by `33`; purpose unknown. |
+| `DC` + int32 | **Remote event**. GLM reads the adapter firmware number (from the `22`/`39` identity reply) and uses the table below when it is ≥ 3000; older adapters send a signed step instead. |
+
+Remote event values for firmware ≥ 3000 (adapter 1.4.0.6113 qualifies):
+
+| Value | Event |
+|---|---|
+| `0x00080000`…`0x00080003` | Volume + |
+| `0x00088000` | Volume − |
+| `0x00068000` | Mute toggle |
+| `0x00060000` | Power |
+| `0x00100000` / `0x00900000` | ChangeGroup + |
+| `0x00108000` / `0x00908000` | ChangeGroup − |
+
+Captured bytes match: `DC 00 08 80 00` = Volume −, `DC 00 08 00 00` = Volume +,
+`DC 00 06 80 00` = Mute. Power and group events exist on the remote but were not pressed.
+
+Volume acceleration is GLM-side: consecutive volume events are counted and the step is
+1, 1, then 2 units for presses 3–7, 10 for 8–12, 20 from 13 on, in 0.5 dB units. That is
+why the capture shows 0.5 dB and 1 dB steps.
+
+## Input meter with programme material (2026-10-29, TV via AES3)
+
+149 s capture, TV audio playing. Tag `42` per speaker: `0xCF`–`0xF8`, median `0xF1`. Silent
+baseline (23 min, AES3 carrier on, digital zeros): `0x80` on every sample, no exceptions. The
+meter reports decoded content, not link state, so `42 > 0x80` on any speaker is a reliable
+"signal present" test for a digital feed. While audio plays every poll returns telemetry
+(~1 frame/s per speaker); the sub's `46` meter stayed at `0x80` throughout.
+
+## Compared with prior art
+
+hlm spec v13 already cross-validates espgensam, so one column covers both. genlc is the
+Python USB-side client.
+
+| Item | genlc | hlm/espgensam | This work |
+|---|---|---|---|
+| OUT report `0x80\|len`, intermediate `0x3E` | single report only | n/a (bus side) | from Ghidra writer |
+| IN report `0x3F` + raw frame; `01 7E` = timeout | extra "response code" byte | n/a | corrected |
+| Escaping scope | everything after address | payload + CRC | from byte index 2, command byte never escaped |
+| `01 08` reply tag stream (`30/31/32/33`, `DC/DD/DE/DF`) | bytes 3–5 read as mic SPL | not covered | full decoder |
+| RF remote events (`DC` values), fw ≥ 3000 branch, GLM-side acceleration | – | – (knob path listed unknown) | new |
+| 10 Hz doubled adapter poll | – | – | new |
+| `01 51 82` → "202026" | `51 82 44` as mic serial | – | observed, meaning unknown |
+| `01 2B 01/00` to adapter on mute-all | – | – | new |
+| `04` keep-alive | sent | every 1.2–1.8 s in OEM traffic | none while idle (GLM 5.2), only in enumeration |
+| Dim | – | plain `1F −20 dB` | `1F` ×2, then `2B 04` + `3D 00 00` round |
+| Standby timing | 02,00 each ×2 | `02`×2 then `00`×2, ~22 ms | `02`, 90 ms, `00`; pair repeated 0.8 s later |
+| Sub config block sent 3× | – | – | new |
+| Tag `42` floor | – | `0x89` (8320A) | `0x80` (8330A/7350A fw 1.14.7) |
+| Tags `49`, `8A` | – | – | new |
+| Telemetry split over two polls | – | – | new |
+| GLM startup volume before discovery; never reads volume back | – | – | new |
+| GLM quit sends nothing | – | bus-side hub takeover after 2.6 s | consistent |
+| Software ISS in the app ("fires standby after silence") | – | claimed | not tested here |
+
+## Open questions and pending tests
+
+Decision 2026-10-30: no GLM-replacement PoC until this list is exhausted. "Hands" = needs
+the user at the speakers (sudo, virsh, remote, ears); "desk" = Ghidra or existing captures
+only. Capture command for every hands test (new file name each time):
+`sudo sh -c 'nohup tcpdump -i usbmon7 -U -s 0 -w /var/tmp/glm-capture/<name>.pcap -Z zh >/var/tmp/glm-capture/<name>.log 2>&1 &'`
+
+| # | Question | Why it matters | How | Needs |
+|---|---|---|---|---|
+| T1 | Does the adapter report its level (`DD`/`DF` tag) when a host (re)connects? GLM showed −44.5 after the detach test although all remote events were consumed on the host. | Volume read-back on daemon start; avoids stomping the standalone level. | Capture `reattach`: detach adapter, press remote vol− ×3 (also mute and power once), reattach, note GLM volume before/after. Look for `DD`/`DF` in `01 08` replies and for `DC` bursts. | hands |
+| T2 | Do speakers keep their DSP (PEQ, level, delay, XO, routing) after standby → wake with **no** config push? What is in their flash now? | Decides between "push nothing" and "replay captured blob" in the replacement. | Detach adapter; with `glmtalk.py`: wake pairs ×3, discover, assign sessions, poll telemetry; play known material, compare `43`/`45` meters and listen against GLM-driven state. Before that, do a GLM "Store" so flash is known-good. | hands |
+| T3 | Does GLM 5.2 itself fire standby after silence (software ISS, hlm spec claim)? | If yes with AES zeros, the power-off feature may already exist; tells which ISS failed for the user. | GLM: ISS delay 2 min. Capture `swiss`: play, pause source, wait 3 min, look for `FF 3A 03 02`. | hands |
+| T4 | Remote Power and Group button values and GLM's reaction. | Completes the `DC` table; shows whether remote power = UI standby sequence. | Capture `rpower`: GLM connected, press Power (speakers off), wait 10 s, Power again; press Group ± once each. | hands |
+| T5 | Adapter take-over timing when the host stops polling: how long until it broadcasts its own level, and do speakers jump audibly? | Daemon restart behaviour and crash fallback. | Detach; `glmtalk.py poll 30` while music plays, then stop polling, listen and time any level change; check telemetry `42`→`43` delta before/after. | hands |
+| T6 | How long do speaker sessions survive without `ss 08` polls? Do speakers go standby or drop sessions? | Minimum poll cadence for the daemon; what a daemon pause costs. | Detach; discover with `glmtalk.py`, poll once, pause 1/5/15 min, poll again: ACK vs timeout, re-discovery needed? | hands |
+| T7 | Minimal host sequence: is `FE` → `F0 02` → `1F` enough for sound, or are `2D 00`, `3D 00 00`, `2B 04`, `10 01 00` level required before speakers pass audio? | Size of the daemon's enumeration code. | Same detach session as T2: bring speakers up with fewer frames each round, listen. | hands |
+| T8 | ~~Meaning of `01 51 82`, `FF 2D 00`, `FF 3D 00 00`, tags `49`/`8A`.~~ **Done 2026-10-30, see §Ghidra results.** `51 82` = read calibration-mic serial from adapter (`51 02` + 6 chars writes it). `2D`/`3D` carry one global boolean, `0` in every capture, sent after a −130 dB duck. Tags `49`/`8A` parser not reachable statically (JUCE timer vtable); left unknown, harmless. | | | desk |
+| T9 | ~~Extract per-HWID config blobs.~~ **Done.** `tools/glm-protocol/glmblobs.py` → `tools/glm-protocol/config-2026-10-29.json`. Wake and GLM-restart blobs are byte-identical per speaker (34/52/34 frames). | | | desk |
+| T10 | ~~Sub `46` meter.~~ **Done.** `46` = `0x80` in all 1753 sub telemetry frames incl. TV audio; dead on 7350A fw 1.14.7. Sub `42` (input) and `45` (LF out, `0xC4`–`0xDC` with audio) are live. Use `42` for all three. | | | desk |
+| T11 | ~~Bluetooth HID controller location.~~ **Done.** Fosi VOL20 is a BLE HID (HOGP) device, MAC `F8:3B:26:D9:73:5C`, VID `0x07D7`, bonded to a Realtek BT 5.4 USB dongle (`0bda:a728`) on PCI USB controller `c7:00.4`, which is VFIO-passed to the VM whole. Host has its own MediaTek BT (`0489:e0cd`), `bluetooth.service` inactive, no `/sys/class/bluetooth`. Report byte 1 = key bitmask (1 down, 2 up, 4 long, 8 triple, 16 double, 32 click), vendor usages, so read via hidraw as the Go bridge does. Move = unpair in VM, `modprobe btusb`, enable bluetooth.service, pair on host. BLE bonds to one central at a time. | | | desk |
+| T12 | **Speakers shown "offline" in GLM although powered** (recurring; one or two units, sometimes all; only a mains power-cycle of the speaker fixes it). Which side is stuck: does the unit answer `FF FE`, its old session poll, the wake broadcast, or nothing? Does `FF 03` (soft reset, genlc name, unverified) or the GLM power-off/on cycle revive it? | Decides whether a daemon can self-heal (re-probe / reset) or must power-cycle via smart plug. | Next occurrence, before touching mains: capture `offline`; in GLM press power off, wait 5 s, power on; if still offline, detach adapter and with `glmtalk.py`: `raw FF FE`, `raw FF 3A 03 7F`, `raw FF 3A 03 01`, `raw FF 03`, `raw FF FE`; note which step brings it back. | hands, opportunistic |
 
 Order: T1, T3, T4 need only GLM running and the remote (one evening). T2, T5, T6, T7 share one
+detached-adapter session (speakers unusable for TV meanwhile). T8–T11 anytime.
+
+### Ghidra results for T8 (2026-10-30)
+
+| Address | Role |
+|---|---|
+| `FUN_1402ce430(ctx, float dB)` | Volume broadcast builder: `FF 1F` with `floor(10^(dB/20)·8388607)` split into 3 bytes. Called with −130 dB as a duck before mode changes. |
+| `FUN_1402ce680` | `FF 04` keep-alive. Called between configuration steps during enumeration only, which is why `04` never appears in the idle cycle. |
+| `FUN_1402cced0` | Discovery: `FF FE`, reads 3-byte HW ID, picks next free session (2…124, wraps), sends `F0 02 hwid sess`, stores HW ID in a 125-entry session table. After >100 empty probes the table is cleared. |
+| `FUN_1402ce700` | Ping sweep: `ss 08` to every table entry, two tries, drops the entry on no `09`. Reply content discarded. |
+| `FUN_1402c6de0` | Per-speaker presence check: `ss 08`, four tries, then speaker dropped (skips "SE Monitor"). Reply content discarded. |
+| `FUN_1402872f0(ctx, bool, str)` | Sends the mode flag: duck to −130 dB, 150 ms, then `FF 2D <flag>` and `FF 3D 00 <flag>` (8381 models get per-unit `3D 00 <value>` instead), stores flag per speaker at +0x96, 400 ms sleep. Nine UI callers; flag is a global (`DAT_1433ac140`), `0` in every capture. Semantics not traced. |
+| `FUN_1402aab30` | `01 51 82` to adapter, reply (len 11) parsed as ASCII: calibration microphone serial ("202026"). `FUN_1402aa2f0` sends `01 51 02` + 6 chars to write it. |
+
+Telemetry TLV parsing (`41 42 43 45 46 47 49 81 83 84 8A`) is not in any direct caller of the frame
+sender; the periodic poll runs from a JUCE timer through a vtable, so `49`/`8A` stay undocumented.
+ need only GLM running and the remote (one evening). T2, T5, T6, T7 share one
 detached-adapter session (speakers unusable for TV meanwhile). T8–T11 anytime.
 
 ### Ghidra results for T8 (2026-10-30)
