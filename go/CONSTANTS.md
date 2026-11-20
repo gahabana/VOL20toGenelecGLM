@@ -45,7 +45,7 @@ All tunable constants that define the behavior of the Go binary. When adding new
 | `PowerSettlingTime` | 2.0s | Block ALL commands during power transition (when no pixel detection) |
 | `PowerCooldownTime` | 1.5s | Block power-only commands after transition completes |
 | `PowerTotalLockout` | 3.5s | Total settling + cooldown (only used without pixel detection) |
-| `PowerCommandExpiry` | 3.0s | Seconds before a pending power command expires (no confirmation received) |
+| `PowerCommandExpiry` | 3.0s | Seconds before a pending power command expires (no confirmation received). Cleared early by the first ACK pattern. |
 | `PowerVerifyDelay` | 2.0s | Wait before pixel-verifying power state after command or external change |
 
 ## Consumer (`consumer/consumer.go`)
@@ -92,7 +92,7 @@ All tunable constants that define the behavior of the Go binary. When adding new
 | `PowerPatternMaxGap` | 0.26s | Max gap between consecutive messages |
 | `PowerPatternMaxTotal` | 0.35s | Max total of all 4 gaps |
 | `PowerPatternPreGap` | 0.12s | Min silence before pattern starts |
-| `PowerStartupWindow` | 3.0s | Second pattern within this = GLM startup, suppress |
+| `PowerStartupWindow` | 3.0s | Second unsolicited pattern within this = GLM startup, suppress. Not applied to the pattern right after our own CC28 ACK (that is a real external toggle). |
 
 ## Platform Startup (`platform_windows.go`)
 

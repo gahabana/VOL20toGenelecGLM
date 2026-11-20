@@ -42,5 +42,5 @@ const (
 	PowerPatternMaxGap   = 0.26 // Max gap between consecutive messages (260ms)
 	PowerPatternMaxTotal = 0.35 // Max total of all 4 gaps (350ms)
 	PowerPatternPreGap   = 0.12 // Min silence before pattern (120ms)
-	PowerStartupWindow   = 3.0  // Second pattern within this = GLM startup
+	PowerStartupWindow   = 3.0  // Second unsolicited pattern within this = GLM startup (not applied right after our own ACK)
 )

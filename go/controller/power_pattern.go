@@ -115,3 +115,33 @@ func (d *PowerPatternDetector) Feed(cc, value int, timestamp float64) {
 
 	d.onMatched(match)
 }
+
+// PatternVerdict says what a matched power pattern means.
+type PatternVerdict int
+
+const (
+	PatternSelfAck   PatternVerdict = iota // GLM's ACK of our own CC28
+	PatternDuplicate                       // second unsolicited pattern in quick succession (GLM startup noise)
+	PatternExternal                        // power toggled outside the bridge
+)
+
+// PatternClassifier decides whether a matched pattern is our own ACK, startup
+// noise, or an external toggle. NOT thread-safe -- same caller as Feed().
+type PatternClassifier struct {
+	prevWasAck bool
+}
+
+// Classify takes the match and whether a self-initiated power command was
+// pending when it arrived. The duplicate window is not applied right after an
+// ACK: a pattern following our ACK is a new external toggle, not an echo.
+func (c *PatternClassifier) Classify(m PatternMatch, pending bool) PatternVerdict {
+	prevWasAck := c.prevWasAck
+	c.prevWasAck = pending
+	if pending {
+		return PatternSelfAck
+	}
+	if !prevWasAck && m.SinceLastMatch >= 0 && m.SinceLastMatch < types.PowerStartupWindow {
+		return PatternDuplicate
+	}
+	return PatternExternal
+}

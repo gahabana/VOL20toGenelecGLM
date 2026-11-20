@@ -123,6 +123,7 @@ func main() {
 
 	// Power pattern detector
 	midiLog := log.With("component", "midi-in")
+	var patternClassifier controller.PatternClassifier
 	powerDetector := controller.NewPowerPatternDetector(func(match controller.PatternMatch) {
 		sinceLastStr := "first"
 		if match.SinceLastMatch >= 0 {
@@ -133,14 +134,11 @@ func main() {
 			"since_last", sinceLastStr,
 		)
 
-		// Suppression: self-initiated command pending (our CC28 ACK)
-		if ctrl.IsPowerCommandPending() {
+		switch patternClassifier.Classify(match, ctrl.ConsumePowerCommandPending()) {
+		case controller.PatternSelfAck:
 			midiLog.Debug("power pattern suppressed (self-initiated)")
 			return
-		}
-
-		// Suppression: duplicate pattern within startup window (GLM startup noise or ACK)
-		if match.SinceLastMatch >= 0 && match.SinceLastMatch < types.PowerStartupWindow {
+		case controller.PatternDuplicate:
 			midiLog.Debug("power pattern suppressed (duplicate)",
 				"since_last_ms", int(match.SinceLastMatch*1000),
 				"window_s", types.PowerStartupWindow,

@@ -200,3 +200,34 @@ func TestPowerPattern_ResetAfterFailure(t *testing.T) {
 		t.Error("valid pattern after failed one should trigger")
 	}
 }
+
+// Replays 2026-11-19 21:52: power toggled in GLM, bridge follow-through ACKed,
+// then toggled in GLM again 2.8 s after the ACK. The second toggle was dropped.
+func TestPatternClassifier_ExternalToggleRightAfterAck(t *testing.T) {
+	var c PatternClassifier
+	steps := []struct {
+		sinceLast float64
+		pending   bool
+		want      PatternVerdict
+	}{
+		{88094.591, false, PatternExternal},
+		{1.076, true, PatternSelfAck},
+		{2.805, false, PatternExternal},
+		{1.0, true, PatternSelfAck},
+	}
+	for i, s := range steps {
+		if got := c.Classify(PatternMatch{SinceLastMatch: s.sinceLast}, s.pending); got != s.want {
+			t.Errorf("step %d: got %v, want %v", i, got, s.want)
+		}
+	}
+}
+
+func TestPatternClassifier_StartupNoiseStillSuppressed(t *testing.T) {
+	var c PatternClassifier
+	if got := c.Classify(PatternMatch{SinceLastMatch: -1}, false); got != PatternExternal {
+		t.Errorf("first: got %v, want PatternExternal", got)
+	}
+	if got := c.Classify(PatternMatch{SinceLastMatch: 1.5}, false); got != PatternDuplicate {
+		t.Errorf("second: got %v, want PatternDuplicate", got)
+	}
+}

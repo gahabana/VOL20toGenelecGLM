@@ -194,6 +194,18 @@ func (c *Controller) IsPowerCommandPending() bool {
 	return nowSeconds()-c.powerCommandSentAt < PowerCommandExpiry
 }
 
+// ConsumePowerCommandPending reports whether a self-initiated power command is
+// pending and clears it. GLM emits exactly one pattern per CC28, so the first
+// pattern after our command is its ACK; leaving the flag set for the full
+// expiry would swallow a real external toggle that follows right behind it.
+func (c *Controller) ConsumePowerCommandPending() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	pending := c.powerCommandSentAt != 0 && nowSeconds()-c.powerCommandSentAt < PowerCommandExpiry
+	c.powerCommandSentAt = 0
+	return pending
+}
+
 // SetPower sets the power state directly (e.g. from initial pixel scan at startup).
 func (c *Controller) SetPower(on bool) {
 	c.mu.Lock()
